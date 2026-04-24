@@ -1,0 +1,116 @@
+{
+  "theme": "Dark",
+  "archetype": "5 (Jewel & Luxury) with Retro-Futurism Terminal Elements",
+  "design_philosophy": "A collision of an ancient magical grimoire (high-end serif typography, deep cinematic shadows) with a modern technical terminal (monospace fonts, 1px grid lines, amber glows). Tactile, serious, and literary.",
+  "colors": {
+    "background": "#050505",
+    "surface": "#121214",
+    "surface_glass": "rgba(5, 5, 5, 0.8)",
+    "border": "#27272A",
+    "primary": "#F59E0B",
+    "primary_glow": "rgba(245, 158, 11, 0.15)",
+    "text_primary": "#F3F4F6",
+    "text_secondary": "#A1A1AA",
+    "text_prose": "#D4D4D8",
+    "health": "#EF4444",
+    "stress": "#8B5CF6",
+    "objective": "#10B981"
+  },
+  "typography": {
+    "heading_font": "Cormorant Garamond",
+    "body_font": "EB Garamond",
+    "mono_font": "JetBrains Mono",
+    "hierarchy": {
+      "h1": "text-4xl md:text-5xl font-serif tracking-tight text-white",
+      "h2": "text-2xl md:text-3xl font-serif tracking-tight text-gray-200",
+      "h3": "text-lg font-mono tracking-widest uppercase text-amber-500",
+      "prose": "text-lg md:text-xl font-serif leading-relaxed text-gray-300",
+      "stats": "text-sm font-mono text-gray-400",
+      "action": "text-base font-mono uppercase tracking-wider"
+    }
+  },
+  "spacing_and_layout": {
+    "container": "max-w-2xl mx-auto px-4 sm:px-6 py-8",
+    "prose_spacing": "space-y-6",
+    "bento_grid": "grid grid-cols-1 md:grid-cols-2 gap-4",
+    "inventory_grid": "grid grid-cols-2 gap-px bg-zinc-800 border border-zinc-800"
+  },
+  "surfaces_and_borders": {
+    "top_bar": "sticky top-0 z-50 backdrop-blur-xl bg-black/80 border-b border-white/10",
+    "choice_card": "bg-transparent border border-zinc-800 hover:border-amber-500/50 hover:bg-amber-500/5 transition-all rounded-sm",
+    "inventory_cell": "bg-[#0A0A0A] p-4 flex flex-col justify-between",
+    "terminal_input": "bg-transparent border-b border-zinc-700 focus:border-amber-500 font-mono text-amber-500 outline-none w-full py-3"
+  },
+  "motion": {
+    "hover": "transition-all duration-300 ease-out",
+    "text_reveal": "framer-motion opacity-0 to opacity-100 with slight y-offset for new story paragraphs",
+    "pulse": "animate-pulse for active states or critical health"
+  },
+  "components": {
+    "Main_Menu": {
+      "layout": "Flex column, centered full height. D20 hero image taking up substantial space, slowly floating.",
+      "buttons": "Large block links, monospace, uppercase with 1px border. E.g., 'NEW STORY'."
+    },
+    "Genre_Cards": {
+      "layout": "Bento grid mode. Relative wrapper with aspect-video.",
+      "image": "Absolute inset-0, object-cover.",
+      "overlay": "Absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent.",
+      "text": "Absolute bottom-0 left-0 p-4 font-serif text-2xl text-white"
+    },
+    "Story_Screen": {
+      "header": "Sticky top bar showing [HP: 20/20] [STR: 12/20] [OBJ: Survive] in monospace.",
+      "prose_area": "Generous padding, serif font, left aligned. Newest paragraphs at the bottom.",
+      "choices_area": "Stack of outline buttons at the bottom. Monospace text (e.g. '[A] Investigate').",
+      "custom_action": "Input field with '>' prefix, blinking cursor."
+    },
+    "Inventory_Ledger": {
+      "layout": "Grid borders (Technical look). 1px gaps. Dense info.",
+      "typography": "100% Monospace. Looks like a retro terminal or command line."
+    }
+  },
+  "media": {
+    "hero_d20": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/1f4993bf-965b-40a7-8797-1d8bc205019e/images/6ca182ece19601a7e83f15da0ac1edc27e4505443b98a52f245a92f57c3f48bb.png",
+      "description": "Glowing D20 die in dark void. Use on Home Screen."
+    },
+    "genre_fantasy": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/1f4993bf-965b-40a7-8797-1d8bc205019e/images/3faa0f0bf91c735e5727f826cce85e16076fff278b6a93a826f43d2fd235c453.png",
+      "description": "Dark fantasy ruins. Use for Fantasy genre preset."
+    },
+    "genre_post_apoc": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/1f4993bf-965b-40a7-8797-1d8bc205019e/images/a077cabe987d3d5beec7cd3580f9cfd394a20bd25c13cc9aaed8a7e7ca462cbb.png",
+      "description": "Ruined city wasteland. Use for Post-Apocalyptic preset."
+    },
+    "genre_cosmic": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/1f4993bf-965b-40a7-8797-1d8bc205019e/images/1871295a9e304d75675d6744ab08139cbbe71471bb4262e6baab1ddfbba19836.png",
+      "description": "Cosmic horror landscape. Use for Cosmic Horror preset."
+    },
+    "genre_detective": {
+      "url": "https://images.unsplash.com/photo-1764536602389-07ee8e0b4f55?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Njl8MHwxfHNlYXJjaHwyfHxkYXJrJTIwcmFpbnklMjBjaXR5JTIwc3RyZWV0JTIwbmlnaHQlMjBub2lyfGVufDB8fHx8MTc3NzAzNDk2Mnww&ixlib=rb-4.1.0&q=85",
+      "description": "Rainy street noir. Use for Detective/Urban Crime preset."
+    },
+    "genre_dino": {
+      "url": "https://images.pexels.com/photos/1671324/pexels-photo-1671324.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Dark foggy pathway. Use for Dinosaur Survival preset."
+    },
+    "genre_horror": {
+      "url": "https://images.unsplash.com/photo-1712777691122-8a10db0a78a2?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzF8MHwxfHNlYXJjaHwyfHxzcG9va3klMjBkYXJrJTIwZm9yZXN0JTIwZm9nfGVufDB8fHx8MTc3NzAzNDk2Mnww&ixlib=rb-4.1.0&q=85",
+      "description": "Spooky dark forest path. Use for Horror preset."
+    }
+  },
+  "icons_and_libraries": {
+    "icons": "lucide-react",
+    "animation": "framer-motion",
+    "components": "shadcn/ui (customized for terminal/grimoire look)"
+  },
+  "instructions_to_main_agent": [
+    "Ensure global background is strictly #050505 or deep dark bg to create the terminal/grimoire feel.",
+    "Use EB Garamond for the main story prose with leading-relaxed (line-height) to ensure reading comfort.",
+    "Use JetBrains Mono for ALL UI elements (health, choices, menus, inventory, action bar). This creates the tension between 'book' and 'engine'.",
+    "Implement the top state bar using glassmorphism (backdrop-blur-xl bg-black/80) so story text seamlessly scrolls under it.",
+    "For the inventory and debug panels, use a strict grid layout with 1px borders (border-collapse style or gap-px with bg-zinc-800 wrapper) to emulate a technical ledger.",
+    "Use standard semantic HTML tags and customize Shadcn components, stripping out any soft shadows or large rounded corners (use rounded-none or rounded-sm max).",
+    "Do not use generic blue/purple colors for main accents. Stick to the monochromatic slate/black with amber/emerald terminal accents.",
+    "Include data-testid on all interactable elements (e.g. data-testid='genre-select-fantasy', data-testid='choice-btn-0')."
+  ]
+}
