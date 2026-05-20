@@ -18,6 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONTS } from "../src/theme";
 import { getDeviceId, getSettings } from "../src/storage";
 import { newStory } from "../src/api";
+import { friendlyError } from "../src/errors";
 
 type Genre = {
   key: string;
@@ -120,11 +121,11 @@ export default function NewStoryScreen() {
       router.replace(`/play/${res.session_id}`);
     } catch (e: any) {
       console.log("new story failed", e);
-      const msg = e?.message || "Could not start story.";
+      const { title, message } = friendlyError(e);
       if (Platform.OS === "web") {
-        alert(msg);
+        alert(`${title}\n\n${message}`);
       } else {
-        Alert.alert("Could not begin", msg);
+        Alert.alert(title, message);
       }
       setLoading(false);
     }
