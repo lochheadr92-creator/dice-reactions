@@ -272,9 +272,12 @@ async def _call_claude_with_history(session_id: str, user_text: str) -> str:
     if not EMERGENT_LLM_KEY:
         raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY is not configured")
 
-    prior_turns = await db.turns.find(
+    # Fetch only the most recent N turns for context to avoid unbounded growth.
+    HISTORY_LIMIT = 30
+    recent_desc = await db.turns.find(
         {"session_id": session_id}, {"_id": 0}
-    ).sort("turn_number", 1).to_list(length=None)
+    ).sort("turn_number", -1).to_list(length=HISTORY_LIMIT)
+    prior_turns = list(reversed(recent_desc))
 
     # Build a compact recap of history so continuity survives across stateless chat instances.
     history_lines = []
@@ -465,7 +468,7 @@ async def get_session(session_id: str):
     session = await db.sessions.find_one({"id": session_id}, {"_id": 0})
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    turns = await db.turns.find({"session_id": session_id}, {"_id": 0}).sort("turn_number", 1).to_list(length=None)
+    turns = await db.turns.find({"session_id": session_id}, {"_id": 0}).sort("turn_number", 1).to_list(length=500)
     return {"session": session, "turns": turns}
 
 
