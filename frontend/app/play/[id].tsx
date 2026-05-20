@@ -18,6 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { COLORS, FONTS } from "../../src/theme";
 import { getSession, sendAction, deleteSession, Turn, SessionSummary } from "../../src/api";
+import { friendlyError } from "../../src/errors";
 
 const HEALTH_COLOR_MAP: Record<string, string> = {
   stable: COLORS.objective,
@@ -92,9 +93,9 @@ export default function PlayScreen() {
       setTurns((prev) => [...prev, res.turn]);
       setCustomAction("");
     } catch (e: any) {
-      const msg = e?.message || "The world hesitated. Try again.";
-      if (Platform.OS === "web") alert(msg);
-      else Alert.alert("Error", msg);
+      const { title, message } = friendlyError(e);
+      if (Platform.OS === "web") alert(`${title}\n\n${message}`);
+      else Alert.alert(title, message);
     } finally {
       setSubmitting(false);
     }
