@@ -165,7 +165,7 @@ export default function NewStoryScreen() {
                 >
                   <Image source={{ uri: g.image }} style={styles.genreImage} />
                   <View style={styles.genreOverlay} />
-                  {active && <View style={styles.genreActiveRing} pointerEvents="none" />}
+                  {active && <View style={[styles.genreActiveRing, { pointerEvents: "none" }]} />}
                   <View style={styles.genreTextWrap}>
                     <Text style={styles.genreTitle}>{g.label}</Text>
                     <Text style={styles.genreTag} numberOfLines={2}>{g.tagline}</Text>
