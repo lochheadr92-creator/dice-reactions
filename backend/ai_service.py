@@ -126,6 +126,24 @@ SUPPORTED_MODELS: List[Dict[str, Any]] = [
         "note": "Narrative storytelling specialist",
     },
     {
+        "id": "thedrummer/cydonia-24b-v4.1",
+        "label": "Cydonia 24B v4.1 · UNCENSORED",
+        "context": 131072,
+        "note": "Paid · uncensored creative · 128k ctx · cheap",
+    },
+    {
+        "id": "anthracite-org/magnum-v4-72b",
+        "label": "Magnum v4 72B · UNCENSORED",
+        "context": 32768,
+        "note": "Paid · top-tier uncensored prose · pricier",
+    },
+    {
+        "id": "thedrummer/rocinante-12b",
+        "label": "Rocinante 12B · UNCENSORED",
+        "context": 32768,
+        "note": "Paid · uncensored · ultra-cheap & fast",
+    },
+    {
         "id": "openai/gpt-oss-120b:free",
         "label": "GPT-OSS 120B · FREE",
         "context": 131072,
