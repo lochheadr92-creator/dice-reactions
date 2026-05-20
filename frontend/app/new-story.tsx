@@ -240,10 +240,10 @@ export default function NewStoryScreen() {
             ))}
           </View>
           <Text style={styles.diffHelp}>
-            {difficulty === "soft" && "More warnings, slower escalation, gentler wounds."}
-            {difficulty === "standard" && "Balanced. Fair, but consequences bite."}
-            {difficulty === "hard" && "Scarcity, fewer safe routes, faster escalation."}
-            {difficulty === "brutal" && "Fragile survival. Mistakes compound. Death is causal."}
+            {difficulty === "soft" && "+3 to every roll · brake fires early · NPCs lean helpful."}
+            {difficulty === "standard" && "No modifier · standard brake · no early death."}
+            {difficulty === "hard" && "−3 to every roll · brake only at critical · death possible."}
+            {difficulty === "brutal" && "−6 to every roll · NO brake · NO death guard · wounds compound · resources halve · NPCs hostile by default."}
           </Text>
 
           <Text style={[styles.stepLabel, { marginTop: 28 }]}>05 · OPENING · HOOK  (optional)</Text>
