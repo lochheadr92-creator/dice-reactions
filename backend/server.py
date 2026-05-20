@@ -69,8 +69,47 @@ STYLE RULES:
 - No empty scenes. Every scene must contain a threat, opportunity, change, tension, discovery, cost, relief, clue, or relationship movement.
 
 ============================
-PARAGRAPH PRESERVATION RULE
+DIFFICULTY ENFORCEMENT — STRICT, MECHANICAL
 ============================
+Every player message includes a marker like [DIFFICULTY: brutal]. You MUST apply the following modifiers to the HIDDEN D20 roll on every action, in addition to situational modifiers:
+
+[DIFFICULTY: soft]
+- +3 to every roll. Brake fires EARLY (stabilising path within 1 turn of trouble).
+- Telegraph threats clearly; never kill outright.
+- Wounds heal or stabilise faster. NPCs lean helpful.
+- Consequence budget: lean toward benefits over complications.
+
+[DIFFICULTY: standard]
+- No modifier. Standard brake (stabilising path within 1-2 turns of dangerous low resources).
+- No early unavoidable death.
+- Default consequence budget.
+
+[DIFFICULTY: hard]
+- -3 to every roll. Brake only when at "critical" health AND no resources.
+- Death is on the table after sustained mistakes; telegraph it one turn before it lands.
+- Consequence budget tilts toward complications (2 complications per success).
+- NPCs colder, more transactional.
+
+[DIFFICULTY: brutal]
+- -6 to every roll. ALL of the following:
+  • The "no early unavoidable death" rule is REMOVED. Reckless action can kill in one turn.
+  • The failure-spiral brake is DISABLED. There is no rescue path unless the player earns it through specific, costly action.
+  • Wounds compound: every Fail or Critical Fail worsens prior injuries.
+  • Resources deplete twice as fast (food, light, ammo, charges, stamina, sanity).
+  • NPCs are afraid, selfish, or hostile by default. Trust must be bought.
+  • Critical Successes (rolling a natural 20 → 14 after modifier) still happen, but rewards are smaller and always carry a cost (attention drawn, debt owed, witness gained).
+  • Consequence budget is INVERTED: 1 immediate result + TWO complications + ONE hidden delayed disaster.
+  • Telegraph severe threats only ONCE, briefly. Player must read carefully or pay.
+  • The world does not wait. NPCs / factions / weather / wounds tick aggressively each turn.
+
+Roll bands (BEFORE modifiers): 1-5 Critical Fail, 6-10 Fail, 11-15 Partial, 16-19 Success, 20 Critical Success. APPLY the difficulty modifier first, THEN the situational modifiers, THEN read the band.
+
+Never reveal the modifier or final roll to the player unless [DEBUG_MODE: ON]. In debug, show:
+   Roll: NN
+   Modifiers: [difficulty: -6, situational: +/-X]
+   Final: band
+
+
 Every turn MUST contain 2–5 distinct paragraphs of immersive prose before Choices.
 Each paragraph must include action progression, sensory detail, consequence or reaction, and forward pressure.
 Never collapse into one dense block. Never degrade into bullet narration.
@@ -457,13 +496,16 @@ async def new_story(req: NewStoryRequest):
 
     setup_text = "\n".join(setup_lines)
     debug_marker = "[DEBUG_MODE: ON]" if req.debug_mode else "[DEBUG_MODE: OFF]"
+    difficulty_marker = f"[DIFFICULTY: {req.difficulty}]"
 
     opening_prompt = (
-        f"{debug_marker}\n\n"
+        f"{debug_marker}\n"
+        f"{difficulty_marker}\n\n"
         f"Begin the story now. Use the following setup:\n{setup_text}\n\n"
         f"Open with an immersive in-medias-res scene that establishes location, sensory atmosphere, the character's immediate situation, and one active pressure or hook. "
         f"Populate the inventory ledger with a small, plausible starting kit fitting the genre and role. "
         f"Present 4-6 meaningful first choices. "
+        f"Honour the difficulty modifier from the marker above on this very first roll. "
         f"Remember: output ONLY the four required tag blocks (<narrative>, <choices>, <state>, <ledger>"
         + (", <debug>" if req.debug_mode else "")
         + ")."
@@ -531,7 +573,8 @@ async def story_action(req: ActionRequest):
         raise HTTPException(status_code=404, detail="Session not found")
 
     debug_marker = "[DEBUG_MODE: ON]" if req.debug_mode else "[DEBUG_MODE: OFF]"
-    user_text = f"{debug_marker}\n\nPlayer action: {req.action_text}"
+    difficulty_marker = f"[DIFFICULTY: {session.get('difficulty', 'standard')}]"
+    user_text = f"{debug_marker}\n{difficulty_marker}\n\nPlayer action: {req.action_text}"
 
     try:
         raw = await _generate_turn(req.session_id, user_text)
