@@ -491,10 +491,13 @@ async def delete_session(session_id: str):
 
 app.include_router(api_router)
 
+_cors_origins_raw = os.environ.get("CORS_ORIGINS", "*")
+_cors_origins = ["*"] if _cors_origins_raw.strip() == "*" else [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
