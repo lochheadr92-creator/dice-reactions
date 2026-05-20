@@ -7,21 +7,29 @@ import re
 import logging
 import uuid
 from pathlib import Path
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, conint, confloat
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
-
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
+# Local AI service (OpenRouter)
+from ai_service import (  # noqa: E402
+    chat_completion,
+    get_supported_models,
+    get_default_settings,
+    is_configured as ai_is_configured,
+    AIServiceError,
+    DEFAULT_MODEL,
+    DEFAULT_TEMPERATURE,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_HISTORY_WINDOW,
+)
+
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
-
-EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
-CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -170,6 +178,7 @@ class TurnRecord(BaseModel):
     state: Dict[str, str]
     ledger: Dict[str, Any]
     debug: Optional[Dict[str, str]] = None
+    raw: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class SessionRecord(BaseModel):
@@ -188,17 +197,11 @@ class SessionRecord(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-class SessionSummary(BaseModel):
-    id: str
-    genre: str
-    role: Optional[str]
-    difficulty: str
-    title: str
-    turn_count: int
-    last_narrative_snippet: str
-    last_state: Dict[str, str]
-    created_at: datetime
-    updated_at: datetime
+class AdminSettingsRequest(BaseModel):
+    model: Optional[str] = None
+    temperature: Optional[confloat(ge=0.0, le=2.0)] = None  # type: ignore
+    max_tokens: Optional[conint(ge=256, le=16384)] = None  # type: ignore
+    history_window: Optional[conint(ge=4, le=200)] = None  # type: ignore
 
 # ======================================================================
 # PARSER
@@ -265,52 +268,112 @@ def parse_turn(raw: str) -> ParsedTurn:
     )
 
 # ======================================================================
-# LLM WRAPPER
+# ADMIN SETTINGS (model / temperature / max_tokens / history_window)
 # ======================================================================
-async def _call_claude_with_history(session_id: str, user_text: str) -> str:
-    """Create a fresh LlmChat per call, replaying history as a single context block before the new action."""
-    if not EMERGENT_LLM_KEY:
-        raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY is not configured")
+ADMIN_SETTINGS_KEY = "ai_settings"
 
-    # Fetch only the most recent N turns for context to avoid unbounded growth.
-    HISTORY_LIMIT = 30
+
+async def get_ai_settings() -> Dict[str, Any]:
+    """Return effective AI settings: DB overrides on top of env defaults."""
+    defaults = get_default_settings()
+    doc = await db.admin_settings.find_one({"key": ADMIN_SETTINGS_KEY}, {"_id": 0})
+    stored = (doc or {}).get("settings") or {}
+    merged = {**defaults, **{k: v for k, v in stored.items() if v is not None}}
+    return merged
+
+
+async def set_ai_settings(patch: Dict[str, Any]) -> Dict[str, Any]:
+    current = await get_ai_settings()
+    next_settings = {**current, **{k: v for k, v in patch.items() if v is not None}}
+    await db.admin_settings.update_one(
+        {"key": ADMIN_SETTINGS_KEY},
+        {"$set": {
+            "key": ADMIN_SETTINGS_KEY,
+            "settings": next_settings,
+            "updated_at": datetime.now(timezone.utc),
+        }},
+        upsert=True,
+    )
+    return next_settings
+
+
+# ======================================================================
+# MESSAGE BUILDER + LLM CALL
+# ======================================================================
+def _summarise_turn_for_assistant(turn: Dict[str, Any]) -> str:
+    """Reconstruct a faithful assistant message from a stored turn.
+
+    Keeps narrative / choices / state / ledger so the engine remains
+    grounded in prior continuity. Truncates very long narratives.
+    """
+    parts: List[str] = []
+
+    narrative = turn.get("narrative") or ""
+    if narrative:
+        if len(narrative) > 1800:
+            narrative = narrative[:1800].rstrip() + "…"
+        parts.append(f"<narrative>\n{narrative}\n</narrative>")
+
+    choices = turn.get("choices") or []
+    if choices:
+        choice_lines = "\n".join(
+            f"{c.get('label','?')}. {c.get('text','')}" for c in choices
+        )
+        parts.append(f"<choices>\n{choice_lines}\n</choices>")
+
+    state = turn.get("state") or {}
+    if state:
+        state_lines = "\n".join(f"{k}: {v}" for k, v in state.items())
+        parts.append(f"<state>\n{state_lines}\n</state>")
+
+    ledger = turn.get("ledger") or {}
+    if ledger:
+        ledger_lines = "\n".join(f"{k}: {v}" for k, v in ledger.items() if v)
+        if ledger_lines:
+            parts.append(f"<ledger>\n{ledger_lines}\n</ledger>")
+
+    return "\n\n".join(parts)
+
+
+async def _build_messages(session_id: str, user_text: str, history_window: int) -> List[Dict[str, str]]:
+    """Construct OpenAI-style messages array with system prompt + replay of recent turns."""
+    messages: List[Dict[str, str]] = [
+        {"role": "system", "content": STORY_ENGINE_SYSTEM_PROMPT},
+    ]
+
+    # Fetch only the most recent N turns for replay (in chronological order)
     recent_desc = await db.turns.find(
         {"session_id": session_id}, {"_id": 0}
-    ).sort("turn_number", -1).to_list(length=HISTORY_LIMIT)
+    ).sort("turn_number", -1).to_list(length=history_window)
     prior_turns = list(reversed(recent_desc))
 
-    # Build a compact recap of history so continuity survives across stateless chat instances.
-    history_lines = []
     for t in prior_turns:
-        pa = t.get("player_action")
-        if pa:
-            history_lines.append(f"[Player]: {pa}")
-        # Include prior narrative + state so Claude can continue consistently
-        if t.get("narrative"):
-            history_lines.append(f"[Engine last narrative]: {t['narrative'][:1200]}")
-        if t.get("state"):
-            state_str = "; ".join(f"{k}: {v}" for k, v in t["state"].items())
-            history_lines.append(f"[Engine last state]: {state_str}")
-        if t.get("ledger"):
-            ledger_str = "; ".join(f"{k}: {v}" for k, v in t["ledger"].items() if v)
-            history_lines.append(f"[Engine last ledger]: {ledger_str}")
+        player_action = t.get("player_action")
+        # If this turn had a player action, that's the user msg; else it was the opener
+        if player_action:
+            messages.append({"role": "user", "content": player_action})
+        # Assistant message: faithful reconstruction
+        assistant_text = _summarise_turn_for_assistant(t)
+        if assistant_text:
+            messages.append({"role": "assistant", "content": assistant_text})
 
-    history_block = "\n".join(history_lines)
+    messages.append({"role": "user", "content": user_text})
+    return messages
 
-    composed = (
-        (f"=== PRIOR SESSION CONTEXT (continuity reference — do NOT repeat narrative) ===\n{history_block}\n\n=== END PRIOR CONTEXT ===\n\n"
-         if history_block else "")
-        + user_text
+
+async def _generate_turn(session_id: str, user_text: str) -> str:
+    """Centralised call: resolve admin settings, build messages, call aiService."""
+    settings = await get_ai_settings()
+    messages = await _build_messages(
+        session_id, user_text, history_window=int(settings.get("history_window", DEFAULT_HISTORY_WINDOW))
+    )
+    return await chat_completion(
+        messages=messages,
+        model=settings.get("model"),
+        temperature=settings.get("temperature"),
+        max_tokens=settings.get("max_tokens"),
     )
 
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=session_id,
-        system_message=STORY_ENGINE_SYSTEM_PROMPT,
-    ).with_model("anthropic", CLAUDE_MODEL)
-
-    response = await chat.send_message(UserMessage(text=composed))
-    return response
 
 # ======================================================================
 # ROUTES
@@ -319,11 +382,57 @@ async def _call_claude_with_history(session_id: str, user_text: str) -> str:
 async def root():
     return {"message": "Dice Reaction Story Engine v3.3"}
 
+
 @api_router.get("/health")
 async def health():
-    return {"status": "ok", "llm_configured": bool(EMERGENT_LLM_KEY), "model": CLAUDE_MODEL}
+    settings = await get_ai_settings()
+    return {
+        "status": "ok",
+        "llm_configured": ai_is_configured(),
+        "provider": "openrouter",
+        "model": settings.get("model"),
+        "temperature": settings.get("temperature"),
+        "max_tokens": settings.get("max_tokens"),
+        "history_window": settings.get("history_window"),
+    }
 
 
+# -------- Admin: AI settings ------------------------------------------------
+@api_router.get("/admin/settings")
+async def admin_get_settings():
+    settings = await get_ai_settings()
+    return {
+        "settings": settings,
+        "models": get_supported_models(),
+        "limits": {
+            "temperature": {"min": 0.0, "max": 2.0, "step": 0.05},
+            "max_tokens": {"min": 256, "max": 16384, "step": 128},
+            "history_window": {"min": 4, "max": 200, "step": 2},
+        },
+        "defaults": get_default_settings(),
+        "provider_configured": ai_is_configured(),
+    }
+
+
+@api_router.post("/admin/settings")
+async def admin_post_settings(req: AdminSettingsRequest):
+    # Validate model is in supported list (if provided)
+    if req.model is not None:
+        supported_ids = {m["id"] for m in get_supported_models()}
+        if req.model not in supported_ids:
+            raise HTTPException(status_code=400, detail=f"Unsupported model: {req.model}")
+
+    patch = req.model_dump(exclude_none=True)
+    updated = await set_ai_settings(patch)
+    return {"settings": updated}
+
+
+@api_router.get("/admin/models")
+async def admin_list_models():
+    return {"models": get_supported_models()}
+
+
+# -------- Story flow --------------------------------------------------------
 @api_router.post("/story/new")
 async def new_story(req: NewStoryRequest):
     session = SessionRecord(
@@ -363,11 +472,15 @@ async def new_story(req: NewStoryRequest):
     await db.sessions.insert_one(session.model_dump())
 
     try:
-        raw = await _call_claude_with_history(session.id, opening_prompt)
+        raw = await _generate_turn(session.id, opening_prompt)
+    except AIServiceError as e:
+        logger.exception("AI service failed")
+        await db.sessions.delete_one({"id": session.id})
+        raise HTTPException(status_code=502, detail=f"Story engine error: {e}")
     except Exception as e:
         logger.exception("LLM call failed")
         await db.sessions.delete_one({"id": session.id})
-        raise HTTPException(status_code=502, detail=f"Story engine error: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Story engine error: {e}")
 
     parsed = parse_turn(raw)
 
@@ -381,6 +494,7 @@ async def new_story(req: NewStoryRequest):
         state=parsed.state,
         ledger=parsed.ledger,
         debug=parsed.debug,
+        raw=parsed.raw,
     )
     await db.turns.insert_one(turn.model_dump())
 
@@ -420,10 +534,13 @@ async def story_action(req: ActionRequest):
     user_text = f"{debug_marker}\n\nPlayer action: {req.action_text}"
 
     try:
-        raw = await _call_claude_with_history(req.session_id, user_text)
+        raw = await _generate_turn(req.session_id, user_text)
+    except AIServiceError as e:
+        logger.exception("AI service failed")
+        raise HTTPException(status_code=502, detail=f"Story engine error: {e}")
     except Exception as e:
         logger.exception("LLM call failed")
-        raise HTTPException(status_code=502, detail=f"Story engine error: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Story engine error: {e}")
 
     parsed = parse_turn(raw)
     next_turn_number = session.get("turn_count", 0) + 1
@@ -438,6 +555,7 @@ async def story_action(req: ActionRequest):
         state=parsed.state,
         ledger=parsed.ledger,
         debug=parsed.debug,
+        raw=parsed.raw,
     )
     await db.turns.insert_one(turn.model_dump())
 
@@ -507,6 +625,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

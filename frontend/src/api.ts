@@ -89,3 +89,63 @@ export async function deleteSession(id: string): Promise<void> {
   const res = await fetch(`${API}/story/session/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`${res.status}`);
 }
+
+// ---------------------------------------------------------------------------
+// Admin · AI settings
+// ---------------------------------------------------------------------------
+export type ModelOption = {
+  id: string;
+  label: string;
+  context: number;
+  note?: string;
+};
+
+export type AISettings = {
+  model: string;
+  temperature: number;
+  max_tokens: number;
+  history_window: number;
+};
+
+export type AdminSettingsBundle = {
+  settings: AISettings;
+  models: ModelOption[];
+  limits: {
+    temperature: { min: number; max: number; step: number };
+    max_tokens: { min: number; max: number; step: number };
+    history_window: { min: number; max: number; step: number };
+  };
+  defaults: AISettings;
+  provider_configured: boolean;
+};
+
+export async function getAdminSettings(): Promise<AdminSettingsBundle> {
+  const res = await fetch(`${API}/admin/settings`);
+  return handle(res);
+}
+
+export async function saveAdminSettings(
+  patch: Partial<AISettings>
+): Promise<{ settings: AISettings }> {
+  const res = await fetch(`${API}/admin/settings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  return handle(res);
+}
+
+export type HealthResponse = {
+  status: string;
+  llm_configured: boolean;
+  provider: string;
+  model: string;
+  temperature: number;
+  max_tokens: number;
+  history_window: number;
+};
+
+export async function getHealth(): Promise<HealthResponse> {
+  const res = await fetch(`${API}/health`);
+  return handle(res);
+}
