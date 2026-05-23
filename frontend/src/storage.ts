@@ -24,15 +24,16 @@ export async function getDeviceId(): Promise<string> {
 export type AppSettings = {
   debugDefault: boolean;
   fontScale: number;
+  developerUnlocked?: boolean;
 };
 
 export async function getSettings(): Promise<AppSettings> {
   const raw = await AsyncStorage.getItem(SETTINGS_KEY);
-  if (!raw) return { debugDefault: false, fontScale: 1 };
+  if (!raw) return { debugDefault: false, fontScale: 1, developerUnlocked: false };
   try {
-    return { debugDefault: false, fontScale: 1, ...JSON.parse(raw) };
+    return { debugDefault: false, fontScale: 1, developerUnlocked: false, ...JSON.parse(raw) };
   } catch {
-    return { debugDefault: false, fontScale: 1 };
+    return { debugDefault: false, fontScale: 1, developerUnlocked: false };
   }
 }
 

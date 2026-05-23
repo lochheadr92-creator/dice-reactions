@@ -18,6 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { COLORS, FONTS } from "../../src/theme";
 import { getSession, sendAction, deleteSession, exportSession, resetSession, setSessionMode, Turn, SessionSummary } from "../../src/api";
+import { getSettings as getAppSettings } from "../../src/storage";
 import { friendlyError } from "../../src/errors";
 import { Share } from "react-native";
 
@@ -395,18 +396,20 @@ export default function PlayScreen() {
             <Text style={styles.menuHead}>· CHRONICLE ·</Text>
             <Text style={styles.menuMeta}>{session.genre.toUpperCase()} · {session.difficulty} · turn {session.turn_count}</Text>
 
-            <TouchableOpacity
-              style={styles.menuRow}
-              onPress={() => {
-                setDebugMode((v) => !v);
-              }}
-              testID="toggle-debug-menu"
-            >
-              <Ionicons name={debugMode ? "eye" : "eye-off-outline"} size={18} color={debugMode ? COLORS.primary : COLORS.textSecondary} />
-              <Text style={[styles.menuText, debugMode && { color: COLORS.primary }]}>
-                {debugMode ? "Debug · ON  (next turn)" : "Debug · OFF"}
-              </Text>
-            </TouchableOpacity>
+            {devUnlocked && (
+              <TouchableOpacity
+                style={styles.menuRow}
+                onPress={() => {
+                  setDebugMode((v) => !v);
+                }}
+                testID="toggle-debug-menu"
+              >
+                <Ionicons name={debugMode ? "eye" : "eye-off-outline"} size={18} color={debugMode ? COLORS.primary : COLORS.textSecondary} />
+                <Text style={[styles.menuText, debugMode && { color: COLORS.primary }]}>
+                  {debugMode ? "Diagnostics · ON  (next turn)" : "Diagnostics · OFF"}
+                </Text>
+              </TouchableOpacity>
+            )}
 
             <TouchableOpacity
               style={styles.menuRow}

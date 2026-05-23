@@ -33,9 +33,52 @@ export default function SettingsScreen() {
   const [savedFlash, setSavedFlash] = useState(false);
   const [showAllModels, setShowAllModels] = useState(false);
 
+  // Hidden developer unlock — 7 taps on version row
+  const [devUnlocked, setDevUnlocked] = useState(false);
+  const [versionTaps, setVersionTaps] = useState(0);
+
   useEffect(() => {
-    getSettings().then(setSettings);
+    getSettings().then((s) => {
+      setSettings(s);
+      setDevUnlocked(!!s.developerUnlocked);
+    });
   }, []);
+
+  const bumpVersionTap = async () => {
+    const next = versionTaps + 1;
+    setVersionTaps(next);
+    if (next >= 7 && !devUnlocked) {
+      setDevUnlocked(true);
+      const updated = { ...settings, developerUnlocked: true };
+      setSettings(updated);
+      await saveSettings(updated);
+      // Mirror to server so payload sanitiser opens up
+      try {
+        const res = await saveAdminSettings({ developer_mode: true } as any);
+        if (adminBundle) {
+          setAdminBundle({ ...adminBundle, settings: res.settings });
+          setAiDraft(res.settings);
+        }
+      } catch {}
+      Alert.alert("Developer access", "Diagnostics unlocked. Scroll to ADMIN · AI ENGINE.");
+    }
+    setTimeout(() => setVersionTaps(0), 2000);
+  };
+
+  const lockDeveloper = async () => {
+    setDevUnlocked(false);
+    const updated = { ...settings, developerUnlocked: false };
+    setSettings(updated);
+    await saveSettings(updated);
+    // Also turn off the server-side developer_mode so payload stripping resumes
+    if (adminBundle) {
+      try {
+        const res = await saveAdminSettings({ developer_mode: false as any });
+        setAdminBundle({ ...adminBundle, settings: res.settings });
+        setAiDraft(res.settings);
+      } catch {}
+    }
+  };
 
   const refreshAdmin = useCallback(async () => {
     try {
@@ -128,25 +171,7 @@ export default function SettingsScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-        <Text style={styles.section}>· ENGINE ·</Text>
-
-        <View style={styles.row}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.rowTitle}>DEBUG · MODE · DEFAULT</Text>
-            <Text style={styles.rowHelp}>
-              Reveal hidden rolls, modifiers, and active systems for new chronicles.
-            </Text>
-          </View>
-          <Switch
-            value={settings.debugDefault}
-            onValueChange={(v) => update({ debugDefault: v })}
-            trackColor={{ false: COLORS.border, true: COLORS.primary }}
-            thumbColor={settings.debugDefault ? COLORS.primary : COLORS.textMuted}
-            testID="debug-default-switch"
-          />
-        </View>
-
-        <Text style={[styles.section, { marginTop: 28 }]}>· READING ·</Text>
+        <Text style={styles.section}>· READING ·</Text>
         <Text style={styles.rowHelp}>Story prose size.</Text>
         <View style={styles.scaleRow}>
           {[0.9, 1, 1.1, 1.25].map((s) => (
@@ -168,7 +193,50 @@ export default function SettingsScreen() {
           ))}
         </View>
 
-        {/* -------------------- ADMIN · AI ENGINE -------------------- */}
+        {devUnlocked && (
+          <View style={[styles.row, { marginTop: 28 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle}>DEVELOPER · DIAGNOSTICS</Text>
+              <Text style={styles.rowHelp}>
+                Reveal hidden rolls, modifiers, and the rolling state. New chronicles will request a debug block from the engine.
+              </Text>
+            </View>
+            <Switch
+              value={settings.debugDefault}
+              onValueChange={(v) => update({ debugDefault: v })}
+              trackColor={{ false: COLORS.border, true: COLORS.primary }}
+              thumbColor={settings.debugDefault ? COLORS.primary : COLORS.textMuted}
+              testID="debug-default-switch"
+            />
+          </View>
+        )}
+
+        {devUnlocked && (
+          <TouchableOpacity
+            style={[styles.row, { marginTop: 10 }]}
+            onPress={() =>
+              Alert.alert(
+                "Lock developer mode?",
+                "Diagnostics will be hidden and the server will strip developer-facing data from responses.",
+                [
+                  { text: "Cancel", style: "cancel" },
+                  { text: "Lock", style: "destructive", onPress: lockDeveloper },
+                ]
+              )
+            }
+            testID="lock-developer"
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle}>LOCK · DEVELOPER · MODE</Text>
+              <Text style={styles.rowHelp}>Hide diagnostics and strip developer data from API responses.</Text>
+            </View>
+            <Ionicons name="lock-closed-outline" size={18} color={COLORS.textSecondary} />
+          </TouchableOpacity>
+        )}
+
+        {/* -------------------- ADMIN · AI ENGINE (developer-only) -------------------- */}
+        {devUnlocked && (
+        <>
         <Text style={[styles.section, { marginTop: 36 }]}>· ADMIN · AI ENGINE ·</Text>
 
         {adminLoading || !adminBundle || !aiDraft ? (
@@ -500,17 +568,20 @@ export default function SettingsScreen() {
             </View>
           </View>
         )}
+        </>
+        )}
 
         <Text style={[styles.section, { marginTop: 36 }]}>· ABOUT ·</Text>
-        <View style={styles.aboutBox}>
+        <TouchableOpacity activeOpacity={1} onPress={bumpVersionTap} style={styles.aboutBox} testID="version-tap">
           <Text style={styles.aboutTitle}>Dice Reaction Story Engine</Text>
-          <Text style={styles.aboutVer}>Master Runtime · v3.3</Text>
+          <Text style={styles.aboutVer}>
+            Master Runtime · v3.4{devUnlocked ? "  ·  DEV" : ""}
+          </Text>
           <Text style={styles.aboutBody}>
             A persistent causal simulation. Every action resolved through hidden D20 logic. Failure
-            redirects, success costs, and consequences carry. Now routed through OpenRouter — swap
-            models on the fly from above.
+            redirects, success costs, and consequences carry. Powered by OpenRouter.
           </Text>
-        </View>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );

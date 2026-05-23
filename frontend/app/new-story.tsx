@@ -307,10 +307,10 @@ export default function NewStoryScreen() {
             ))}
           </View>
           <Text style={styles.diffHelp}>
-            {difficulty === "soft" && "+3 to every roll · brake fires early · NPCs lean helpful."}
-            {difficulty === "standard" && "No modifier · standard brake · no early death."}
-            {difficulty === "hard" && "−3 to every roll · brake only at critical · death possible."}
-            {difficulty === "brutal" && "−6 to every roll · NO brake · NO death guard · wounds compound · resources halve · NPCs hostile by default."}
+            {difficulty === "soft" && "The world meets you halfway. Wounds heal. People help."}
+            {difficulty === "standard" && "Fair, but consequences bite. The world does not wait."}
+            {difficulty === "hard" && "Scarcity, fewer safe routes, faster escalation. People are tired."}
+            {difficulty === "brutal" && "Fragile survival. Mistakes compound. Death is causal and quiet."}
           </Text>
 
           <Text style={[styles.stepLabel, { marginTop: 28 }]}>05 · ENGINE · MODE</Text>
@@ -328,8 +328,8 @@ export default function NewStoryScreen() {
           </View>
           <Text style={styles.diffHelp}>
             {mode === "basic"
-              ? "Cheaper · 3-4 choices · shorter scenes · lighter memory. Good for fast play."
-              : "Full causal simulation · 4-6 choices · deeper NPC/faction memory · richer consequences."}
+              ? "Lighter scenes, fewer choices. Faster, cheaper play."
+              : "Deeper memory, richer characters, longer arcs. Consequences carry further."}
           </Text>
 
           <Text style={[styles.stepLabel, { marginTop: 28 }]}>06 · OPENING · HOOK  (optional)</Text>
