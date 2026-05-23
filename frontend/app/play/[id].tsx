@@ -60,7 +60,25 @@ export default function PlayScreen() {
   const [showDebug, setShowDebug] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
   const [mode, setMode] = useState<"basic" | "advanced">("advanced");
+  const [devUnlocked, setDevUnlocked] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
+
+  // Read developer unlock state on mount (defaults to false until user has
+  // completed the 7-tap unlock in Settings → ABOUT).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const s = await getAppSettings();
+        if (!cancelled) setDevUnlocked(!!s.developerUnlocked);
+      } catch {
+        if (!cancelled) setDevUnlocked(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const load = useCallback(async () => {
     try {

@@ -154,6 +154,7 @@ export type AISettings = {
   default_mode?: string;
   compression_level?: string;
   memory_depth?: number;
+  developer_mode?: boolean;
 };
 
 export type AdminSettingsBundle = {
