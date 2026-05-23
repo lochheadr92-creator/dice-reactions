@@ -26,6 +26,19 @@ from ai_service import (  # noqa: E402
     DEFAULT_MAX_TOKENS,
     DEFAULT_HISTORY_WINDOW,
 )
+from scenarios import get_scenarios, get_scenario  # noqa: E402
+
+import json as _json  # noqa: E402
+
+# Engine-wide rolling-state-aware defaults
+DEFAULT_MODE = "advanced"
+DEFAULT_COMPRESSION_LEVEL = "standard"  # light / standard / aggressive
+DEFAULT_MEMORY_DEPTH = 3  # how many recent assistant turns to replay verbatim alongside rolling state
+
+MODE_PROFILES = {
+    "basic":    {"max_tokens_cap": 1100, "min_choices": 3, "max_choices": 4},
+    "advanced": {"max_tokens_cap": None, "min_choices": 4, "max_choices": 6},
+}
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -160,6 +173,23 @@ Uncertain: item (last known location)
 Load: [light / manageable / heavy / overloaded]
 </ledger>
 
+<rolling_state>
+MANDATORY block. Output a compact JSON object that compresses persistent continuity. This replaces full conversation history on the NEXT call — you must keep every fact in it that matters to continuity. Compress, do not delete. Format:
+{
+  "scene": "one-sentence current scene summary",
+  "character": "one-line character status (role, current physical/mental condition, important conditions)",
+  "objectives": ["primary objective", "secondary objective (if any)"],
+  "unresolved": ["short list of dangling consequences, debts, promises, wounds compounding, things the world owes the player or player owes the world"],
+  "npcs": [{"name": "name", "role": "what they are", "stance": "ally/neutral/hostile/unknown", "last_seen": "where", "note": "one-line memory"}],
+  "factions": [{"name": "name", "pressure": "what they're doing this turn", "scale": "local/regional/systemic"}],
+  "pressure_horizon": {"immediate": "the threat or pressure landing this turn or next", "emerging": "the threat building 2-4 turns out", "latent": "the buried threat that will fire when conditions align"},
+  "recent_beats": ["one-line summary of turn N-2", "one-line summary of turn N-1", "one-line summary of THIS turn"],
+  "archived": ["dormant facts to re-surface only if relevant: locations visited, people met but absent, secrets known"],
+  "world_clock": "what time / weather / decay / fatigue cycle is doing"
+}
+Keep total length under ~700 words. Be ruthless about compression — every entry should be one short line. Never omit currently-active threats, wounds, debts, or named NPCs the player has interacted with.
+</rolling_state>
+
 <debug>
 (ONLY include this block if the user message contains the marker [DEBUG_MODE: ON]. Otherwise OMIT this block entirely.)
 Roll: [1-20]
@@ -172,10 +202,18 @@ Latent trigger stored: [short description]
 Scale: [local / regional / systemic]
 </debug>
 
-NEVER include any text outside these four tag blocks. NEVER add preamble, meta commentary, or closing remarks. The tags <narrative>, <choices>, <state>, <ledger>, and <debug> are mandatory wrappers.
+NEVER include any text outside these five tag blocks. NEVER add preamble, meta commentary, or closing remarks. The tags <narrative>, <choices>, <state>, <ledger>, <rolling_state>, and <debug> are mandatory wrappers (debug only when requested).
+
+CONTINUITY MODE:
+On subsequent turns the user message will start with a <prior_state> block containing the JSON from your previous <rolling_state>. Treat it as authoritative ground truth. Maintain every entry forward, evolve it, never reset it. Do NOT echo it back verbatim — instead, update and re-emit it in your own <rolling_state> block at the end of your response.
+
+MODE:
+Every user message includes [MODE: basic] or [MODE: advanced].
+- basic: 3-4 choices, 2-3 paragraphs, simpler rolling_state (you may omit "factions" and "archived" if there's nothing meaningful), no nested NPC structures.
+- advanced: 4-6 choices, 2-5 paragraphs, full rolling_state with all sections populated, deeper NPC/faction simulation.
 
 INVENTORY COMMAND:
-If the player asks to check inventory/gear/pack/pockets/weapons/supplies, still output all four sections. The narrative paragraphs should reflect the act of checking (a moment of pause, tactile detail) and the ledger must be fully populated.
+If the player asks to check inventory/gear/pack/pockets/weapons/supplies, still output all required sections. The narrative paragraphs should reflect the act of checking (a moment of pause, tactile detail) and the ledger must be fully populated.
 
 Begin the world as a persistent causal simulation. Resolve actions with hidden D20 logic. Let failure progress the story. Keep consequences fair, visible, causal, and playable.
 """
@@ -191,6 +229,8 @@ class NewStoryRequest(BaseModel):
     difficulty: str = "standard"
     debug_mode: bool = False
     custom_premise: Optional[str] = None
+    mode: Optional[str] = None  # "basic" | "advanced"
+    scenario_id: Optional[str] = None
 
 class ActionRequest(BaseModel):
     session_id: str
@@ -203,6 +243,7 @@ class ParsedTurn(BaseModel):
     choices: List[Dict[str, str]]
     state: Dict[str, str]
     ledger: Dict[str, Any]
+    rolling_state: Optional[Dict[str, Any]] = None
     debug: Optional[Dict[str, str]] = None
     raw: str
 
@@ -216,6 +257,7 @@ class TurnRecord(BaseModel):
     choices: List[Dict[str, str]]
     state: Dict[str, str]
     ledger: Dict[str, Any]
+    rolling_state: Optional[Dict[str, Any]] = None
     debug: Optional[Dict[str, str]] = None
     raw: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -233,6 +275,9 @@ class SessionRecord(BaseModel):
     turn_count: int = 0
     last_narrative_snippet: str = ""
     last_state: Dict[str, str] = Field(default_factory=dict)
+    rolling_state: Optional[Dict[str, Any]] = None  # latest compressed packet
+    mode: str = DEFAULT_MODE
+    scenario_id: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -241,6 +286,12 @@ class AdminSettingsRequest(BaseModel):
     temperature: Optional[confloat(ge=0.0, le=2.0)] = None  # type: ignore
     max_tokens: Optional[conint(ge=256, le=16384)] = None  # type: ignore
     history_window: Optional[conint(ge=4, le=200)] = None  # type: ignore
+    default_mode: Optional[str] = None
+    compression_level: Optional[str] = None
+    memory_depth: Optional[conint(ge=0, le=10)] = None  # type: ignore
+
+class SessionModeRequest(BaseModel):
+    mode: str
 
 # ======================================================================
 # PARSER
@@ -284,6 +335,7 @@ def parse_turn(raw: str) -> ParsedTurn:
     choices_block = _extract_block(raw, "choices")
     state_block = _extract_block(raw, "state")
     ledger_block = _extract_block(raw, "ledger")
+    rolling_block = _extract_block(raw, "rolling_state")
     debug_block = _extract_block(raw, "debug")
 
     # Fallback: if no tagged blocks, treat whole text as narrative
@@ -296,12 +348,33 @@ def parse_turn(raw: str) -> ParsedTurn:
     ledger = _parse_ledger(ledger_block)
     debug = _parse_kv_block(debug_block) if debug_block else None
 
+    rolling_state: Optional[Dict[str, Any]] = None
+    if rolling_block:
+        # The block is supposed to be a JSON object. Try direct, then a soft extract.
+        candidate = rolling_block.strip()
+        # Strip code fences if the model wrapped it
+        candidate = re.sub(r"^```(?:json)?\s*", "", candidate)
+        candidate = re.sub(r"\s*```$", "", candidate).strip()
+        # If the model accidentally embedded extra prose, try to slice the JSON object.
+        try:
+            rolling_state = _json.loads(candidate)
+        except Exception:
+            m = re.search(r"\{.*\}", candidate, re.DOTALL)
+            if m:
+                try:
+                    rolling_state = _json.loads(m.group(0))
+                except Exception:
+                    rolling_state = {"raw": candidate[:1500]}
+            else:
+                rolling_state = {"raw": candidate[:1500]}
+
     return ParsedTurn(
         narrative=narrative,
         paragraphs=paragraphs,
         choices=choices,
         state=state,
         ledger=ledger,
+        rolling_state=rolling_state,
         debug=debug,
         raw=raw,
     )
@@ -314,7 +387,12 @@ ADMIN_SETTINGS_KEY = "ai_settings"
 
 async def get_ai_settings() -> Dict[str, Any]:
     """Return effective AI settings: DB overrides on top of env defaults."""
-    defaults = get_default_settings()
+    defaults = {
+        **get_default_settings(),
+        "default_mode": DEFAULT_MODE,
+        "compression_level": DEFAULT_COMPRESSION_LEVEL,
+        "memory_depth": DEFAULT_MEMORY_DEPTH,
+    }
     doc = await db.admin_settings.find_one({"key": ADMIN_SETTINGS_KEY}, {"_id": 0})
     stored = (doc or {}).get("settings") or {}
     merged = {**defaults, **{k: v for k, v in stored.items() if v is not None}}
@@ -374,43 +452,82 @@ def _summarise_turn_for_assistant(turn: Dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
-async def _build_messages(session_id: str, user_text: str, history_window: int) -> List[Dict[str, str]]:
-    """Construct OpenAI-style messages array with system prompt + replay of recent turns."""
+async def _build_messages(
+    session: Dict[str, Any],
+    user_text: str,
+    memory_depth: int,
+    history_window_fallback: int,
+) -> List[Dict[str, str]]:
+    """Construct an OpenAI-style messages array.
+
+    Compression strategy:
+      • System prompt
+      • Latest <rolling_state> JSON from session (authoritative continuity)
+      • Last `memory_depth` recent turns replayed verbatim for narrative tone
+      • New user message
+
+    Falls back to the legacy "replay last N turns" if no rolling state exists
+    (e.g. very first turn, or an old session created before this upgrade).
+    """
+    session_id = session["id"]
     messages: List[Dict[str, str]] = [
         {"role": "system", "content": STORY_ENGINE_SYSTEM_PROMPT},
     ]
 
-    # Fetch only the most recent N turns for replay (in chronological order)
+    rolling = session.get("rolling_state")
+
+    # Pull recent turns. If we have rolling_state, we only need a small number
+    # for tone/voice continuity. If not, we fall back to the larger window.
+    take = max(1, memory_depth) if rolling else history_window_fallback
     recent_desc = await db.turns.find(
         {"session_id": session_id}, {"_id": 0}
-    ).sort("turn_number", -1).to_list(length=history_window)
+    ).sort("turn_number", -1).to_list(length=take)
     prior_turns = list(reversed(recent_desc))
 
     for t in prior_turns:
         player_action = t.get("player_action")
-        # If this turn had a player action, that's the user msg; else it was the opener
         if player_action:
             messages.append({"role": "user", "content": player_action})
-        # Assistant message: faithful reconstruction
         assistant_text = _summarise_turn_for_assistant(t)
         if assistant_text:
             messages.append({"role": "assistant", "content": assistant_text})
+
+    # Inject the compressed rolling state IMMEDIATELY before the new user turn
+    if rolling:
+        prior_state_block = (
+            "<prior_state>\n"
+            + _json.dumps(rolling, indent=2, ensure_ascii=False)
+            + "\n</prior_state>\n\n"
+        )
+        user_text = prior_state_block + user_text
 
     messages.append({"role": "user", "content": user_text})
     return messages
 
 
-async def _generate_turn(session_id: str, user_text: str) -> str:
-    """Centralised call: resolve admin settings, build messages, call aiService."""
+async def _generate_turn(session: Dict[str, Any], user_text: str) -> str:
+    """Centralised call: resolve admin settings + per-session mode, build messages, call aiService."""
     settings = await get_ai_settings()
+    mode = (session.get("mode") or settings.get("default_mode") or DEFAULT_MODE).lower()
+    profile = MODE_PROFILES.get(mode, MODE_PROFILES["advanced"])
+
+    memory_depth = int(settings.get("memory_depth", DEFAULT_MEMORY_DEPTH))
+    history_window = int(settings.get("history_window", DEFAULT_HISTORY_WINDOW))
+
+    # Mode-aware max_tokens (basic capped lower to save spend)
+    max_tokens = int(settings.get("max_tokens", DEFAULT_MAX_TOKENS))
+    cap = profile.get("max_tokens_cap")
+    if cap:
+        max_tokens = min(max_tokens, cap)
+
     messages = await _build_messages(
-        session_id, user_text, history_window=int(settings.get("history_window", DEFAULT_HISTORY_WINDOW))
+        session, user_text, memory_depth=memory_depth, history_window_fallback=history_window
     )
     return await chat_completion(
         messages=messages,
         model=settings.get("model"),
         temperature=settings.get("temperature"),
-        max_tokens=settings.get("max_tokens"),
+        max_tokens=max_tokens,
     )
 
 
@@ -433,7 +550,15 @@ async def health():
         "temperature": settings.get("temperature"),
         "max_tokens": settings.get("max_tokens"),
         "history_window": settings.get("history_window"),
+        "default_mode": settings.get("default_mode"),
+        "compression_level": settings.get("compression_level"),
+        "memory_depth": settings.get("memory_depth"),
     }
+
+
+@api_router.get("/scenarios")
+async def list_scenarios():
+    return {"scenarios": get_scenarios()}
 
 
 # -------- Admin: AI settings ------------------------------------------------
@@ -443,12 +568,20 @@ async def admin_get_settings():
     return {
         "settings": settings,
         "models": get_supported_models(),
+        "modes": ["basic", "advanced"],
+        "compression_levels": ["light", "standard", "aggressive"],
         "limits": {
             "temperature": {"min": 0.0, "max": 2.0, "step": 0.05},
             "max_tokens": {"min": 256, "max": 16384, "step": 128},
             "history_window": {"min": 4, "max": 200, "step": 2},
+            "memory_depth": {"min": 0, "max": 10, "step": 1},
         },
-        "defaults": get_default_settings(),
+        "defaults": {
+            **get_default_settings(),
+            "default_mode": DEFAULT_MODE,
+            "compression_level": DEFAULT_COMPRESSION_LEVEL,
+            "memory_depth": DEFAULT_MEMORY_DEPTH,
+        },
         "provider_configured": ai_is_configured(),
     }
 
@@ -460,6 +593,10 @@ async def admin_post_settings(req: AdminSettingsRequest):
         supported_ids = {m["id"] for m in get_supported_models()}
         if req.model not in supported_ids:
             raise HTTPException(status_code=400, detail=f"Unsupported model: {req.model}")
+    if req.default_mode is not None and req.default_mode not in ("basic", "advanced"):
+        raise HTTPException(status_code=400, detail="default_mode must be 'basic' or 'advanced'")
+    if req.compression_level is not None and req.compression_level not in ("light", "standard", "aggressive"):
+        raise HTTPException(status_code=400, detail="compression_level must be light|standard|aggressive")
 
     patch = req.model_dump(exclude_none=True)
     updated = await set_ai_settings(patch)
@@ -474,47 +611,94 @@ async def admin_list_models():
 # -------- Story flow --------------------------------------------------------
 @api_router.post("/story/new")
 async def new_story(req: NewStoryRequest):
+    settings = await get_ai_settings()
+    scenario = get_scenario(req.scenario_id) if req.scenario_id else None
+
+    # Scenario overrides win unless the client explicitly sent a different value
+    if scenario:
+        effective_genre = req.genre or scenario["genre"]
+        effective_role = req.role or scenario.get("role")
+        effective_tone = req.tone or scenario.get("tone")
+        effective_difficulty = req.difficulty if req.difficulty != "standard" else scenario.get("difficulty", "standard")
+        effective_premise = req.custom_premise or scenario.get("pitch")
+    else:
+        effective_genre = req.genre
+        effective_role = req.role
+        effective_tone = req.tone
+        effective_difficulty = req.difficulty
+        effective_premise = req.custom_premise
+
+    effective_mode = (req.mode or scenario.get("mode") if scenario else req.mode) or settings.get("default_mode") or DEFAULT_MODE
+    if effective_mode not in ("basic", "advanced"):
+        effective_mode = DEFAULT_MODE
+
+    title = (
+        scenario["title"]
+        if scenario
+        else f"{effective_genre.title()} — {(effective_role or 'Wanderer').title()}"
+    )
+
     session = SessionRecord(
         device_id=req.device_id,
-        genre=req.genre,
-        role=req.role,
-        tone=req.tone,
-        difficulty=req.difficulty,
+        genre=effective_genre,
+        role=effective_role,
+        tone=effective_tone,
+        difficulty=effective_difficulty,
         debug_mode=req.debug_mode,
-        custom_premise=req.custom_premise,
-        title=f"{req.genre.title()} — {(req.role or 'Wanderer').title()}",
+        custom_premise=effective_premise,
+        title=title,
+        mode=effective_mode,
+        scenario_id=req.scenario_id,
     )
 
     setup_lines = [
-        f"Genre: {req.genre}",
-        f"Character role: {req.role or 'unspecified — choose a fitting archetype for the genre'}",
-        f"Tone: {req.tone or 'cinematic and grounded'}",
-        f"Difficulty: {req.difficulty}",
+        f"Genre: {effective_genre}",
+        f"Character role: {effective_role or 'unspecified — choose a fitting archetype for the genre'}",
+        f"Tone: {effective_tone or 'cinematic and grounded'}",
+        f"Difficulty: {effective_difficulty}",
     ]
-    if req.custom_premise:
-        setup_lines.append(f"Premise hook: {req.custom_premise}")
+    if effective_premise:
+        setup_lines.append(f"Premise hook: {effective_premise}")
+
+    if scenario:
+        setup_lines.append("")
+        setup_lines.append("SCENARIO SEED — treat as canonical for the opening:")
+        setup_lines.append(f"  Starting location: {scenario['starting_location']}")
+        setup_lines.append(f"  Starting pressure: {scenario['starting_pressure']}")
+        setup_lines.append("  Key NPCs (named, with stance):")
+        for n in scenario.get("key_npcs", []):
+            setup_lines.append(
+                f"    - {n['name']} — {n['role']} (stance: {n.get('stance','unknown')})"
+            )
+        setup_lines.append(f"  Starting inventory: {scenario['starting_inventory']}")
+        setup_lines.append(
+            f"  Hidden threat (do NOT reveal yet, store as latent trigger): {scenario['hidden_threat']}"
+        )
+        setup_lines.append(f"  Opening seed: {scenario['seed']}")
 
     setup_text = "\n".join(setup_lines)
     debug_marker = "[DEBUG_MODE: ON]" if req.debug_mode else "[DEBUG_MODE: OFF]"
-    difficulty_marker = f"[DIFFICULTY: {req.difficulty}]"
+    difficulty_marker = f"[DIFFICULTY: {effective_difficulty}]"
+    mode_marker = f"[MODE: {effective_mode}]"
 
     opening_prompt = (
         f"{debug_marker}\n"
-        f"{difficulty_marker}\n\n"
+        f"{difficulty_marker}\n"
+        f"{mode_marker}\n\n"
         f"Begin the story now. Use the following setup:\n{setup_text}\n\n"
         f"Open with an immersive in-medias-res scene that establishes location, sensory atmosphere, the character's immediate situation, and one active pressure or hook. "
-        f"Populate the inventory ledger with a small, plausible starting kit fitting the genre and role. "
-        f"Present 4-6 meaningful first choices. "
-        f"Honour the difficulty modifier from the marker above on this very first roll. "
-        f"Remember: output ONLY the four required tag blocks (<narrative>, <choices>, <state>, <ledger>"
+        f"Populate the inventory ledger with the starting kit. "
+        f"Present the appropriate number of meaningful first choices for the mode. "
+        f"Honour the difficulty modifier on this very first roll. "
+        f"Emit ALL required blocks including <rolling_state>"
         + (", <debug>" if req.debug_mode else "")
-        + ")."
+        + "."
     )
 
     await db.sessions.insert_one(session.model_dump())
 
     try:
-        raw = await _generate_turn(session.id, opening_prompt)
+        raw = await _generate_turn(session.model_dump(), opening_prompt)
     except AIServiceError as e:
         logger.exception("AI service failed")
         await db.sessions.delete_one({"id": session.id})
@@ -535,6 +719,7 @@ async def new_story(req: NewStoryRequest):
         choices=parsed.choices,
         state=parsed.state,
         ledger=parsed.ledger,
+        rolling_state=parsed.rolling_state,
         debug=parsed.debug,
         raw=parsed.raw,
     )
@@ -547,6 +732,7 @@ async def new_story(req: NewStoryRequest):
             "turn_count": 1,
             "last_narrative_snippet": snippet,
             "last_state": parsed.state,
+            "rolling_state": parsed.rolling_state,
             "updated_at": datetime.now(timezone.utc),
         }},
     )
@@ -562,6 +748,8 @@ async def new_story(req: NewStoryRequest):
             "debug_mode": req.debug_mode,
             "title": session.title,
             "turn_count": 1,
+            "mode": session.mode,
+            "scenario_id": session.scenario_id,
         },
     }
 
@@ -574,10 +762,11 @@ async def story_action(req: ActionRequest):
 
     debug_marker = "[DEBUG_MODE: ON]" if req.debug_mode else "[DEBUG_MODE: OFF]"
     difficulty_marker = f"[DIFFICULTY: {session.get('difficulty', 'standard')}]"
-    user_text = f"{debug_marker}\n{difficulty_marker}\n\nPlayer action: {req.action_text}"
+    mode_marker = f"[MODE: {session.get('mode', DEFAULT_MODE)}]"
+    user_text = f"{debug_marker}\n{difficulty_marker}\n{mode_marker}\n\nPlayer action: {req.action_text}"
 
     try:
-        raw = await _generate_turn(req.session_id, user_text)
+        raw = await _generate_turn(session, user_text)
     except AIServiceError as e:
         logger.exception("AI service failed")
         raise HTTPException(status_code=502, detail=f"Story engine error: {e}")
@@ -597,24 +786,80 @@ async def story_action(req: ActionRequest):
         choices=parsed.choices,
         state=parsed.state,
         ledger=parsed.ledger,
+        rolling_state=parsed.rolling_state,
         debug=parsed.debug,
         raw=parsed.raw,
     )
     await db.turns.insert_one(turn.model_dump())
 
     snippet = (parsed.paragraphs[0][:180] + "…") if parsed.paragraphs else ""
-    await db.sessions.update_one(
-        {"id": req.session_id},
-        {"$set": {
-            "turn_count": next_turn_number,
-            "last_narrative_snippet": snippet,
-            "last_state": parsed.state,
-            "updated_at": datetime.now(timezone.utc),
-            "debug_mode": req.debug_mode,
-        }},
-    )
+    update_set: Dict[str, Any] = {
+        "turn_count": next_turn_number,
+        "last_narrative_snippet": snippet,
+        "last_state": parsed.state,
+        "updated_at": datetime.now(timezone.utc),
+        "debug_mode": req.debug_mode,
+    }
+    # Only overwrite rolling_state if the model actually emitted one
+    if parsed.rolling_state:
+        update_set["rolling_state"] = parsed.rolling_state
+    await db.sessions.update_one({"id": req.session_id}, {"$set": update_set})
 
     return {"turn": turn.model_dump(mode="json")}
+
+
+@api_router.post("/story/session/{session_id}/mode")
+async def set_session_mode(session_id: str, req: SessionModeRequest):
+    if req.mode not in ("basic", "advanced"):
+        raise HTTPException(status_code=400, detail="mode must be 'basic' or 'advanced'")
+    result = await db.sessions.update_one(
+        {"id": session_id},
+        {"$set": {"mode": req.mode, "updated_at": datetime.now(timezone.utc)}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"mode": req.mode}
+
+
+@api_router.get("/story/session/{session_id}/export")
+async def export_session(session_id: str):
+    """Return full session state JSON: session + all turns + rolling state."""
+    session = await db.sessions.find_one({"id": session_id}, {"_id": 0})
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    turns = await db.turns.find({"session_id": session_id}, {"_id": 0}).sort("turn_number", 1).to_list(length=500)
+    return {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "session": session,
+        "turns": turns,
+        "summary": {
+            "turn_count": len(turns),
+            "rolling_state": session.get("rolling_state"),
+            "last_state": session.get("last_state"),
+        },
+    }
+
+
+@api_router.post("/story/session/{session_id}/reset")
+async def reset_session(session_id: str):
+    """Delete all turns and rolling state but keep the session shell (genre/role/difficulty/mode).
+    The client should then re-call /story/action with a meaningful first action, or the next call
+    to /story/new with the same scenario."""
+    session = await db.sessions.find_one({"id": session_id}, {"_id": 0})
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    await db.turns.delete_many({"session_id": session_id})
+    await db.sessions.update_one(
+        {"id": session_id},
+        {"$set": {
+            "turn_count": 0,
+            "last_narrative_snippet": "",
+            "last_state": {},
+            "rolling_state": None,
+            "updated_at": datetime.now(timezone.utc),
+        }},
+    )
+    return {"reset": True}
 
 
 @api_router.get("/story/sessions")
