@@ -66,7 +66,10 @@ export default function SettingsScreen() {
     (aiDraft.model !== adminBundle.settings.model ||
       aiDraft.temperature !== adminBundle.settings.temperature ||
       aiDraft.max_tokens !== adminBundle.settings.max_tokens ||
-      aiDraft.history_window !== adminBundle.settings.history_window);
+      aiDraft.history_window !== adminBundle.settings.history_window ||
+      aiDraft.default_mode !== adminBundle.settings.default_mode ||
+      aiDraft.compression_level !== adminBundle.settings.compression_level ||
+      aiDraft.memory_depth !== adminBundle.settings.memory_depth);
 
   const onSaveAi = async () => {
     if (!aiDraft || !adminBundle) return;
@@ -77,6 +80,9 @@ export default function SettingsScreen() {
         temperature: aiDraft.temperature,
         max_tokens: aiDraft.max_tokens,
         history_window: aiDraft.history_window,
+        default_mode: aiDraft.default_mode,
+        compression_level: aiDraft.compression_level,
+        memory_depth: aiDraft.memory_depth,
       });
       setAdminBundle({ ...adminBundle, settings: res.settings });
       setAiDraft(res.settings);
@@ -100,7 +106,12 @@ export default function SettingsScreen() {
     if (clamp) value = Math.max(clamp.min, Math.min(clamp.max, value));
     // Round temperature to 2 decimals
     if (key === "temperature") value = Math.round(value * 100) / 100;
-    setAiDraft({ ...aiDraft, [key]: value });
+    setAiDraft({ ...aiDraft, [key]: value } as AISettings);
+  };
+
+  const setField = (patch: Partial<AISettings>) => {
+    if (!aiDraft) return;
+    setAiDraft({ ...aiDraft, ...patch });
   };
 
   const currentModelMeta = adminBundle?.models.find((m) => m.id === aiDraft?.model);
@@ -365,6 +376,99 @@ export default function SettingsScreen() {
             </View>
             <Text style={styles.rowHelp}>
               Recent turns replayed each call. Higher = stronger continuity, more tokens used.
+            </Text>
+
+            <Text style={styles.subSection}>DEFAULT · ENGINE · MODE</Text>
+            <View style={styles.chipRowAdmin}>
+              {(["basic", "advanced"] as const).map((m) => {
+                const active = (aiDraft.default_mode || "advanced") === m;
+                return (
+                  <TouchableOpacity
+                    key={m}
+                    style={[styles.chipAdmin, active && styles.chipAdminActive]}
+                    onPress={() => setField({ default_mode: m })}
+                    testID={`default-mode-${m}`}
+                  >
+                    <Text style={[styles.chipAdminText, active && styles.chipAdminTextActive]}>
+                      {m.toUpperCase()}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <Text style={styles.rowHelp}>
+              The mode applied to new chronicles when none is selected. Per-session mode still wins.
+            </Text>
+
+            <Text style={styles.subSection}>COMPRESSION · LEVEL</Text>
+            <View style={styles.chipRowAdmin}>
+              {(["light", "standard", "aggressive"] as const).map((c) => {
+                const active = (aiDraft.compression_level || "standard") === c;
+                return (
+                  <TouchableOpacity
+                    key={c}
+                    style={[styles.chipAdmin, active && styles.chipAdminActive]}
+                    onPress={() => setField({ compression_level: c })}
+                    testID={`compression-${c}`}
+                  >
+                    <Text style={[styles.chipAdminText, active && styles.chipAdminTextActive]}>
+                      {c.toUpperCase()}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <Text style={styles.rowHelp}>
+              How aggressively the rolling state should compress older context. Standard is recommended.
+            </Text>
+
+            <Text style={styles.subSection}>
+              MEMORY · DEPTH · {aiDraft.memory_depth ?? 3} TURNS
+            </Text>
+            <View style={styles.stepperRow}>
+              <TouchableOpacity
+                style={styles.stepperBtn}
+                onPress={() =>
+                  adjust(
+                    "memory_depth" as any,
+                    -(adminBundle.limits.memory_depth?.step || 1),
+                    adminBundle.limits.memory_depth || { min: 0, max: 10 }
+                  )
+                }
+                testID="memory-down"
+              >
+                <Ionicons name="remove" size={18} color={COLORS.textPrimary} />
+              </TouchableOpacity>
+              <View style={styles.stepperTrack}>
+                <View
+                  style={[
+                    styles.stepperFill,
+                    {
+                      width: `${
+                        (((aiDraft.memory_depth ?? 3) - (adminBundle.limits.memory_depth?.min || 0)) /
+                          ((adminBundle.limits.memory_depth?.max || 10) - (adminBundle.limits.memory_depth?.min || 0))) *
+                        100
+                      }%`,
+                    },
+                  ]}
+                />
+              </View>
+              <TouchableOpacity
+                style={styles.stepperBtn}
+                onPress={() =>
+                  adjust(
+                    "memory_depth" as any,
+                    adminBundle.limits.memory_depth?.step || 1,
+                    adminBundle.limits.memory_depth || { min: 0, max: 10 }
+                  )
+                }
+                testID="memory-up"
+              >
+                <Ionicons name="add" size={18} color={COLORS.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.rowHelp}>
+              Recent turns replayed verbatim ON TOP of the compressed rolling state. 3 is a good default.
             </Text>
 
             <View style={styles.actionRow}>
@@ -663,4 +767,23 @@ const styles = StyleSheet.create({
   actionBtnDisabled: {
     opacity: 0.5,
   },
+  chipRowAdmin: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
+  chipAdmin: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.background,
+  },
+  chipAdminActive: {
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.primarySoft,
+  },
+  chipAdminText: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.textSecondary,
+    fontSize: 10,
+    letterSpacing: 2,
+  },
+  chipAdminTextActive: { color: COLORS.primary },
 });

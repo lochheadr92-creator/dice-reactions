@@ -17,8 +17,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { COLORS, FONTS } from "../../src/theme";
-import { getSession, sendAction, deleteSession, Turn, SessionSummary } from "../../src/api";
+import { getSession, sendAction, deleteSession, exportSession, resetSession, setSessionMode, Turn, SessionSummary } from "../../src/api";
 import { friendlyError } from "../../src/errors";
+import { Share } from "react-native";
 
 const HEALTH_COLOR_MAP: Record<string, string> = {
   stable: COLORS.objective,
@@ -57,6 +58,7 @@ export default function PlayScreen() {
   const [showMenu, setShowMenu] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
+  const [mode, setMode] = useState<"basic" | "advanced">("advanced");
   const scrollRef = useRef<ScrollView>(null);
 
   const load = useCallback(async () => {
@@ -65,6 +67,7 @@ export default function PlayScreen() {
       setSession(res.session);
       setTurns(res.turns);
       setDebugMode(res.session.debug_mode);
+      setMode(((res.session as any).mode as "basic" | "advanced") || "advanced");
     } catch (e) {
       console.log("load session", e);
     } finally {
@@ -244,6 +247,39 @@ export default function PlayScreen() {
                 </View>
               )}
 
+              {debugMode && turn.rolling_state && (
+                <View style={styles.debugBlock} testID={`rolling-state-${turn.turn_number}`}>
+                  <Text style={styles.debugHeader}>· ROLLING · STATE ·</Text>
+                  {Object.entries(turn.rolling_state).map(([k, v]) => {
+                    let display: string;
+                    if (typeof v === "string") display = v;
+                    else if (Array.isArray(v)) {
+                      display = v
+                        .map((x) =>
+                          typeof x === "string"
+                            ? x
+                            : x?.name
+                            ? `${x.name}${x.stance ? ` (${x.stance})` : ""}${x.note ? ` — ${x.note}` : ""}`
+                            : JSON.stringify(x)
+                        )
+                        .join(" · ");
+                    } else if (v && typeof v === "object") {
+                      display = Object.entries(v as any)
+                        .map(([kk, vv]) => `${kk}: ${vv}`)
+                        .join(" · ");
+                    } else {
+                      display = String(v);
+                    }
+                    return (
+                      <View key={k} style={styles.debugLine}>
+                        <Text style={styles.debugKey}>{k.toUpperCase()}</Text>
+                        <Text style={styles.debugVal}>{display}</Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
+
               {i < turns.length - 1 && <View style={styles.turnDivider} />}
             </View>
           ))}
@@ -370,6 +406,84 @@ export default function PlayScreen() {
               <Text style={[styles.menuText, debugMode && { color: COLORS.primary }]}>
                 {debugMode ? "Debug · ON  (next turn)" : "Debug · OFF"}
               </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={async () => {
+                const next = mode === "basic" ? "advanced" : "basic";
+                try {
+                  await setSessionMode(sessionId, next);
+                  setMode(next);
+                } catch (e: any) {
+                  const { title, message } = friendlyError(e);
+                  if (Platform.OS === "web") alert(`${title}\n\n${message}`);
+                  else Alert.alert(title, message);
+                }
+              }}
+              testID="toggle-mode-menu"
+            >
+              <Ionicons name="layers-outline" size={18} color={COLORS.textSecondary} />
+              <Text style={styles.menuText}>Mode · {mode.toUpperCase()}</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={async () => {
+                try {
+                  const data = await exportSession(sessionId);
+                  const json = JSON.stringify(data, null, 2);
+                  if (Platform.OS === "web") {
+                    try {
+                      await (navigator as any).clipboard?.writeText(json);
+                      alert(`Session exported · ${data.summary.turn_count} turns · copied to clipboard.`);
+                    } catch {
+                      alert(json.slice(0, 2000) + (json.length > 2000 ? "\n…(truncated)" : ""));
+                    }
+                  } else {
+                    await Share.share({
+                      title: `${session.title} · export`,
+                      message: json,
+                    });
+                  }
+                  setShowMenu(false);
+                } catch (e: any) {
+                  const { title, message } = friendlyError(e);
+                  Alert.alert(title, message);
+                }
+              }}
+              testID="export-session-btn"
+            >
+              <Ionicons name="share-outline" size={18} color={COLORS.textSecondary} />
+              <Text style={styles.menuText}>Export session state</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={() => {
+                const confirmAndRun = async () => {
+                  try {
+                    await resetSession(sessionId);
+                    setShowMenu(false);
+                    router.replace(`/new-story?from=reset&sessionTitle=${encodeURIComponent(session.title)}`);
+                  } catch (e: any) {
+                    const { title, message } = friendlyError(e);
+                    Alert.alert(title, message);
+                  }
+                };
+                if (Platform.OS === "web") {
+                  if (confirm("Reset this chronicle? All turns and rolling state will be wiped.")) confirmAndRun();
+                } else {
+                  Alert.alert("Reset chronicle?", "All turns and rolling state will be wiped. The session shell stays.", [
+                    { text: "Cancel", style: "cancel" },
+                    { text: "Reset", style: "destructive", onPress: confirmAndRun },
+                  ]);
+                }
+              }}
+              testID="reset-session-btn"
+            >
+              <Ionicons name="refresh-outline" size={18} color={COLORS.textSecondary} />
+              <Text style={styles.menuText}>Reset chronicle</Text>
             </TouchableOpacity>
 
             <TouchableOpacity

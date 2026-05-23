@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -17,7 +17,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONTS } from "../src/theme";
 import { getDeviceId, getSettings } from "../src/storage";
-import { newStory } from "../src/api";
+import { newStory, listScenarios, Scenario } from "../src/api";
 import { friendlyError } from "../src/errors";
 
 type Genre = {
@@ -99,9 +99,29 @@ export default function NewStoryScreen() {
   const [debugMode, setDebugMode] = useState(false);
   const [premise, setPremise] = useState("");
   const [loading, setLoading] = useState(false);
+  const [mode, setMode] = useState<"basic" | "advanced">("advanced");
+  const [scenarios, setScenarios] = useState<Scenario[]>([]);
+  const [scenarioId, setScenarioId] = useState<string | null>(null);
+
+  useEffect(() => {
+    listScenarios().then((r) => setScenarios(r.scenarios)).catch(() => {});
+  }, []);
+
+  const selectScenario = (s: Scenario | null) => {
+    if (!s) {
+      setScenarioId(null);
+      return;
+    }
+    setScenarioId(s.id);
+    setGenre(s.genre);
+    setRole(s.role);
+    setTone(s.tone);
+    setDifficulty(s.difficulty as any);
+    setMode((s.mode as any) || "advanced");
+  };
 
   const resolvedGenre = genre === "custom" ? customGenre.trim() : genre;
-  const canStart = !!resolvedGenre && !loading;
+  const canStart = (!!resolvedGenre || !!scenarioId) && !loading;
 
   const handleStart = async () => {
     if (!canStart) return;
@@ -111,12 +131,14 @@ export default function NewStoryScreen() {
       const settings = await getSettings();
       const res = await newStory({
         device_id,
-        genre: resolvedGenre,
+        genre: resolvedGenre || (scenarios.find((s) => s.id === scenarioId)?.genre ?? ""),
         role: role.trim() || undefined,
         tone,
         difficulty,
         debug_mode: debugMode || settings.debugDefault,
         custom_premise: premise.trim() || undefined,
+        mode,
+        scenario_id: scenarioId || undefined,
       });
       router.replace(`/play/${res.session_id}`);
     } catch (e: any) {
@@ -150,7 +172,52 @@ export default function NewStoryScreen() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          <Text style={styles.stepLabel}>01 · SELECT · WORLD</Text>
+          <Text style={styles.stepLabel}>00 · QUICK · START</Text>
+          <Text style={styles.stepHelp}>
+            Hand-tuned scenarios with named NPCs, seeded inventory, and a hidden threat already in place. Or scroll past to build your own.
+          </Text>
+          <View style={styles.scenarioList}>
+            {scenarios.map((s) => {
+              const active = scenarioId === s.id;
+              return (
+                <TouchableOpacity
+                  key={s.id}
+                  style={[styles.scenarioCard, active && styles.scenarioCardActive]}
+                  onPress={() => selectScenario(active ? null : s)}
+                  activeOpacity={0.85}
+                  testID={`scenario-${s.id}`}
+                >
+                  <View style={styles.scenarioHeader}>
+                    <Text style={[styles.scenarioTitle, active && styles.scenarioTitleActive]}>
+                      {s.title}
+                    </Text>
+                    {active && (
+                      <Ionicons name="checkmark-circle" size={18} color={COLORS.primary} />
+                    )}
+                  </View>
+                  <Text style={styles.scenarioPitch}>{s.pitch}</Text>
+                  <View style={styles.scenarioMetaRow}>
+                    <Text style={styles.scenarioMeta}>{s.difficulty.toUpperCase()}</Text>
+                    <Text style={styles.scenarioMetaDim}>·</Text>
+                    <Text style={styles.scenarioMeta}>{s.mode.toUpperCase()} MODE</Text>
+                    <Text style={styles.scenarioMetaDim}>·</Text>
+                    <Text style={styles.scenarioMeta}>{s.key_npcs.length} NPCs</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+            {scenarioId && (
+              <TouchableOpacity
+                style={styles.scenarioClear}
+                onPress={() => selectScenario(null)}
+                testID="scenario-clear"
+              >
+                <Text style={styles.scenarioClearText}>CLEAR SCENARIO · build manually</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          <Text style={[styles.stepLabel, { marginTop: 28 }]}>01 · SELECT · WORLD</Text>
           <Text style={styles.stepHelp}>Each world unlocks its own systems, pressures, and textures.</Text>
 
           <View style={styles.grid}>
@@ -246,7 +313,26 @@ export default function NewStoryScreen() {
             {difficulty === "brutal" && "−6 to every roll · NO brake · NO death guard · wounds compound · resources halve · NPCs hostile by default."}
           </Text>
 
-          <Text style={[styles.stepLabel, { marginTop: 28 }]}>05 · OPENING · HOOK  (optional)</Text>
+          <Text style={[styles.stepLabel, { marginTop: 28 }]}>05 · ENGINE · MODE</Text>
+          <View style={styles.chipRow}>
+            {(["basic", "advanced"] as const).map((m) => (
+              <TouchableOpacity
+                key={m}
+                style={[styles.chip, mode === m && styles.chipActive]}
+                onPress={() => setMode(m)}
+                testID={`mode-${m}`}
+              >
+                <Text style={[styles.chipText, mode === m && styles.chipTextActive]}>{m}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <Text style={styles.diffHelp}>
+            {mode === "basic"
+              ? "Cheaper · 3-4 choices · shorter scenes · lighter memory. Good for fast play."
+              : "Full causal simulation · 4-6 choices · deeper NPC/faction memory · richer consequences."}
+          </Text>
+
+          <Text style={[styles.stepLabel, { marginTop: 28 }]}>06 · OPENING · HOOK  (optional)</Text>
           <TextInput
             value={premise}
             onChangeText={setPremise}
@@ -492,5 +578,66 @@ const styles = StyleSheet.create({
     color: COLORS.primary,
     fontSize: 13,
     letterSpacing: 4,
+  },
+
+  // Scenario picker
+  scenarioList: { gap: 10, marginTop: 8 },
+  scenarioCard: {
+    padding: 14,
+    borderWidth: 1,
+    borderColor: COLORS.borderDim,
+    backgroundColor: COLORS.surfaceDeep,
+  },
+  scenarioCardActive: {
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.primarySoft,
+  },
+  scenarioHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 6,
+  },
+  scenarioTitle: {
+    fontFamily: FONTS.headingBold,
+    color: COLORS.textPrimary,
+    fontSize: 17,
+  },
+  scenarioTitleActive: { color: COLORS.primary },
+  scenarioPitch: {
+    fontFamily: FONTS.bodyItalic,
+    color: COLORS.textProse,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  scenarioMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 10,
+  },
+  scenarioMeta: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.textSecondary,
+    fontSize: 9,
+    letterSpacing: 2,
+  },
+  scenarioMetaDim: {
+    color: COLORS.textMuted,
+    fontSize: 9,
+  },
+  scenarioClear: {
+    paddingVertical: 10,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: COLORS.borderDim,
+    borderStyle: "dashed",
+    marginTop: 4,
+  },
+  scenarioClearText: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.textMuted,
+    fontSize: 10,
+    letterSpacing: 2,
   },
 });
