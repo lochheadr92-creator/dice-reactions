@@ -8,7 +8,7 @@ import logging
 import uuid
 from pathlib import Path
 from pydantic import BaseModel, Field, conint, confloat
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, timezone
 
 ROOT_DIR = Path(__file__).parent
@@ -67,6 +67,19 @@ Every internal mechanism is hidden by default. The player must never see:
   • hidden objectives or invalidation reasoning
   • the existence of the difficulty modifier, the mode, the debug marker, or any user-message marker like [DIFFICULTY: ...] [MODE: ...] [DEBUG_MODE: ...]
   • archived/dormant facts unless they re-surface naturally through play
+
+============================
+HARD OUTPUT VALIDATION (read this first)
+============================
+Every turn MUST satisfy ALL of the following or the response is invalid:
+  1. Exactly ONE <narrative> block containing 2–4 short paragraphs. Combined narrative text under ~1200 characters.
+  2. Exactly ONE <choices> block containing 4 to 6 choices, each on its own line, labelled in order A. B. C. D. (E. F. optional).
+  3. Choices must cover meaningfully different intents — include at least one CAUTIOUS option, one DIRECT/RISKY option, one INVESTIGATIVE option, and one SOCIAL/COMMUNICATION option where the scene supports it.
+  4. NO `Roll:` / `Modifiers:` / `Final:` / `Active systems:` / `Delayed trigger:` / `Latent trigger:` / `Scale:` lines anywhere outside the <debug> block.
+  5. NO `<prior_state>` echo. NO bare JSON outside `<rolling_state>` / `<debug>`. NO preamble or meta.
+  6. <state>, <ledger>, and <rolling_state> blocks are present. <debug> is present ONLY when the user message contains `[DEV_MODE: ON]`.
+
+If any of these would be violated, regenerate internally before responding.
 
 The narrative must express these things THROUGH:
   • sensory detail (sight, sound, smell, weight, ache)
@@ -212,9 +225,9 @@ Not every scene requires escalation, danger, or revelation. The engine MAY allow
 ============================
 PARAGRAPH PRESERVATION RULE
 ============================
-Every turn MUST contain 2–5 distinct paragraphs of immersive prose before Choices.
+Every turn MUST contain 2–4 SHORT paragraphs of immersive prose before Choices. Combined narrative length must stay under ~1200 characters.
 Each paragraph must include action progression, sensory detail, consequence or reaction, and forward pressure.
-Never collapse into one dense block. Never degrade into bullet narration.
+Never collapse into one dense block. Never degrade into bullet narration. Never exceed 4 paragraphs.
 
 ============================
 CHOICE RANDOMISATION RULE
@@ -230,7 +243,7 @@ OUTPUT FORMAT — STRICT
 Every response MUST use this exact structure with these exact section headers:
 
 <narrative>
-(2-5 distinct paragraphs of immersive prose, separated by blank lines. Grounded sensory detail. No mechanics. No "What do you do?")
+(2-4 short paragraphs of immersive prose, separated by blank lines. Combined under ~1200 characters. Grounded sensory detail. No mechanics. No "What do you do?")
 </narrative>
 
 <choices>
@@ -238,9 +251,12 @@ A. [choice text — playable, in-world, no mechanical tags]
 B. [choice text]
 C. [choice text]
 D. [choice text]
-E. [choice text]   (optional 5th)
-F. [choice text]   (optional 6th)
+E. [choice text]   (optional)
+F. [choice text]   (optional)
 </choices>
+
+CHOICE DIVERSITY REQUIREMENT:
+You must always output 4 to 6 choices labelled in order A. B. C. D. (E. F. optional). Each choice must represent a meaningfully different intent. Where the scene supports it, include at least one CAUTIOUS option, one DIRECT / RISKY option, one INVESTIGATIVE option, and one SOCIAL / COMMUNICATION option. Never duplicate intents. Never omit the <choices> block. Never write "what do you do?" or hand control back to the player without a choice list.
 
 <state>
 Health: [stable / bruised / wounded / badly wounded / critical]
@@ -302,8 +318,8 @@ On subsequent turns the user message will start with a <prior_state> block conta
 
 MODE:
 Every user message includes [MODE: basic] or [MODE: advanced]. This is also engine-only and must never be referenced in prose.
-- basic: 3-4 choices, 2-3 paragraphs, simpler rolling_state (you may omit "factions" and "archived" if there's nothing meaningful), no nested NPC structures. The anti-loop fields (`topic_ledger`, `active_pressures`, `recent_choice_signatures`) MUST still be present and maintained. The player experience is the SAME — only the simulation depth changes.
-- advanced: 4-6 choices, 2-5 paragraphs, full rolling_state, deeper NPC/faction simulation, longer memory persistence, stronger consequence propagation. STILL nothing about the engine is exposed.
+- basic: 4 choices, 2-3 short paragraphs, simpler rolling_state (you may omit "factions" and "archived" if there's nothing meaningful), no nested NPC structures. The anti-loop fields (`topic_ledger`, `active_pressures`, `recent_choice_signatures`) MUST still be present and maintained. The player experience is the SAME — only the simulation depth changes.
+- advanced: 4-6 choices, 2-4 short paragraphs, full rolling_state, deeper NPC/faction simulation, longer memory persistence, stronger consequence propagation. STILL nothing about the engine is exposed.
 
 INVENTORY COMMAND:
 If the player asks to check inventory/gear/pack/pockets/weapons/supplies, still output all required sections. The narrative paragraphs should reflect the act of checking (a moment of pause, tactile detail) and the ledger must be fully populated.
@@ -691,6 +707,145 @@ async def _generate_turn(session: Dict[str, Any], user_text: str) -> str:
     )
 
 
+# ----------------------------------------------------------------------
+# Output validation + single-shot retry
+# ----------------------------------------------------------------------
+MAX_NARRATION_CHARS = 1200
+MAX_PARAGRAPHS = 4
+MIN_CHOICES = 4
+MAX_CHOICES = 6
+REQUIRED_CHOICE_LABELS = {"A", "B", "C", "D"}
+
+# Mechanic / engine-debug labels that must never appear in player-facing prose.
+_LEAK_LABEL_RE = re.compile(
+    r"^\s*(?:Roll|Modifiers?|Final|Outcome|Active\s*systems?|"
+    r"Consequence(?:\s*budget)?|Delayed\s*trigger(?:\s*stored)?|"
+    r"Latent\s*trigger(?:\s*stored)?|Scale|Pressure\s*horizon|"
+    r"Rolling\s*state|Trigger|DEV[_\s-]?MODE)\s*[:=]",
+    re.IGNORECASE | re.MULTILINE,
+)
+_ENGINE_TAG_IN_NARRATIVE_RE = re.compile(
+    r"<\s*/?\s*(?:rolling_state|debug|prior_state|state|ledger|choices|scenario)\b",
+    re.IGNORECASE,
+)
+
+
+def _validate_parsed(parsed: ParsedTurn) -> Tuple[bool, str]:
+    """Return (ok, reason) for player-facing turn validation."""
+    # 1. Choices present and labelled A-D minimum, count 4-6
+    labels = {(c.get("label") or "").upper() for c in (parsed.choices or [])}
+    if not REQUIRED_CHOICE_LABELS.issubset(labels):
+        missing = sorted(REQUIRED_CHOICE_LABELS - labels)
+        return False, f"missing required choice labels: {','.join(missing)}"
+    if not (MIN_CHOICES <= len(parsed.choices) <= MAX_CHOICES):
+        return (
+            False,
+            f"choice count {len(parsed.choices)} outside required {MIN_CHOICES}-{MAX_CHOICES}",
+        )
+
+    paragraphs = parsed.paragraphs or []
+
+    # 2. Paragraph count cap
+    if len(paragraphs) == 0:
+        return False, "no narrative paragraphs"
+    if len(paragraphs) > MAX_PARAGRAPHS:
+        return False, f"narration has {len(paragraphs)} paragraphs (max {MAX_PARAGRAPHS})"
+
+    # 3. Total narration length cap (1200 chars).
+    total_chars = sum(len(p) for p in paragraphs)
+    if total_chars > MAX_NARRATION_CHARS:
+        return False, f"narration {total_chars} chars exceeds {MAX_NARRATION_CHARS}"
+
+    # 4. No leaked engine tags / mechanic labels inside narrative
+    joined = "\n".join(paragraphs)
+    if _ENGINE_TAG_IN_NARRATIVE_RE.search(joined):
+        return False, "engine tag leaked into narrative"
+    if _LEAK_LABEL_RE.search(joined):
+        return False, "mechanic label leaked into narrative"
+
+    return True, ""
+
+
+_RETRY_INSTRUCTION = (
+    "[VALIDATION_RETRY: {reason}]\n"
+    "Rewrite the previous response in valid player-facing format with "
+    "2–4 short paragraphs (under 1200 characters total) and 4–6 A–F choices. "
+    "Every choice must be on its own line beginning with the letter and a period "
+    "(A. B. C. D. and optionally E. F.). "
+    "Do NOT include any Roll / Modifiers / Final / Active systems / Delayed trigger / "
+    "Latent trigger / Scale text anywhere outside the <debug> block. "
+    "Do NOT echo <prior_state>. Output ONLY the required tag blocks "
+    "(<narrative>, <choices>, <state>, <ledger>, <rolling_state>"
+    "{debug_clause}). Choices must cover meaningfully different intents — include a "
+    "cautious option, a direct/risky option, an investigative option, and a "
+    "social/communication option where the scene supports it."
+)
+
+
+async def _generate_validated_turn(
+    session: Dict[str, Any], user_text: str
+) -> Tuple[ParsedTurn, str]:
+    """Call the LLM, validate the parsed turn, and retry ONCE on failure.
+
+    The retry attaches the bad assistant output as a message so the model can
+    see exactly what it produced and rewrite it correctly.
+    """
+    raw = await _generate_turn(session, user_text)
+    parsed = parse_turn(raw)
+    ok, reason = _validate_parsed(parsed)
+    if ok:
+        return parsed, raw
+
+    dev_on = "[DEV_MODE: ON]" in user_text
+    debug_clause = ", <debug>" if dev_on else ""
+    retry_note = _RETRY_INSTRUCTION.format(reason=reason, debug_clause=debug_clause)
+    logger.info("Turn validation failed (%s) — retrying once", reason)
+
+    # Build a proper conversation: original history + bad output + corrective user turn.
+    settings = await get_ai_settings()
+    mode = (session.get("mode") or settings.get("default_mode") or DEFAULT_MODE).lower()
+    profile = MODE_PROFILES.get(mode, MODE_PROFILES["advanced"])
+    memory_depth = int(settings.get("memory_depth", DEFAULT_MEMORY_DEPTH))
+    history_window = int(settings.get("history_window", DEFAULT_HISTORY_WINDOW))
+    max_tokens = int(settings.get("max_tokens", DEFAULT_MAX_TOKENS))
+    cap = profile.get("max_tokens_cap")
+    if cap:
+        max_tokens = min(max_tokens, cap)
+
+    try:
+        messages = await _build_messages(
+            session,
+            user_text,
+            memory_depth=memory_depth,
+            history_window_fallback=history_window,
+        )
+        # Show the model exactly what it produced, then ask it to rewrite.
+        messages.append({"role": "assistant", "content": raw[:6000]})
+        messages.append({"role": "user", "content": retry_note})
+
+        raw2 = await chat_completion(
+            messages=messages,
+            model=settings.get("model"),
+            temperature=settings.get("temperature"),
+            max_tokens=max_tokens,
+        )
+        parsed2 = parse_turn(raw2)
+        ok2, reason2 = _validate_parsed(parsed2)
+        if ok2:
+            return parsed2, raw2
+        logger.warning(
+            "Retry still invalid (%s) — using best-available output",
+            reason2,
+        )
+        # Prefer whichever attempt has more parseable choices.
+        if len(parsed2.choices or []) > len(parsed.choices or []):
+            return parsed2, raw2
+        return parsed, raw
+    except Exception as exc:
+        logger.warning("Retry call raised %s — falling back to first attempt", exc)
+        return parsed, raw
+
+
 # ======================================================================
 # ROUTES
 # ======================================================================
@@ -861,7 +1016,7 @@ async def new_story(req: NewStoryRequest):
     await db.sessions.insert_one(session.model_dump())
 
     try:
-        raw = await _generate_turn(session.model_dump(), opening_prompt)
+        parsed, raw = await _generate_validated_turn(session.model_dump(), opening_prompt)
     except AIServiceError as e:
         logger.exception("AI service failed")
         await db.sessions.delete_one({"id": session.id})
@@ -870,8 +1025,6 @@ async def new_story(req: NewStoryRequest):
         logger.exception("LLM call failed")
         await db.sessions.delete_one({"id": session.id})
         raise HTTPException(status_code=502, detail=f"Story engine error: {e}")
-
-    parsed = parse_turn(raw)
 
     turn = TurnRecord(
         session_id=session.id,
@@ -884,7 +1037,7 @@ async def new_story(req: NewStoryRequest):
         ledger=parsed.ledger,
         rolling_state=parsed.rolling_state,
         debug=parsed.debug,
-        raw=parsed.raw,
+        raw=raw,
     )
     await db.turns.insert_one(turn.model_dump())
 
@@ -929,7 +1082,7 @@ async def story_action(req: ActionRequest):
     user_text = f"{debug_marker}\n{difficulty_marker}\n{mode_marker}\n\nPlayer action: {req.action_text}"
 
     try:
-        raw = await _generate_turn(session, user_text)
+        parsed, raw = await _generate_validated_turn(session, user_text)
     except AIServiceError as e:
         logger.exception("AI service failed")
         raise HTTPException(status_code=502, detail=f"Story engine error: {e}")
@@ -937,7 +1090,6 @@ async def story_action(req: ActionRequest):
         logger.exception("LLM call failed")
         raise HTTPException(status_code=502, detail=f"Story engine error: {e}")
 
-    parsed = parse_turn(raw)
     next_turn_number = session.get("turn_count", 0) + 1
 
     turn = TurnRecord(
