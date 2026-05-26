@@ -7,10 +7,12 @@ swapping providers or models trivial — just adjust ``chat_completion``.
 
 Features:
     * OpenRouter chat completions over httpx (async)
-    * Default model: gryphe/mythomax-l2-13b
+    * Default model: anthropic/claude-3-5-haiku  (env-overridable)
+    * Safe fallback chain: Haiku → Sonnet → Mythomax
     * Adjustable model / temperature / max_tokens per call
     * Retry with exponential backoff on transient failures (5xx, 408, 429)
-    * Curated list of supported models exposed to the admin UI
+    * Error classification for fallback decisions
+    * Per-call telemetry (latency, tokens, provider status, fallback events)
 """
 
 from __future__ import annotations
@@ -18,9 +20,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+
+from ai_config import (
+    DEFAULT_MODEL,
+    FALLBACK_MODELS,
+    MAX_RETRIES,
+    PROVIDER_TIMEOUT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +42,10 @@ OPENROUTER_BASE_URL = os.environ.get(
     "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
 ).rstrip("/")
 
-DEFAULT_MODEL = os.environ.get("DEFAULT_MODEL", "gryphe/mythomax-l2-13b")
 DEFAULT_TEMPERATURE = float(os.environ.get("DEFAULT_TEMPERATURE", "0.85"))
 DEFAULT_MAX_TOKENS = int(os.environ.get("DEFAULT_MAX_TOKENS", "2048"))
 DEFAULT_HISTORY_WINDOW = int(os.environ.get("DEFAULT_HISTORY_WINDOW", "40"))
-DEFAULT_TIMEOUT_SECONDS = float(os.environ.get("DEFAULT_TIMEOUT_SECONDS", "180"))
+DEFAULT_TIMEOUT_SECONDS = PROVIDER_TIMEOUT
 
 APP_PUBLIC_URL = os.environ.get(
     "APP_PUBLIC_URL", "https://dice-reaction-story-engine.example"
@@ -48,10 +57,22 @@ APP_TITLE = os.environ.get("APP_TITLE", "Dice Reaction Story Engine")
 # ---------------------------------------------------------------------------
 SUPPORTED_MODELS: List[Dict[str, Any]] = [
     {
+        "id": "anthropic/claude-3-5-haiku",
+        "label": "Claude 3.5 Haiku",
+        "context": 200000,
+        "note": "Default · fast · low cost · strong format compliance",
+    },
+    {
+        "id": "anthropic/claude-3-5-sonnet",
+        "label": "Claude 3.5 Sonnet",
+        "context": 200000,
+        "note": "Fallback tier · higher fidelity Anthropic",
+    },
+    {
         "id": "gryphe/mythomax-l2-13b",
         "label": "Mythomax L2 13B",
         "context": 4096,
-        "note": "Default · strong creative writing · paid (cheap)",
+        "note": "Final fallback · cheap · loose format compliance",
     },
     {
         "id": "anthropic/claude-sonnet-4.5",
@@ -173,6 +194,10 @@ SUPPORTED_MODELS: List[Dict[str, Any]] = [
 class AIServiceError(Exception):
     """Raised when the underlying AI provider call fails permanently."""
 
+    def __init__(self, message: str, kind: str = "other"):
+        super().__init__(message)
+        self.kind = kind
+
 
 def get_supported_models() -> List[Dict[str, Any]]:
     """Return the curated list of model options for the admin UI."""
@@ -185,6 +210,7 @@ def get_default_settings() -> Dict[str, Any]:
         "temperature": DEFAULT_TEMPERATURE,
         "max_tokens": DEFAULT_MAX_TOKENS,
         "history_window": DEFAULT_HISTORY_WINDOW,
+        "fallback_models": list(FALLBACK_MODELS),
     }
 
 
@@ -193,46 +219,81 @@ def is_configured() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Core entry point
+# Error classification (drives the fallback decision)
 # ---------------------------------------------------------------------------
-async def chat_completion(
+KIND_TIMEOUT = "timeout"
+KIND_RATE_LIMIT = "rate_limit"
+KIND_PROVIDER_UNAVAILABLE = "provider_unavailable"
+KIND_INSUFFICIENT_CREDITS = "insufficient_credits"
+KIND_MALFORMED = "malformed"
+KIND_BAD_REQUEST = "bad_request"
+KIND_OTHER = "other"
+KIND_OK = "ok"
+
+# Failure kinds that warrant trying the next model in the fallback chain.
+FALLBACK_TRIGGERS = frozenset(
+    {
+        KIND_TIMEOUT,
+        KIND_RATE_LIMIT,
+        KIND_PROVIDER_UNAVAILABLE,
+        KIND_INSUFFICIENT_CREDITS,
+        KIND_MALFORMED,
+    }
+)
+
+
+def _classify_http(status: int, body: str) -> str:
+    blow = body.lower() if body else ""
+    if status == 408:
+        return KIND_TIMEOUT
+    if status == 429:
+        return KIND_RATE_LIMIT
+    if status == 402 or "insufficient" in blow or "credit" in blow or "balance" in blow:
+        return KIND_INSUFFICIENT_CREDITS
+    if 500 <= status <= 599:
+        return KIND_PROVIDER_UNAVAILABLE
+    # 404 (model not found) or 400 referring to invalid model — treat as
+    # provider-unavailable so the fallback chain can rescue config errors.
+    if status == 404 or (
+        status == 400
+        and ("not a valid model" in blow or "model" in blow and "not found" in blow)
+    ):
+        return KIND_PROVIDER_UNAVAILABLE
+    if 400 <= status <= 499:
+        return KIND_BAD_REQUEST
+    return KIND_OTHER
+
+
+def _classify_exc(exc: Exception) -> str:
+    if isinstance(exc, httpx.TimeoutException):
+        return KIND_TIMEOUT
+    if isinstance(exc, httpx.HTTPError):
+        return KIND_PROVIDER_UNAVAILABLE
+    if isinstance(exc, AIServiceError):
+        return getattr(exc, "kind", KIND_OTHER)
+    return KIND_OTHER
+
+
+# ---------------------------------------------------------------------------
+# Core single-model call — returns (content, telemetry)
+# ---------------------------------------------------------------------------
+async def _call_model_once(
+    model_id: str,
     messages: List[Dict[str, str]],
-    model: Optional[str] = None,
-    temperature: Optional[float] = None,
-    max_tokens: Optional[int] = None,
-    max_retries: int = 3,
+    temperature: float,
+    max_tokens: int,
     extra_headers: Optional[Dict[str, str]] = None,
-) -> str:
-    """Run a chat completion through OpenRouter and return the assistant text.
-
-    Args:
-        messages: OpenAI-style message list ``[{role, content}, ...]``.
-        model: Optional model override (e.g. ``"openai/gpt-4o"``).
-        temperature: Optional sampling temperature override.
-        max_tokens: Optional output cap override.
-        max_retries: Total attempts on transient failures.
-        extra_headers: Optional headers to merge.
-
-    Returns:
-        Plain string content of the first choice.
-
-    Raises:
-        AIServiceError on permanent failure.
-    """
+) -> Tuple[str, Dict[str, Any]]:
+    """One HTTP call to OpenRouter for a single model. Returns (content, telemetry)."""
     if not OPENROUTER_API_KEY:
-        raise AIServiceError("OPENROUTER_API_KEY is not configured")
-
-    model_id = model or DEFAULT_MODEL
-    temp = float(temperature) if temperature is not None else DEFAULT_TEMPERATURE
-    mt = int(max_tokens) if max_tokens is not None else DEFAULT_MAX_TOKENS
+        raise AIServiceError("OPENROUTER_API_KEY is not configured", kind=KIND_OTHER)
 
     payload: Dict[str, Any] = {
         "model": model_id,
         "messages": messages,
-        "temperature": temp,
-        "max_tokens": mt,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
     }
-
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
@@ -243,81 +304,200 @@ async def chat_completion(
         headers.update(extra_headers)
 
     url = f"{OPENROUTER_BASE_URL}/chat/completions"
+    started = time.monotonic()
 
-    last_exc: Optional[Exception] = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
-                resp = await client.post(url, json=payload, headers=headers)
+    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
+        resp = await client.post(url, json=payload, headers=headers)
+    latency_ms = int((time.monotonic() - started) * 1000)
 
-            # 5xx, 408, 429 — retryable
-            if resp.status_code >= 500 or resp.status_code in (408, 429):
-                raise AIServiceError(
-                    f"OpenRouter HTTP {resp.status_code}: {resp.text[:300]}"
+    if resp.status_code >= 400:
+        kind = _classify_http(resp.status_code, resp.text)
+        raise AIServiceError(
+            f"OpenRouter HTTP {resp.status_code} [{kind}]: {resp.text[:400]}",
+            kind=kind,
+        )
+
+    try:
+        data = resp.json()
+    except Exception as je:
+        raise AIServiceError(
+            f"OpenRouter returned non-JSON body: {je}", kind=KIND_MALFORMED
+        ) from je
+
+    choices = data.get("choices") or []
+    if not choices:
+        raise AIServiceError(
+            f"OpenRouter response had no choices: {data.get('error') or data}",
+            kind=KIND_MALFORMED,
+        )
+
+    content = (choices[0].get("message") or {}).get("content")
+    if not content:
+        raise AIServiceError(
+            f"OpenRouter returned empty content: {data}", kind=KIND_MALFORMED
+        )
+
+    usage = data.get("usage") or {}
+    telemetry = {
+        "model": model_id,
+        "latency_ms": latency_ms,
+        "prompt_tokens": usage.get("prompt_tokens"),
+        "completion_tokens": usage.get("completion_tokens"),
+        "total_tokens": usage.get("total_tokens"),
+        "provider": (data.get("provider") or {}).get("name")
+        if isinstance(data.get("provider"), dict)
+        else data.get("provider"),
+        "status": KIND_OK,
+    }
+    return content, telemetry
+
+
+# ---------------------------------------------------------------------------
+# Public: fallback-aware chat completion with full telemetry
+# ---------------------------------------------------------------------------
+async def chat_completion_with_meta(
+    messages: List[Dict[str, str]],
+    primary_model: Optional[str] = None,
+    fallback_chain: Optional[List[str]] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    max_retries_per_model: Optional[int] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """Run a completion, retrying within a model then falling back to the next.
+
+    Returns a dict::
+
+        {
+          "content": str,
+          "model_used": str,
+          "model_requested": str,
+          "telemetry": {model, latency_ms, prompt_tokens, ...},
+          "fallback_events": [
+              {"from": model, "to": model, "reason": kind, "message": str},
+              ...
+          ],
+          "attempts_per_model": {model: int},
+        }
+
+    Raises AIServiceError only if EVERY model in the chain exhausts retries on
+    a fallback-trigger error, OR a non-fallback-trigger error (bad_request) is
+    raised by the primary call.
+    """
+    temp = float(temperature) if temperature is not None else DEFAULT_TEMPERATURE
+    mt = int(max_tokens) if max_tokens is not None else DEFAULT_MAX_TOKENS
+    per_model_retries = (
+        int(max_retries_per_model)
+        if max_retries_per_model is not None
+        else MAX_RETRIES
+    )
+
+    requested = primary_model or DEFAULT_MODEL
+    # Build the ordered chain: requested first, then any fallback models not equal to it.
+    chain_source = list(fallback_chain) if fallback_chain else list(FALLBACK_MODELS)
+    chain: List[str] = [requested]
+    for m in chain_source:
+        if m and m not in chain:
+            chain.append(m)
+
+    fallback_events: List[Dict[str, Any]] = []
+    attempts_per_model: Dict[str, int] = {}
+    last_error: Optional[AIServiceError] = None
+
+    for idx, model_id in enumerate(chain):
+        attempts_per_model[model_id] = 0
+        for attempt in range(1, per_model_retries + 1):
+            attempts_per_model[model_id] = attempt
+            try:
+                content, telem = await _call_model_once(
+                    model_id, messages, temp, mt, extra_headers=extra_headers
                 )
-
-            # other 4xx — not retryable
-            if resp.status_code >= 400:
-                logger.error(
-                    "OpenRouter returned non-retryable HTTP %s: %s",
-                    resp.status_code,
-                    resp.text[:500],
+                logger.info(
+                    "OpenRouter completion ok · model=%s · attempt=%s · in_msgs=%s · out_chars=%s · latency=%sms · tokens=%s",
+                    model_id,
+                    attempt,
+                    len(messages),
+                    len(content),
+                    telem.get("latency_ms"),
+                    telem.get("total_tokens"),
                 )
-                raise AIServiceError(
-                    f"OpenRouter HTTP {resp.status_code}: {resp.text[:500]}"
-                ) from None
+                return {
+                    "content": content,
+                    "model_used": model_id,
+                    "model_requested": requested,
+                    "telemetry": telem,
+                    "fallback_events": fallback_events,
+                    "attempts_per_model": attempts_per_model,
+                }
+            except Exception as exc:
+                kind = _classify_exc(exc)
+                last_error = (
+                    exc
+                    if isinstance(exc, AIServiceError)
+                    else AIServiceError(str(exc), kind=kind)
+                )
+                logger.warning(
+                    "Model %s attempt %s/%s failed [%s]: %s",
+                    model_id,
+                    attempt,
+                    per_model_retries,
+                    kind,
+                    exc,
+                )
+                # Non-fallback-trigger errors stop everything (e.g. bad_request,
+                # auth, malformed request) — no point trying other models.
+                if kind not in FALLBACK_TRIGGERS:
+                    raise last_error
+                # Retry within the same model with backoff before moving on.
+                if attempt < per_model_retries:
+                    await asyncio.sleep(min(2 ** (attempt - 1), 4))
 
-            data = resp.json()
-            choices = data.get("choices") or []
-            if not choices:
-                err = data.get("error") or data
-                raise AIServiceError(f"OpenRouter response had no choices: {err}")
-
-            content = (choices[0].get("message") or {}).get("content")
-            if not content:
-                raise AIServiceError(f"OpenRouter returned empty content: {data}")
-
-            logger.info(
-                "OpenRouter completion ok · model=%s · attempt=%s · in_msgs=%s · out_chars=%s",
-                model_id,
-                attempt,
-                len(messages),
-                len(content),
+        # Exhausted retries on this model. Step to next in chain if available.
+        if idx + 1 < len(chain):
+            next_model = chain[idx + 1]
+            reason = (
+                getattr(last_error, "kind", KIND_OTHER) if last_error else KIND_OTHER
             )
-            return content
-
-        except httpx.HTTPError as e:
-            last_exc = e
+            fallback_events.append(
+                {
+                    "from": model_id,
+                    "to": next_model,
+                    "reason": reason,
+                    "message": str(last_error)[:240] if last_error else "",
+                }
+            )
             logger.warning(
-                "OpenRouter transport error (attempt %s/%s): %s",
-                attempt,
-                max_retries,
-                e,
+                "Falling back: %s → %s (reason=%s)", model_id, next_model, reason
             )
-        except AIServiceError as e:
-            last_exc = e
-            # Only retry for transient-looking AIServiceErrors
-            msg = str(e)
-            transient = (
-                "HTTP 5" in msg
-                or "HTTP 408" in msg
-                or "HTTP 429" in msg
-                or "no choices" in msg
-                or "empty content" in msg
-            )
-            if not transient:
-                raise
-            logger.warning(
-                "OpenRouter transient error (attempt %s/%s): %s",
-                attempt,
-                max_retries,
-                e,
-            )
-
-        if attempt < max_retries:
-            backoff = min(2 ** (attempt - 1), 8)
-            await asyncio.sleep(backoff)
 
     raise AIServiceError(
-        f"OpenRouter request failed after {max_retries} attempts: {last_exc}"
+        f"All models in fallback chain exhausted: {last_error}",
+        kind=getattr(last_error, "kind", KIND_OTHER) if last_error else KIND_OTHER,
     )
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible thin wrapper — returns just the content string
+# ---------------------------------------------------------------------------
+async def chat_completion(
+    messages: List[Dict[str, str]],
+    model: Optional[str] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    max_retries: int = 2,
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> str:
+    """Legacy entry point that returns the assistant content as a plain string.
+
+    Internally routes through ``chat_completion_with_meta`` for fallback + telemetry.
+    Prefer ``chat_completion_with_meta`` when the caller needs diagnostics.
+    """
+    result = await chat_completion_with_meta(
+        messages=messages,
+        primary_model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        max_retries_per_model=max_retries,
+        extra_headers=extra_headers,
+    )
+    return result["content"]
