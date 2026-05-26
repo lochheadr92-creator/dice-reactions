@@ -20,6 +20,7 @@ import { COLORS, FONTS } from "../../src/theme";
 import { getSession, sendAction, deleteSession, exportSession, resetSession, setSessionMode, Turn, SessionSummary } from "../../src/api";
 import { getSettings as getAppSettings } from "../../src/storage";
 import { friendlyError } from "../../src/errors";
+import { sanitizeParagraphs, sanitizeChoices } from "../../src/sanitize";
 import { Share } from "react-native";
 
 const HEALTH_COLOR_MAP: Record<string, string> = {
@@ -170,6 +171,7 @@ export default function PlayScreen() {
   const latest = turns[turns.length - 1];
   const state = latest.state || {};
   const ledger = latest.ledger || {};
+  const visibleChoices = sanitizeChoices(latest.choices);
 
   const healthChip = chip(state, "Health", "HP", HEALTH_COLOR_MAP);
   const stressChip = chip(state, "Stress", "STR", STRESS_COLOR_MAP);
@@ -240,10 +242,7 @@ export default function PlayScreen() {
                 </View>
               ) : null}
 
-              {(turn.paragraphs && turn.paragraphs.length > 0
-                ? turn.paragraphs
-                : [turn.narrative]
-              ).map((p, idx) => (
+              {sanitizeParagraphs(turn.paragraphs, turn.narrative).map((p, idx) => (
                 <Animated.Text
                   key={idx}
                   entering={i === turns.length - 1 ? FadeInDown.duration(420).delay(idx * 90) : FadeIn}
@@ -254,7 +253,7 @@ export default function PlayScreen() {
                 </Animated.Text>
               ))}
 
-              {debugMode && turn.debug && (
+              {devUnlocked && debugMode && turn.debug && (
                 <View style={styles.debugBlock} testID={`debug-block-${turn.turn_number}`}>
                   <Text style={styles.debugHeader}>· DEBUG · TURN {turn.turn_number} ·</Text>
                   {Object.entries(turn.debug).map(([k, v]) => (
@@ -266,7 +265,7 @@ export default function PlayScreen() {
                 </View>
               )}
 
-              {debugMode && turn.rolling_state && (
+              {devUnlocked && debugMode && turn.rolling_state && (
                 <View style={styles.debugBlock} testID={`rolling-state-${turn.turn_number}`}>
                   <Text style={styles.debugHeader}>· ROLLING · STATE ·</Text>
                   {Object.entries(turn.rolling_state).map(([k, v]) => {
@@ -304,10 +303,10 @@ export default function PlayScreen() {
           ))}
 
           {/* Choices for latest turn */}
-          {latest.choices && latest.choices.length > 0 && (
+          {visibleChoices.length > 0 && (
             <View style={styles.choicesWrap} testID="choices-wrap">
               <Text style={styles.choicesHeader}>· CHOOSE ·</Text>
-              {latest.choices.map((c, idx) => (
+              {visibleChoices.map((c) => (
                 <TouchableOpacity
                   key={c.label}
                   style={styles.choiceCard}
