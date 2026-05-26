@@ -36,6 +36,10 @@ from ai_config import (  # noqa: E402
     get_runtime_config,
 )
 from scenarios import get_scenarios, get_scenario  # noqa: E402
+from memory import (  # noqa: E402
+    consolidate_rolling_state,
+    compute_compression_metrics,
+)
 
 import json as _json  # noqa: E402
 
@@ -469,6 +473,7 @@ class SessionRecord(BaseModel):
     last_narrative_snippet: str = ""
     last_state: Dict[str, str] = Field(default_factory=dict)
     rolling_state: Optional[Dict[str, Any]] = None  # latest compressed packet
+    rolling_state_updated_at: Optional[datetime] = None
     mode: str = DEFAULT_MODE
     scenario_id: Optional[str] = None
     # ---- AI routing (per-session lock) ----
@@ -1175,6 +1180,16 @@ async def admin_session_diagnostics(session_id: str):
         "cost_mode": session.get("cost_mode") or DEFAULT_COST_MODE,
         "model_switches": session.get("model_switches") or [],
         "turn_count": session.get("turn_count", 0),
+        "rolling_state_updated_at": (
+            session.get("rolling_state_updated_at").isoformat()
+            if isinstance(session.get("rolling_state_updated_at"), datetime)
+            else session.get("rolling_state_updated_at")
+        ),
+        "compression": {
+            k.replace("compression_", ""): v
+            for k, v in (last_debug or {}).items()
+            if k.startswith("compression_")
+        },
         "latest_turn_debug": last_debug,
     }
 
@@ -1344,6 +1359,21 @@ async def new_story(req: NewStoryRequest):
 
     enriched_debug = _meta_into_debug(parsed.debug, meta)
 
+    # ---- Rolling Memory Compression v3.8 ----
+    # Turn 1: no prior to merge from. Compression metrics for diagnostics only.
+    merged_rolling = consolidate_rolling_state(None, parsed.rolling_state)
+    memory_depth = int(settings.get("memory_depth", DEFAULT_MEMORY_DEPTH))
+    compression = compute_compression_metrics(
+        turn_number=1,
+        memory_depth=memory_depth,
+        prior_turns_payloads=[],
+    )
+    enriched_debug.update(
+        {
+            f"compression_{k}": str(v) for k, v in compression.items()
+        }
+    )
+
     turn = TurnRecord(
         session_id=session.id,
         turn_number=1,
@@ -1353,7 +1383,7 @@ async def new_story(req: NewStoryRequest):
         choices=parsed.choices,
         state=parsed.state,
         ledger=parsed.ledger,
-        rolling_state=parsed.rolling_state,
+        rolling_state=merged_rolling or parsed.rolling_state,
         debug=enriched_debug,
         raw=raw,
     )
@@ -1366,7 +1396,8 @@ async def new_story(req: NewStoryRequest):
             "turn_count": 1,
             "last_narrative_snippet": snippet,
             "last_state": parsed.state,
-            "rolling_state": parsed.rolling_state,
+            "rolling_state": merged_rolling or parsed.rolling_state,
+            "rolling_state_updated_at": datetime.now(timezone.utc),
             "updated_at": datetime.now(timezone.utc),
         }},
     )
@@ -1414,6 +1445,34 @@ async def story_action(req: ActionRequest):
     next_turn_number = session.get("turn_count", 0) + 1
     enriched_debug = _meta_into_debug(parsed.debug, meta)
 
+    # ---- Rolling Memory Compression v3.8 ----
+    prior_rolling = session.get("rolling_state")
+    merged_rolling = consolidate_rolling_state(prior_rolling, parsed.rolling_state)
+
+    # Diagnostics: which turn payloads were COMPRESSED OUT of this prompt?
+    settings_for_metrics = await get_ai_settings()
+    memory_depth = int(settings_for_metrics.get("memory_depth", DEFAULT_MEMORY_DEPTH))
+    # After this turn lands, turns >memory_depth turns back are no longer sent
+    # in full detail. They live only inside rolling_state.
+    older_threshold = next_turn_number - memory_depth  # may be ≤ 0 on early turns
+    older_turns = []
+    if older_threshold > 0:
+        older_turns = await db.turns.find(
+            {"session_id": req.session_id, "turn_number": {"$lte": older_threshold}},
+            {"_id": 0, "raw": 1, "narrative": 1},
+        ).sort("turn_number", 1).to_list(length=500)
+    older_payloads = [
+        (t.get("raw") or t.get("narrative") or "") for t in older_turns
+    ]
+    compression = compute_compression_metrics(
+        turn_number=next_turn_number,
+        memory_depth=memory_depth,
+        prior_turns_payloads=older_payloads,
+    )
+    enriched_debug.update(
+        {f"compression_{k}": str(v) for k, v in compression.items()}
+    )
+
     turn = TurnRecord(
         session_id=req.session_id,
         turn_number=next_turn_number,
@@ -1423,7 +1482,7 @@ async def story_action(req: ActionRequest):
         choices=parsed.choices,
         state=parsed.state,
         ledger=parsed.ledger,
-        rolling_state=parsed.rolling_state,
+        rolling_state=merged_rolling or parsed.rolling_state,
         debug=enriched_debug,
         raw=raw,
     )
@@ -1437,9 +1496,14 @@ async def story_action(req: ActionRequest):
         "updated_at": datetime.now(timezone.utc),
         "debug_mode": req.debug_mode,
     }
-    # Only overwrite rolling_state if the model actually emitted one
-    if parsed.rolling_state:
+    # Always persist the CONSOLIDATED rolling_state so unresolved consequences
+    # are never lost just because the model omitted them on this turn.
+    if merged_rolling:
+        update_set["rolling_state"] = merged_rolling
+        update_set["rolling_state_updated_at"] = datetime.now(timezone.utc)
+    elif parsed.rolling_state:
         update_set["rolling_state"] = parsed.rolling_state
+        update_set["rolling_state_updated_at"] = datetime.now(timezone.utc)
     await db.sessions.update_one({"id": req.session_id}, {"$set": update_set})
 
     # Persist any model switch from this turn.
