@@ -17,6 +17,7 @@ load_dotenv(ROOT_DIR / '.env')
 # Local AI service (OpenRouter)
 from ai_service import (  # noqa: E402
     chat_completion,
+    chat_completion_with_meta,
     get_supported_models,
     get_default_settings,
     is_configured as ai_is_configured,
@@ -25,6 +26,14 @@ from ai_service import (  # noqa: E402
     DEFAULT_TEMPERATURE,
     DEFAULT_MAX_TOKENS,
     DEFAULT_HISTORY_WINDOW,
+)
+from ai_config import (  # noqa: E402
+    FALLBACK_MODELS,
+    MAX_RETRIES,
+    ENABLE_DEBUG_PANEL,
+    COST_MODE as DEFAULT_COST_MODE,
+    LOW_COST_MAX_TOKENS,
+    get_runtime_config,
 )
 from scenarios import get_scenarios, get_scenario  # noqa: E402
 
@@ -462,6 +471,11 @@ class SessionRecord(BaseModel):
     rolling_state: Optional[Dict[str, Any]] = None  # latest compressed packet
     mode: str = DEFAULT_MODE
     scenario_id: Optional[str] = None
+    # ---- AI routing (per-session lock) ----
+    active_model: Optional[str] = None
+    fallback_chain: Optional[List[str]] = None
+    model_switches: List[Dict[str, Any]] = Field(default_factory=list)
+    cost_mode: str = "normal"  # "normal" | "low"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -474,6 +488,8 @@ class AdminSettingsRequest(BaseModel):
     compression_level: Optional[str] = None
     memory_depth: Optional[conint(ge=0, le=10)] = None  # type: ignore
     developer_mode: Optional[bool] = None
+    fallback_models: Optional[List[str]] = None
+    cost_mode: Optional[str] = None
 
 class SessionModeRequest(BaseModel):
     mode: str
@@ -756,8 +772,14 @@ async def _build_messages(
     return messages
 
 
-async def _generate_turn(session: Dict[str, Any], user_text: str) -> str:
-    """Centralised call: resolve admin settings + per-session mode, build messages, call aiService."""
+async def _generate_turn(
+    session: Dict[str, Any], user_text: str
+) -> Tuple[str, Dict[str, Any]]:
+    """Centralised call: resolve admin settings + per-session mode, build messages, call aiService.
+
+    Returns ``(raw_content, meta)`` where meta contains model_used, telemetry,
+    fallback_events, and attempts_per_model from the AI service.
+    """
     settings = await get_ai_settings()
     mode = (session.get("mode") or settings.get("default_mode") or DEFAULT_MODE).lower()
     profile = MODE_PROFILES.get(mode, MODE_PROFILES["advanced"])
@@ -765,21 +787,69 @@ async def _generate_turn(session: Dict[str, Any], user_text: str) -> str:
     memory_depth = int(settings.get("memory_depth", DEFAULT_MEMORY_DEPTH))
     history_window = int(settings.get("history_window", DEFAULT_HISTORY_WINDOW))
 
-    # Mode-aware max_tokens (basic capped lower to save spend)
+    # ---- Cost-mode aware token cap ----
+    cost_mode = (
+        session.get("cost_mode")
+        or settings.get("cost_mode")
+        or DEFAULT_COST_MODE
+    ).lower()
     max_tokens = int(settings.get("max_tokens", DEFAULT_MAX_TOKENS))
     cap = profile.get("max_tokens_cap")
     if cap:
         max_tokens = min(max_tokens, cap)
+    if cost_mode == "low":
+        max_tokens = min(max_tokens, LOW_COST_MAX_TOKENS)
+
+    # ---- Session-level model lock + fallback chain ----
+    requested_model = (
+        session.get("active_model")
+        or settings.get("model")
+        or DEFAULT_MODEL
+    )
+    fallback_chain = (
+        session.get("fallback_chain")
+        or settings.get("fallback_models")
+        or list(FALLBACK_MODELS)
+    )
+
+    # ---- Hints embedded into the upcoming user message ----
+    hint_lines: List[str] = []
+    primary_pref = settings.get("model") or DEFAULT_MODEL
+    if (
+        session.get("active_model")
+        and session.get("active_model") != primary_pref
+        and session.get("model_switches")
+    ):
+        # A fallback has already been activated on this session — protect continuity.
+        hint_lines.append(
+            "[FALLBACK_ACTIVE: maintain current tone, scene continuity, NPC memory consistency, "
+            "suppress repetitive exposition, suppress system leakage. Do NOT regenerate prior turns.]"
+        )
+    if cost_mode == "low":
+        hint_lines.append(
+            "[COST_MODE: LOW — produce shorter, denser prose (closer to 2 paragraphs). "
+            "Preserve causality, consequence chains, and continuity. Do not drop state.]"
+        )
+    augmented_user_text = (
+        ("\n".join(hint_lines) + "\n\n" + user_text) if hint_lines else user_text
+    )
 
     messages = await _build_messages(
-        session, user_text, memory_depth=memory_depth, history_window_fallback=history_window
+        session,
+        augmented_user_text,
+        memory_depth=memory_depth,
+        history_window_fallback=history_window,
     )
-    return await chat_completion(
+
+    result = await chat_completion_with_meta(
         messages=messages,
-        model=settings.get("model"),
+        primary_model=requested_model,
+        fallback_chain=fallback_chain,
         temperature=settings.get("temperature"),
         max_tokens=max_tokens,
+        max_retries_per_model=MAX_RETRIES,
     )
+    return result["content"], result
 
 
 # ----------------------------------------------------------------------
@@ -859,17 +929,17 @@ _RETRY_INSTRUCTION = (
 
 async def _generate_validated_turn(
     session: Dict[str, Any], user_text: str
-) -> Tuple[ParsedTurn, str]:
+) -> Tuple[ParsedTurn, str, Dict[str, Any]]:
     """Call the LLM, validate the parsed turn, and retry ONCE on failure.
 
-    The retry attaches the bad assistant output as a message so the model can
-    see exactly what it produced and rewrite it correctly.
+    Returns ``(parsed, raw, meta)`` where meta aggregates model_used,
+    fallback_events across both attempts, telemetry, and validation diagnostics.
     """
-    raw = await _generate_turn(session, user_text)
+    raw, meta = await _generate_turn(session, user_text)
     parsed = parse_turn(raw)
     ok, reason = _validate_parsed(parsed)
     if ok:
-        return parsed, raw
+        return parsed, raw, meta
 
     dev_on = "[DEV_MODE: ON]" in user_text
     debug_clause = ", <debug>" if dev_on else ""
@@ -882,10 +952,17 @@ async def _generate_validated_turn(
     profile = MODE_PROFILES.get(mode, MODE_PROFILES["advanced"])
     memory_depth = int(settings.get("memory_depth", DEFAULT_MEMORY_DEPTH))
     history_window = int(settings.get("history_window", DEFAULT_HISTORY_WINDOW))
+    cost_mode = (
+        session.get("cost_mode")
+        or settings.get("cost_mode")
+        or DEFAULT_COST_MODE
+    ).lower()
     max_tokens = int(settings.get("max_tokens", DEFAULT_MAX_TOKENS))
     cap = profile.get("max_tokens_cap")
     if cap:
         max_tokens = min(max_tokens, cap)
+    if cost_mode == "low":
+        max_tokens = min(max_tokens, LOW_COST_MAX_TOKENS)
 
     try:
         messages = await _build_messages(
@@ -898,32 +975,143 @@ async def _generate_validated_turn(
         messages.append({"role": "assistant", "content": raw[:6000]})
         messages.append({"role": "user", "content": retry_note})
 
-        raw2 = await chat_completion(
+        # Retry stays on the model that just answered; provider-level fallback
+        # is still permitted if the retry call itself fails.
+        primary_for_retry = meta.get("model_used") or settings.get("model")
+        fallback_chain = (
+            session.get("fallback_chain")
+            or settings.get("fallback_models")
+            or list(FALLBACK_MODELS)
+        )
+
+        result2 = await chat_completion_with_meta(
             messages=messages,
-            model=settings.get("model"),
+            primary_model=primary_for_retry,
+            fallback_chain=fallback_chain,
             temperature=settings.get("temperature"),
             max_tokens=max_tokens,
+            max_retries_per_model=MAX_RETRIES,
         )
+        raw2 = result2["content"]
         parsed2 = parse_turn(raw2)
         ok2, reason2 = _validate_parsed(parsed2)
+
+        combined_meta: Dict[str, Any] = {
+            "model_used": result2["model_used"],
+            "model_requested": meta.get("model_requested"),
+            "telemetry": result2.get("telemetry"),
+            "fallback_events": list(meta.get("fallback_events") or [])
+            + list(result2.get("fallback_events") or []),
+            "attempts_per_model": result2.get("attempts_per_model"),
+            "validation_retried": True,
+            "validation_first_fail": reason,
+            "validation_second_fail": None if ok2 else reason2,
+        }
+
         if ok2:
-            return parsed2, raw2
+            return parsed2, raw2, combined_meta
+
         logger.warning(
             "Retry still invalid (%s) — using best-available output",
             reason2,
         )
-        # Prefer whichever attempt has more parseable choices.
         if len(parsed2.choices or []) > len(parsed.choices or []):
-            return parsed2, raw2
-        return parsed, raw
+            return parsed2, raw2, combined_meta
+
+        first_with_retry = dict(meta)
+        first_with_retry["validation_retried"] = True
+        first_with_retry["validation_first_fail"] = reason
+        first_with_retry["validation_second_fail"] = reason2
+        first_with_retry["fallback_events"] = combined_meta["fallback_events"]
+        return parsed, raw, first_with_retry
     except Exception as exc:
         logger.warning("Retry call raised %s — falling back to first attempt", exc)
-        return parsed, raw
+        recovered = dict(meta)
+        recovered["validation_retried"] = True
+        recovered["validation_first_fail"] = reason
+        recovered["retry_exception"] = str(exc)[:240]
+        return parsed, raw, recovered
 
 
 # ======================================================================
 # ROUTES
 # ======================================================================
+def _meta_into_debug(
+    base: Optional[Dict[str, str]], meta: Dict[str, Any]
+) -> Dict[str, str]:
+    """Merge engine telemetry from chat_completion_with_meta into the turn.debug dict.
+
+    This dict is only surfaced behind the Developer Mode unlock — never shown to
+    standard players (see _maybe_sanitise_turn).
+    """
+    debug: Dict[str, str] = dict(base) if base else {}
+    if meta.get("model_used"):
+        debug["model_used"] = str(meta["model_used"])
+    if meta.get("model_requested"):
+        debug["model_requested"] = str(meta["model_requested"])
+    tel = meta.get("telemetry") or {}
+    if tel.get("latency_ms") is not None:
+        debug["latency_ms"] = f"{tel['latency_ms']}"
+    if tel.get("total_tokens") is not None:
+        debug["tokens_total"] = str(tel["total_tokens"])
+    if tel.get("prompt_tokens") is not None:
+        debug["tokens_prompt"] = str(tel["prompt_tokens"])
+    if tel.get("completion_tokens") is not None:
+        debug["tokens_completion"] = str(tel["completion_tokens"])
+    if tel.get("provider"):
+        debug["provider"] = str(tel["provider"])
+    if tel.get("status"):
+        debug["provider_status"] = str(tel["status"])
+    fe = meta.get("fallback_events") or []
+    if fe:
+        debug["fallback_events"] = str(len(fe))
+        path = [fe[0].get("from") or ""] + [e.get("to") or "" for e in fe]
+        debug["fallback_path"] = " → ".join(p for p in path if p)
+        debug["fallback_reason"] = str(fe[-1].get("reason") or "")
+    if meta.get("validation_retried"):
+        debug["validation_retried"] = "yes"
+    if meta.get("validation_first_fail"):
+        debug["validation_first_fail"] = str(meta["validation_first_fail"])
+    if meta.get("validation_second_fail"):
+        debug["validation_second_fail"] = str(meta["validation_second_fail"])
+    return debug
+
+
+async def _persist_model_lock(
+    session_id: str, meta: Dict[str, Any], at_turn: int
+) -> None:
+    """Record fallback events and update active_model on the session."""
+    fe = list(meta.get("fallback_events") or [])
+    update_set: Dict[str, Any] = {}
+    if meta.get("model_used"):
+        update_set["active_model"] = meta["model_used"]
+    ops: Dict[str, Any] = {}
+    if update_set:
+        ops["$set"] = update_set
+    if fe:
+        now = datetime.now(timezone.utc).isoformat()
+        entries = [
+            {
+                "from_model": e.get("from"),
+                "to_model": e.get("to"),
+                "reason": e.get("reason"),
+                "message": e.get("message"),
+                "at_turn": at_turn,
+                "ts": now,
+            }
+            for e in fe
+        ]
+        ops["$push"] = {"model_switches": {"$each": entries}}
+        logger.warning(
+            "Session %s model switch: %s (turn %s)",
+            session_id,
+            " → ".join([fe[0].get("from") or ""] + [e.get("to") or "" for e in fe]),
+            at_turn,
+        )
+    if ops:
+        await db.sessions.update_one({"id": session_id}, ops)
+
+
 @api_router.get("/")
 async def root():
     return {"message": "Dice Reaction Story Engine v3.3"}
@@ -944,6 +1132,50 @@ async def health():
         "compression_level": settings.get("compression_level"),
         "memory_depth": settings.get("memory_depth"),
         "developer_mode": settings.get("developer_mode", False),
+        "fallback_models": settings.get("fallback_models") or list(FALLBACK_MODELS),
+        "cost_mode": settings.get("cost_mode") or DEFAULT_COST_MODE,
+        "runtime_config": get_runtime_config(),
+    }
+
+
+@api_router.get("/admin/runtime")
+async def admin_runtime():
+    """Snapshot of the AI routing runtime config (env + DB-resolved settings)."""
+    if not ENABLE_DEBUG_PANEL:
+        raise HTTPException(status_code=404, detail="Debug panel disabled")
+    settings = await get_ai_settings()
+    return {
+        "active_default_model": settings.get("model"),
+        "fallback_chain": settings.get("fallback_models") or list(FALLBACK_MODELS),
+        "cost_mode": settings.get("cost_mode") or DEFAULT_COST_MODE,
+        "developer_mode": settings.get("developer_mode", False),
+        "runtime_config": get_runtime_config(),
+    }
+
+
+@api_router.get("/admin/session/{session_id}/diagnostics")
+async def admin_session_diagnostics(session_id: str):
+    """Per-session runtime diagnostics: active model, switch history, cost mode."""
+    if not ENABLE_DEBUG_PANEL:
+        raise HTTPException(status_code=404, detail="Debug panel disabled")
+    session = await db.sessions.find_one({"id": session_id}, {"_id": 0})
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    latest = (
+        await db.turns.find({"session_id": session_id}, {"_id": 0})
+        .sort("turn_number", -1)
+        .to_list(length=1)
+    )
+    last_debug = (latest[0].get("debug") if latest else None) or {}
+    return {
+        "session_id": session_id,
+        "active_model": session.get("active_model"),
+        "fallback_chain": session.get("fallback_chain")
+        or list(FALLBACK_MODELS),
+        "cost_mode": session.get("cost_mode") or DEFAULT_COST_MODE,
+        "model_switches": session.get("model_switches") or [],
+        "turn_count": session.get("turn_count", 0),
+        "latest_turn_debug": last_debug,
     }
 
 
@@ -1040,6 +1272,13 @@ async def new_story(req: NewStoryRequest):
         title=title,
         mode=effective_mode,
         scenario_id=req.scenario_id,
+        # ---- session-locked AI routing snapshot ----
+        active_model=settings.get("model") or DEFAULT_MODEL,
+        fallback_chain=(
+            list(settings.get("fallback_models") or [])
+            or list(FALLBACK_MODELS)
+        ),
+        cost_mode=(settings.get("cost_mode") or DEFAULT_COST_MODE).lower(),
     )
 
     setup_lines = [
@@ -1091,7 +1330,9 @@ async def new_story(req: NewStoryRequest):
     await db.sessions.insert_one(session.model_dump())
 
     try:
-        parsed, raw = await _generate_validated_turn(session.model_dump(), opening_prompt)
+        parsed, raw, meta = await _generate_validated_turn(
+            session.model_dump(), opening_prompt
+        )
     except AIServiceError as e:
         logger.exception("AI service failed")
         await db.sessions.delete_one({"id": session.id})
@@ -1100,6 +1341,8 @@ async def new_story(req: NewStoryRequest):
         logger.exception("LLM call failed")
         await db.sessions.delete_one({"id": session.id})
         raise HTTPException(status_code=502, detail=f"Story engine error: {e}")
+
+    enriched_debug = _meta_into_debug(parsed.debug, meta)
 
     turn = TurnRecord(
         session_id=session.id,
@@ -1111,7 +1354,7 @@ async def new_story(req: NewStoryRequest):
         state=parsed.state,
         ledger=parsed.ledger,
         rolling_state=parsed.rolling_state,
-        debug=parsed.debug,
+        debug=enriched_debug,
         raw=raw,
     )
     await db.turns.insert_one(turn.model_dump())
@@ -1127,6 +1370,9 @@ async def new_story(req: NewStoryRequest):
             "updated_at": datetime.now(timezone.utc),
         }},
     )
+
+    # Persist session-level model lock + any fallback switch ledger.
+    await _persist_model_lock(session.id, meta, at_turn=1)
 
     return {
         "session_id": session.id,
@@ -1157,7 +1403,7 @@ async def story_action(req: ActionRequest):
     user_text = f"{debug_marker}\n{difficulty_marker}\n{mode_marker}\n\nPlayer action: {req.action_text}"
 
     try:
-        parsed, raw = await _generate_validated_turn(session, user_text)
+        parsed, raw, meta = await _generate_validated_turn(session, user_text)
     except AIServiceError as e:
         logger.exception("AI service failed")
         raise HTTPException(status_code=502, detail=f"Story engine error: {e}")
@@ -1166,6 +1412,7 @@ async def story_action(req: ActionRequest):
         raise HTTPException(status_code=502, detail=f"Story engine error: {e}")
 
     next_turn_number = session.get("turn_count", 0) + 1
+    enriched_debug = _meta_into_debug(parsed.debug, meta)
 
     turn = TurnRecord(
         session_id=req.session_id,
@@ -1177,8 +1424,8 @@ async def story_action(req: ActionRequest):
         state=parsed.state,
         ledger=parsed.ledger,
         rolling_state=parsed.rolling_state,
-        debug=parsed.debug,
-        raw=parsed.raw,
+        debug=enriched_debug,
+        raw=raw,
     )
     await db.turns.insert_one(turn.model_dump())
 
@@ -1194,6 +1441,9 @@ async def story_action(req: ActionRequest):
     if parsed.rolling_state:
         update_set["rolling_state"] = parsed.rolling_state
     await db.sessions.update_one({"id": req.session_id}, {"$set": update_set})
+
+    # Persist any model switch from this turn.
+    await _persist_model_lock(req.session_id, meta, at_turn=next_turn_number)
 
     return {"turn": await _maybe_sanitise_turn(turn.model_dump(mode="json"))}
 
