@@ -354,6 +354,24 @@ MECHANIC CONCEALMENT HARDENING:
   • If the player asks about rolls, modifiers, triggers, hidden systems, debug, simulation, or JSON, NEVER echo those terms in narrative.
   • Translate such probing into in-world behavior: superstition, tactical uncertainty, paranoia, bargaining for information, feverish confusion, or stress.
   • The player should never read phrases like "rolls and triggers", "invisible mechanics", "simulation", or "debug" in prose.
+  • EXPANDED soft-meta blacklist: NEVER write any of the following anywhere in <narrative> or <choices> — "the system", "this system", "this engine", "the engine", "the simulation", "the runtime", "internal mechanics", "underlying mechanics", "memory structure", "state machine", "parser", "narrative generator", "AI reasoning", "game logic", "concealment mandate", "prompt", "tokens", "meta commentary", "out-of-character". Translate any such temptation into in-world phrasing or omit entirely.
+
+DIRECT INSPECTION ENFORCEMENT:
+  • If the player directly inspects, counts, opens, searches, examines, reads, peeks inside, picks up, or handles an ACCESSIBLE object/container/location, the result MUST be CONCRETE in narrative.
+  • GOOD: "You count eleven rounds." / "The satchel holds dried meat, a rusted compass, and a folded map."
+  • FORBIDDEN: "uncertain", "possibly", "perhaps", "maybe", "seems to", "appears to", "hard to tell", "unclear", "some kind of", "might contain", "you think there may be" — unless EXPLICITLY justified in the same paragraph by darkness, smoke, obstruction, damage, distance, time pressure, trembling hands, blood in eyes, or active interruption (footsteps, alarm, gunshot).
+  • Direct inspection restores player agency. Do not stall with vague atmosphere when the player demanded a concrete answer they can act on.
+
+ROOM AUDIT ON REVISIT:
+  • Before describing a previously-visited space, RECONCILE prior known state from `known_rooms` / `object_locations` / `npcs`.
+  • Objects that were left there must STILL be there unless they moved, were taken, were destroyed, decayed, or were altered by a world-tick event you can name.
+  • Do not invent contradictory objects, do not silently delete furniture, do not reset the room. Revisits must feel REMEMBERED.
+  • If an object should be gone, say WHY in one phrase (e.g. "the bag you left is missing — boot prints lead away").
+
+NPC MEMORY + FACTION TICK (LIGHTWEIGHT, LOCAL):
+  • `npc_memory[*].remembers` entries SHOULD be tagged with a `severity` field: "major" (theft, violence, promise, betrayal, rescue, debt, witness) or "minor" (small talk, fleeting impression).
+  • Major entries persist indefinitely. Minor entries decay naturally over time and may be dropped.
+  • Faction reactions stay LOCAL and PROPORTIONAL. Repeated theft raises local suspicion/prices; sustained violence increases guard attention in THIS settlement; a rescue improves cooperation NEARBY. Do NOT cascade globally without a named courier, rumour, or shared kin.
 
 ANTI-STAGNATION + CHOICE QUALITY:
   • Bias choices toward movement, survival, logistics, risk, negotiation, concealment, resource management, escape, investigation, faction interaction, or environmental action.
@@ -1084,6 +1102,285 @@ def _normalize_object_identity(name: Any) -> str:
     return " ".join(sorted(set(tokens)))
 
 
+# ==========================================================================
+# P1-C — Room Audit (revisit reconciliation)
+# ==========================================================================
+# Persist a small per-room snapshot of known objects and stable features into
+# rolling_state.known_rooms. On revisit, ensure objects that should still be
+# there are not silently forgotten and that no contradictory invention slips
+# through. This is INFORMATIONAL — we flag drift in state_guard_adjustments
+# rather than rewrite prose. The system-prompt rule is the primary defence.
+
+_ROOM_DRIFT_FLAG = "room_audit_drift"
+
+
+def _room_key(name: Any) -> str:
+    """Stable room identity (case- and whitespace-normalised)."""
+    if not name:
+        return ""
+    raw = re.sub(r"\s+", " ", str(name).strip().lower())
+    raw = re.sub(r"[^a-z0-9 \-/]", "", raw)
+    return raw[:80]
+
+
+def _current_room_label(parsed: ParsedTurn) -> str:
+    """Best-effort current room label from <state>.Position."""
+    state = parsed.state or {}
+    pos = state.get("Position") or state.get("position") or ""
+    # Position is freeform prose. Use the first clause as the room key.
+    first = re.split(r"[,.;]", str(pos), maxsplit=1)[0]
+    return _room_key(first)
+
+
+def _apply_room_audit(
+    parsed: ParsedTurn,
+    rolling_state: Dict[str, Any],
+    *,
+    decay_turns: int = 24,
+    max_rooms: int = 12,
+) -> List[str]:
+    """Update rolling_state.known_rooms with the current room's snapshot, and
+    flag obvious drift (a revisited room whose previously-known objects have
+    vanished without a state-changing reason).
+    """
+    if not isinstance(rolling_state, dict):
+        return []
+    room_label = _current_room_label(parsed)
+    if not room_label:
+        return []
+
+    rooms = rolling_state.get("known_rooms")
+    if not isinstance(rooms, list):
+        rooms = []
+    # Index by room key for fast lookup.
+    by_key: Dict[str, Dict[str, Any]] = {}
+    for r in rooms:
+        if isinstance(r, dict) and r.get("key"):
+            by_key[r["key"]] = r
+
+    prior = by_key.get(room_label)
+    truth_locs = rolling_state.get("object_locations") or []
+    # Objects whose authoritative location matches THIS room.
+    here_now: List[str] = []
+    for row in truth_locs:
+        if not isinstance(row, dict):
+            continue
+        where = _room_key(row.get("where"))
+        status = str(row.get("status", "")).strip().lower()
+        if status in {"destroyed", "consumed", "dropped"}:
+            continue
+        if where and (room_label in where or where in room_label):
+            ident = _normalize_object_identity(row.get("object"))
+            if ident:
+                here_now.append(ident)
+
+    adjustments: List[str] = []
+    drift: List[str] = []
+    if prior and isinstance(prior.get("objects"), list):
+        prior_set = set(prior["objects"])
+        now_set = set(here_now)
+        # Drift = identity previously known here AND not present in here_now
+        # AND has NO canonical truth row anywhere. If the object has ANY
+        # current status row (carried/worn/dropped/stored elsewhere/etc),
+        # it has been legitimately accounted for; not drift.
+        all_known: set = set()
+        for row in truth_locs:
+            if isinstance(row, dict):
+                ident = _normalize_object_identity(row.get("object"))
+                if ident:
+                    all_known.add(ident)
+        for ident in prior_set - now_set:
+            if ident not in all_known:
+                drift.append(ident)
+        if drift:
+            adjustments.append(f"{_ROOM_DRIFT_FLAG}:{room_label}:" + ",".join(drift[:5]))
+
+    # Upsert this room's snapshot.
+    snapshot = {
+        "key": room_label,
+        "objects": here_now[:24],
+        "last_visited_turn": (parsed.state or {}).get("turn") or prior.get("last_visited_turn") if prior else None,
+    }
+    by_key[room_label] = snapshot
+
+    # Bound the registry: keep most recently touched up to max_rooms.
+    rolling_state["known_rooms"] = list(by_key.values())[-max_rooms:]
+    return adjustments
+
+
+# ==========================================================================
+# P1-D — Bounded NPC Memory + Faction Consequence Tick
+# ==========================================================================
+# Goal: lightweight local continuity. NPC memory entries are capped per-NPC
+# and decay if they are MINOR and stale. Severity-tagged events
+# (theft/violence/promise/betrayal/rescue) persist longer.
+
+_MAJOR_EVENT_RE = re.compile(
+    r"\b(?:theft|steal|stole|stolen|kill|killed|murder|assault|violence|"
+    r"betray|betrayed|betrayal|promise|promised|oath|sworn|"
+    r"rescue|rescued|saved|spared|gift|"
+    r"witness|witnessed|debt|owe|owes|owed)\b",
+    re.IGNORECASE,
+)
+_NPC_REMEMBERS_CAP = 5
+_NPC_MEMORY_MAX_ENTRIES = 24
+_NPC_MINOR_DECAY_TURNS = 12
+
+
+def _classify_event_severity(text: str) -> str:
+    if _MAJOR_EVENT_RE.search(text or ""):
+        return "major"
+    return "minor"
+
+
+def _apply_npc_memory_bounds(
+    rolling_state: Dict[str, Any],
+    *,
+    current_turn: int = 0,
+) -> List[str]:
+    """Bound and decay npc_memory:
+      • cap each NPC's `remembers` list to the last N items (newest wins),
+      • drop entries flagged minor that are older than N turns,
+      • cap the total NPC list to a sensible upper bound.
+    """
+    if not isinstance(rolling_state, dict):
+        return []
+    memory = rolling_state.get("npc_memory")
+    if not isinstance(memory, list) or not memory:
+        return []
+
+    adjustments: List[str] = []
+    pruned_total = 0
+    decayed_total = 0
+    for npc in memory:
+        if not isinstance(npc, dict):
+            continue
+        remembers = npc.get("remembers")
+        if not isinstance(remembers, list):
+            continue
+        # Tag each entry with severity if not already tagged.
+        tagged: List[Any] = []
+        for entry in remembers:
+            if isinstance(entry, dict):
+                if "severity" not in entry:
+                    entry["severity"] = _classify_event_severity(
+                        str(entry.get("event") or entry.get("description") or "")
+                    )
+                if "since_turn" not in entry and current_turn:
+                    entry["since_turn"] = current_turn
+                # Drop stale minor entries.
+                since = entry.get("since_turn") or 0
+                if (
+                    entry.get("severity") == "minor"
+                    and current_turn
+                    and (current_turn - int(since or 0)) > _NPC_MINOR_DECAY_TURNS
+                ):
+                    decayed_total += 1
+                    continue
+                tagged.append(entry)
+            elif isinstance(entry, str):
+                tagged.append({
+                    "event": entry,
+                    "severity": _classify_event_severity(entry),
+                    "since_turn": current_turn or 0,
+                })
+        # Cap to most recent N.
+        if len(tagged) > _NPC_REMEMBERS_CAP:
+            # Major events bubble to the front so they aren't culled.
+            tagged.sort(key=lambda e: (
+                0 if (isinstance(e, dict) and e.get("severity") == "major") else 1,
+                -int(e.get("since_turn") or 0) if isinstance(e, dict) else 0,
+            ))
+            pruned_total += len(tagged) - _NPC_REMEMBERS_CAP
+            tagged = tagged[:_NPC_REMEMBERS_CAP]
+        npc["remembers"] = tagged
+
+    # Hard cap on number of tracked NPCs (least-recently-used drop).
+    if len(memory) > _NPC_MEMORY_MAX_ENTRIES:
+        memory.sort(key=lambda n: -int(
+            max(
+                (e.get("since_turn") if isinstance(e, dict) else 0) or 0
+                for e in (n.get("remembers") or [{}])
+            )
+        ) if isinstance(n, dict) else 0)
+        rolling_state["npc_memory"] = memory[:_NPC_MEMORY_MAX_ENTRIES]
+    if pruned_total or decayed_total:
+        adjustments.append(
+            f"npc_memory:capped={pruned_total};decayed={decayed_total}"
+        )
+    return adjustments
+
+
+_FACTION_THEME_PATTERNS = {
+    "suspicion": re.compile(
+        r"\b(theft|stole|stolen|steal|stealing|lie|lied|lying|tricked?|cheats?|cheated)\b",
+        re.IGNORECASE,
+    ),
+    "guard_attention": re.compile(
+        r"\b(violence|kill|killed|killing|murder|murdered|assault(?:ed)?|"
+        r"attacks?|attacked|attacking|fight|fought|fighting|brawl(?:ed)?)\b",
+        re.IGNORECASE,
+    ),
+    "goodwill": re.compile(
+        r"\b(rescued?|rescuing|save[ds]?|saving|spared?|sparing|"
+        r"helped?|helping|gifts?|gifted|gave|kindness)\b",
+        re.IGNORECASE,
+    ),
+    "debt": re.compile(
+        r"\b(promised?|promising|sworn|swore|oath|owe[ds]?|owing|"
+        r"debt|debts|borrowed?|borrowing)\b",
+        re.IGNORECASE,
+    ),
+}
+_FACTION_TICK_TRIGGER = 2  # repeats needed to register
+
+
+def _apply_faction_consequence_tick(
+    rolling_state: Dict[str, Any],
+) -> List[str]:
+    """Lightweight, LOCAL faction tick. Counts theme repeats across
+    npc_memory and bumps faction_pressure entries accordingly. No global
+    propagation — only existing factions get nudged.
+    """
+    if not isinstance(rolling_state, dict):
+        return []
+    memory = rolling_state.get("npc_memory") or []
+    factions = rolling_state.get("faction_pressure")
+    if not isinstance(factions, list) or not factions or not memory:
+        return []
+
+    theme_counts: Dict[str, int] = {k: 0 for k in _FACTION_THEME_PATTERNS}
+    for npc in memory:
+        if not isinstance(npc, dict):
+            continue
+        for entry in (npc.get("remembers") or []):
+            text = ""
+            if isinstance(entry, dict):
+                text = str(entry.get("event") or entry.get("description") or "")
+            elif isinstance(entry, str):
+                text = entry
+            for theme, pat in _FACTION_THEME_PATTERNS.items():
+                if pat.search(text):
+                    theme_counts[theme] += 1
+
+    nudges: List[str] = []
+    for theme, count in theme_counts.items():
+        if count < _FACTION_TICK_TRIGGER:
+            continue
+        for fac in factions:
+            if not isinstance(fac, dict):
+                continue
+            tick = fac.setdefault("ticks", {})
+            if isinstance(tick, dict):
+                tick[theme] = int(tick.get(theme, 0)) + 1
+        nudges.append(f"{theme}:{count}")
+
+    if nudges:
+        return [f"faction_tick:" + ";".join(nudges)]  # noqa: F541
+    return []
+
+
+
 # ======================================================================
 # MESSAGE BUILDER + LLM CALL
 # ======================================================================
@@ -1298,7 +1595,28 @@ _MECHANIC_WORD_RE = re.compile(
     r"invisible\s+mechanics?|delayed\s+triggers?|latent\s+triggers?|"
     r"active\s+systems?|consequence\s+budget|pressure\s+horizon|"
     r"scale\s+lock|world\s+tick|rolling\s+state|debug|developer\s+mode|"
-    r"simulation\s+engine|JSON)\b",
+    r"simulation\s+engine|JSON|"
+    # P1-A soft-meta additions
+    r"parser|state\s+machine|runtime|memory\s+structure|"
+    r"hidden\s+rolls?|concealment\s+mandate|game\s+logic|"
+    r"narrative\s+generator|AI\s+reasoning|prompt\s+(?:engine|model|system|template)"
+    r")\b",
+    re.IGNORECASE,
+)
+# Phrase-level soft-meta leakage. These words have valid in-world uses
+# ("steam engine", "immune system", "ration token") so we only block them
+# when they appear in clearly meta phrasing.
+_SOFT_META_PHRASE_RE = re.compile(
+    r"\b(?:"
+    r"the\s+(?:system|engine|simulation|runtime|parser|mechanics)|"
+    r"this\s+(?:system|engine|simulation|runtime|parser)|"
+    r"underlying\s+(?:system|engine|mechanics?|logic)|"
+    r"internal\s+(?:system|mechanics?|state|logic)|"
+    r"my\s+(?:prompt|programming|model|reasoning)|"
+    r"as\s+(?:an?\s+)?(?:AI|language\s+model|assistant)|"
+    r"my\s+(?:tokens?|context\s+window)|"
+    r"(?:meta|out[\s-]of[\s-]character)\s+(?:commentary|narration|aside)"
+    r")\b",
     re.IGNORECASE,
 )
 _FAKE_CHOICE_RE = re.compile(
@@ -1307,8 +1625,76 @@ _FAKE_CHOICE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# --------------------------------------------------------------------------
+# P1-B — Direct Inspection Enforcement
+# --------------------------------------------------------------------------
+# Player verbs that demand a CONCRETE in-world resolution.
+_INSPECTION_VERB_RE = re.compile(
+    r"\b(?:count|counts|open|opens|search|searches|"
+    r"check(?:s)?|examine(?:s)?|inspect(?:s)?|"
+    r"look\s+(?:inside|in|at|under|behind|through|into)|"
+    r"peek(?:s)?\s+(?:inside|in|under|behind|through|into)|"
+    r"peer(?:s)?\s+(?:inside|in|under|behind|through|into)|"
+    r"read(?:s)?|study(?:s|ies)?|scan(?:s)?|handle(?:s)?|"
+    r"pick(?:s)?\s+up|test(?:s)?|tally(?:s|ies)?|"
+    r"empty(?:s|ies)?\s+(?:out|the))\b",
+    re.IGNORECASE,
+)
+# Vague hedging phrases that should NOT appear when the player directly
+# inspected something accessible.
+_VAGUE_RESOLUTION_RE = re.compile(
+    r"\b(?:uncertain|possibly|perhaps|maybe|seems?\s+to|"
+    r"appears?\s+to|hard\s+to\s+tell|hard\s+to\s+say|"
+    r"difficult\s+to\s+(?:tell|say|determine|make\s+out)|"
+    r"can'?t\s+(?:quite|really)\s+tell|"
+    r"unclear|some\s+kind\s+of|some\s+sort\s+of|"
+    r"might\s+(?:be|contain|hold)|there\s+may\s+be|"
+    r"you\s+(?:think|believe|suspect)\s+there\s+(?:may|might)\s+be)\b",
+    re.IGNORECASE,
+)
+# Justifications that legitimately PREVENT concrete resolution.
+_INSPECTION_JUSTIFICATION_RE = re.compile(
+    r"\b(?:dark|darkness|pitch\s+black|gloom|shadow|shadows|"
+    r"smoke|fog|mist|dust|haze|"
+    r"obstructed|blocked|covered|sealed|jammed|locked|"
+    r"damaged|cracked|shattered|broken|warped|"
+    r"too\s+(?:far|distant)|distant|across\s+the\s+(?:room|street)|"
+    r"interrupted|footsteps|shout|gunshot|noise|alarm|"
+    r"running\s+out\s+of\s+time|no\s+time|seconds?\s+to|"
+    r"trembling|shaking|hands?\s+shaking|"
+    r"blood\s+in\s+(?:your|the)\s+eyes?|tears?\s+blur|"
+    r"hidden|concealed|wrapped|buried)\b",
+    re.IGNORECASE,
+)
 
-def _validate_parsed(parsed: ParsedTurn) -> Tuple[bool, str]:
+
+def _check_direct_inspection_violation(
+    parsed: ParsedTurn, player_action: Optional[str]
+) -> Optional[str]:
+    """Return a reason string if player directly inspected something but the
+    narrative dodged with vague phrasing without an in-world justification.
+
+    This is bounded — we only flag when ALL three conditions hold:
+      1. Player action contains an inspection verb.
+      2. Narrative contains a vague-resolution phrase.
+      3. Narrative contains NO justification phrase (darkness/distance/etc).
+    """
+    if not player_action:
+        return None
+    if not _INSPECTION_VERB_RE.search(player_action):
+        return None
+    joined = "\n".join(parsed.paragraphs or [])
+    if not _VAGUE_RESOLUTION_RE.search(joined):
+        return None
+    if _INSPECTION_JUSTIFICATION_RE.search(joined):
+        return None
+    return "direct inspection result is vague without in-world justification"
+
+
+def _validate_parsed(
+    parsed: ParsedTurn,
+    player_action: Optional[str] = None,
+) -> Tuple[bool, str]:
     """Return (ok, reason) for player-facing turn validation."""
     # 1. Choices present and labelled A-D minimum, count 4-6
     labels = {(c.get("label") or "").upper() for c in (parsed.choices or [])}
@@ -1342,10 +1728,17 @@ def _validate_parsed(parsed: ParsedTurn) -> Tuple[bool, str]:
         return False, "mechanic label leaked into narrative"
     if _MECHANIC_WORD_RE.search(joined):
         return False, "mechanic terminology leaked into narrative"
+    if _SOFT_META_PHRASE_RE.search(joined):
+        return False, "soft meta phrasing leaked into narrative"
 
     for c in parsed.choices or []:
         if _FAKE_CHOICE_RE.search(c.get("text") or ""):
             return False, "fake or closed-off choice wording"
+
+    # 5. P1-B — direct inspection must resolve concretely
+    inspection_reason = _check_direct_inspection_violation(parsed, player_action)
+    if inspection_reason:
+        return False, inspection_reason
 
     return True, ""
 
@@ -1368,7 +1761,8 @@ _RETRY_INSTRUCTION = (
 
 
 async def _generate_validated_turn(
-    session: Dict[str, Any], user_text: str
+    session: Dict[str, Any], user_text: str,
+    player_action: Optional[str] = None,
 ) -> Tuple[ParsedTurn, str, Dict[str, Any]]:
     """Call the LLM, validate the parsed turn, and retry ONCE on failure.
 
@@ -1377,7 +1771,7 @@ async def _generate_validated_turn(
     """
     raw, meta = await _generate_turn(session, user_text)
     parsed = parse_turn(raw)
-    ok, reason = _validate_parsed(parsed)
+    ok, reason = _validate_parsed(parsed, player_action=player_action)
     if ok:
         return parsed, raw, meta
 
@@ -1451,7 +1845,7 @@ async def _generate_validated_turn(
         result2["budget"] = retry_budget_diag
         raw2 = result2["content"]
         parsed2 = parse_turn(raw2)
-        ok2, reason2 = _validate_parsed(parsed2)
+        ok2, reason2 = _validate_parsed(parsed2, player_action=player_action)
 
         combined_meta: Dict[str, Any] = {
             "model_used": result2["model_used"],
@@ -1862,6 +2256,13 @@ async def new_story(req: NewStoryRequest):
     guard_adjustments.extend(
         _apply_ledger_object_permanence(parsed, authoritative_state=merged_rolling)
     )
+    # P1-C — room audit (snapshot + drift flag). Turn 1 only seeds the room.
+    guard_adjustments.extend(_apply_room_audit(parsed, merged_rolling))
+    # P1-D — bound NPC memory + faction tick. Cheap, in-place.
+    guard_adjustments.extend(
+        _apply_npc_memory_bounds(merged_rolling, current_turn=1)
+    )
+    guard_adjustments.extend(_apply_faction_consequence_tick(merged_rolling))
     if guard_adjustments:
         enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
     memory_depth = int(settings.get("memory_depth", DEFAULT_MEMORY_DEPTH))
@@ -1936,7 +2337,7 @@ async def story_action(req: ActionRequest):
     user_text = f"{debug_marker}\n{difficulty_marker}\n{mode_marker}\n\nPlayer action: {req.action_text}"
 
     try:
-        parsed, raw, meta = await _generate_validated_turn(session, user_text)
+        parsed, raw, meta = await _generate_validated_turn(session, user_text, player_action=req.action_text)
     except AIServiceError as e:
         logger.exception("AI service failed")
         raise HTTPException(status_code=502, detail=f"Story engine error: {e}")
@@ -1960,6 +2361,13 @@ async def story_action(req: ActionRequest):
     guard_adjustments.extend(
         _apply_ledger_object_permanence(parsed, authoritative_state=merged_rolling)
     )
+    # P1-C — room audit reconciliation on revisit.
+    guard_adjustments.extend(_apply_room_audit(parsed, merged_rolling))
+    # P1-D — bounded NPC memory + lightweight faction tick.
+    guard_adjustments.extend(
+        _apply_npc_memory_bounds(merged_rolling, current_turn=next_turn_number)
+    )
+    guard_adjustments.extend(_apply_faction_consequence_tick(merged_rolling))
     if guard_adjustments:
         enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
 

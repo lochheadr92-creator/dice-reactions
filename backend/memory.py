@@ -45,6 +45,7 @@ PROTECTED_LIST_KEYS = (
     "simulation_hooks",
     "promises",
     "clues",
+    "known_rooms",  # P1-C — persistent room state for revisit reconciliation
 )
 
 # Keys where the model is authoritative each turn (it actively prunes them).
