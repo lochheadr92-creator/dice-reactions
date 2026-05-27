@@ -34,11 +34,17 @@ from ai_config import (  # noqa: E402
     COST_MODE as DEFAULT_COST_MODE,
     LOW_COST_MAX_TOKENS,
     get_runtime_config,
+    resolve_context_budget,
+    NORMAL_CONTEXT_BUDGET_TOKENS,
+    LOW_COST_CONTEXT_BUDGET_TOKENS,
+    ADVANCED_CONTEXT_BUDGET_TOKENS,
 )
 from scenarios import get_scenarios, get_scenario  # noqa: E402
 from memory import (  # noqa: E402
     consolidate_rolling_state,
     compute_compression_metrics,
+    enforce_context_budget,
+    estimate_messages_tokens,
 )
 
 import json as _json  # noqa: E402
@@ -846,6 +852,20 @@ async def _generate_turn(
         history_window_fallback=history_window,
     )
 
+    # ---- Context Budget Governor v3.9 ----
+    # Estimate the prompt size BEFORE calling the model and trim low-priority
+    # context if we would exceed the active budget. Protected content (active
+    # scene, current condition, consequence chains, recent turns) is never
+    # touched — see memory.enforce_context_budget for the strict policy.
+    budget_tokens = resolve_context_budget(cost_mode=cost_mode, mode=mode)
+    # Protect the same number of prior-replay messages we already chose to send.
+    protected_recent_msgs = max(1, memory_depth) * 2  # user+assistant per turn
+    messages, budget_diag = enforce_context_budget(
+        messages,
+        budget_tokens=budget_tokens,
+        protected_recent_msgs=protected_recent_msgs,
+    )
+
     result = await chat_completion_with_meta(
         messages=messages,
         primary_model=requested_model,
@@ -854,6 +874,9 @@ async def _generate_turn(
         max_tokens=max_tokens,
         max_retries_per_model=MAX_RETRIES,
     )
+    # Bolt the budget diagnostics onto the returned meta so the route can
+    # surface them in the per-turn debug payload.
+    result["budget"] = budget_diag
     return result["content"], result
 
 
@@ -980,6 +1003,22 @@ async def _generate_validated_turn(
         messages.append({"role": "assistant", "content": raw[:6000]})
         messages.append({"role": "user", "content": retry_note})
 
+        # Apply context budget BEFORE the retry call too.
+        cost_mode_for_budget = (
+            session.get("cost_mode")
+            or settings.get("cost_mode")
+            or DEFAULT_COST_MODE
+        ).lower()
+        budget_tokens_retry = resolve_context_budget(
+            cost_mode=cost_mode_for_budget, mode=mode
+        )
+        protected_recent_msgs = max(1, memory_depth) * 2 + 2  # +2 = bad output + retry note
+        messages, retry_budget_diag = enforce_context_budget(
+            messages,
+            budget_tokens=budget_tokens_retry,
+            protected_recent_msgs=protected_recent_msgs,
+        )
+
         # Retry stays on the model that just answered; provider-level fallback
         # is still permitted if the retry call itself fails.
         primary_for_retry = meta.get("model_used") or settings.get("model")
@@ -997,6 +1036,7 @@ async def _generate_validated_turn(
             max_tokens=max_tokens,
             max_retries_per_model=MAX_RETRIES,
         )
+        result2["budget"] = retry_budget_diag
         raw2 = result2["content"]
         parsed2 = parse_turn(raw2)
         ok2, reason2 = _validate_parsed(parsed2)
@@ -1011,6 +1051,7 @@ async def _generate_validated_turn(
             "validation_retried": True,
             "validation_first_fail": reason,
             "validation_second_fail": None if ok2 else reason2,
+            "budget": result2.get("budget"),
         }
 
         if ok2:
@@ -1079,6 +1120,19 @@ def _meta_into_debug(
         debug["validation_first_fail"] = str(meta["validation_first_fail"])
     if meta.get("validation_second_fail"):
         debug["validation_second_fail"] = str(meta["validation_second_fail"])
+    # ---- Context Budget Governor v3.9 diagnostics ----
+    budget = meta.get("budget") or {}
+    for key, label in (
+        ("estimated_prompt_tokens", "estimated_prompt_tokens"),
+        ("context_budget_tokens", "context_budget_tokens"),
+        ("context_over_budget", "context_over_budget"),
+        ("context_trimmed", "context_trimmed"),
+        ("trim_reason", "trim_reason"),
+        ("estimated_tokens_removed", "estimated_tokens_removed"),
+        ("protected_state_items_count", "protected_state_items_count"),
+    ):
+        if key in budget:
+            debug[label] = str(budget[key])
     return debug
 
 
@@ -1154,6 +1208,11 @@ async def admin_runtime():
         "fallback_chain": settings.get("fallback_models") or list(FALLBACK_MODELS),
         "cost_mode": settings.get("cost_mode") or DEFAULT_COST_MODE,
         "developer_mode": settings.get("developer_mode", False),
+        "context_budgets": {
+            "normal": NORMAL_CONTEXT_BUDGET_TOKENS,
+            "low_cost": LOW_COST_CONTEXT_BUDGET_TOKENS,
+            "advanced": ADVANCED_CONTEXT_BUDGET_TOKENS,
+        },
         "runtime_config": get_runtime_config(),
     }
 
@@ -1189,6 +1248,19 @@ async def admin_session_diagnostics(session_id: str):
             k.replace("compression_", ""): v
             for k, v in (last_debug or {}).items()
             if k.startswith("compression_")
+        },
+        "context_budget": {
+            k: v
+            for k, v in (last_debug or {}).items()
+            if k in (
+                "estimated_prompt_tokens",
+                "context_budget_tokens",
+                "context_over_budget",
+                "context_trimmed",
+                "trim_reason",
+                "estimated_tokens_removed",
+                "protected_state_items_count",
+            )
         },
         "latest_turn_debug": last_debug,
     }
