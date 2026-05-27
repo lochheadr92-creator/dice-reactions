@@ -1,0 +1,59 @@
+{
+  "summary": "Backend + mobile-web UI retest for Custom World lightweight implementation. Backend pytest: 29/30 pass with one reproducible persistence regression. Frontend custom setup and preset flow verified on public preview URL.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/story/new (verified via /api/story/session/{id}/export)",
+        "issue": "custom_world_setup seeding does not consistently persist object_locations when carried items are provided; simulation_hooks/world_instability/relationship_threads are present but object_locations can be empty.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Home",
+        "issues": [
+          "Console warning persists: props.pointerEvents is deprecated; migrate to style.pointerEvents."
+        ]
+      }
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_custom_world_system.py",
+    "/app/backend/tests/test_story_engine.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml",
+    "/app/test_reports/artifacts_iter2/custom_setup_filled.jpg",
+    "/app/test_reports/artifacts_iter2/preset_regression_ok.jpg",
+    "/app/test_reports/artifacts_iter2/home_loaded_mobile.jpg"
+  ],
+  "action_items": [
+    "Fix _seed_custom_setup_into_rolling in backend/server.py so object_locations is seeded whenever carried items are parsed, even if inventory_objects already exists from model output.",
+    "Add a backend regression assertion ensuring inventory_objects/object_locations are both non-empty for custom carried setup.",
+    "Optionally clean deprecated pointerEvents usage warning in frontend animated view layer."
+  ],
+  "critical_code_review_comments": [
+    "RCA: _seed_custom_setup_into_rolling currently gates both inventory_objects and object_locations under `if carried and not out.get('inventory_objects')`. If LLM emits inventory_objects but omits object_locations, seeding path is skipped and object_locations remains empty.",
+    "State supremacy and object permanence guard functions pass deterministic method-level tests.",
+    "Mechanic concealment held under probe action; narrative did not leak roll/modifier/trigger/debug/JSON terms."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_custom_world_system.py",
+    "/app/backend/tests/test_story_engine.py",
+    "/app/test_reports/iteration_2.json"
+  ],
+  "success_rate": {
+    "backend": "96.7% (29/30)",
+    "frontend": "100% for requested UI/integration checks (custom setup visibility+inputs, custom start flow, preset regression flow)"
+  },
+  "seed_data_creation": "Ephemeral TEST_* sessions created by pytest fixtures and deleted in teardown; UI runs created visible save slots but no manual DB seed scripts added.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Only failing test: test_custom_setup_persisted_to_protected_rolling_fields. Repro is stable. Use public URL from frontend/.env. Custom flow on web preview is operational and returns 2-4 paragraphs + 4-6 choices.",
+  "rca_of_issue": "Reproduction: create story with custom_world_setup.carried populated -> call export endpoint -> rolling_state has simulation_hooks/world_instability/relationship_threads but object_locations may be []. Root cause is conditional seeding tied to absence of inventory_objects. Mitigation: seed object_locations independently and merge/de-duplicate against existing list by object key/status."
+}
