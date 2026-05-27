@@ -69,6 +69,33 @@ COST_MODE: str = os.environ.get("COST_MODE", "normal").lower()
 LOW_COST_MAX_TOKENS: int = int(os.environ.get("LOW_COST_MAX_TOKENS", "900"))
 NORMAL_MAX_TOKENS_DEFAULT: int = int(os.environ.get("NORMAL_MAX_TOKENS_DEFAULT", "2048"))
 
+# ---------------------------------------------------------------------------
+# Context Budget Governor v3.9
+# ---------------------------------------------------------------------------
+# Maximum estimated *prompt* tokens (everything we send to the model, NOT
+# counting the upcoming completion). The governor trims oldest / lowest-
+# priority context until the prompt fits inside the active budget.
+NORMAL_CONTEXT_BUDGET_TOKENS: int = int(
+    os.environ.get("NORMAL_CONTEXT_BUDGET_TOKENS", "12000")
+)
+LOW_COST_CONTEXT_BUDGET_TOKENS: int = int(
+    os.environ.get("LOW_COST_CONTEXT_BUDGET_TOKENS", "7000")
+)
+ADVANCED_CONTEXT_BUDGET_TOKENS: int = int(
+    os.environ.get("ADVANCED_CONTEXT_BUDGET_TOKENS", "16000")
+)
+
+
+def resolve_context_budget(*, cost_mode: str, mode: str) -> int:
+    """Return the prompt token budget for the active cost_mode + simulation mode."""
+    cm = (cost_mode or "normal").lower()
+    md = (mode or "advanced").lower()
+    if cm == "low":
+        return LOW_COST_CONTEXT_BUDGET_TOKENS
+    if md == "advanced":
+        return ADVANCED_CONTEXT_BUDGET_TOKENS
+    return NORMAL_CONTEXT_BUDGET_TOKENS
+
 
 def get_runtime_config() -> dict:
     """Snapshot the current config — useful for the debug panel and /admin/settings."""
