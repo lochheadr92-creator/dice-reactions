@@ -828,16 +828,32 @@ def _seed_custom_setup_into_rolling(
         out["relationship_threads"] = threads[:8]
 
     carried = setup.get("carried")
-    if carried and not out.get("inventory_objects"):
+    if carried:
         items = [x.strip() for x in re.split(r";|,", str(carried)) if x.strip()]
+    else:
+        items = []
+    if items and not out.get("inventory_objects"):
         out["inventory_objects"] = [
             {"object": item[:80], "qty": "1", "condition": "player-described", "location_state": "carried", "where": "on player at story start"}
             for item in items[:10]
         ]
-        out["object_locations"] = [
-            {"object": item[:80], "status": "carried", "where": "on player at story start", "turn_changed": 1}
-            for item in items[:10]
-        ]
+    if items:
+        existing_locations = list(out.get("object_locations") or [])
+        existing_cores = []
+        for loc in existing_locations:
+            name = loc.get("object") if isinstance(loc, dict) else loc
+            existing_cores.append(_item_core(str(name)))
+        for item in items[:10]:
+            core = _item_core(item)
+            already_tracked = any(core and len(core & known) >= 1 for known in existing_cores)
+            if not already_tracked:
+                existing_locations.append({
+                    "object": item[:80],
+                    "status": "carried",
+                    "where": "on player at story start",
+                    "turn_changed": 1,
+                })
+        out["object_locations"] = existing_locations[:12]
     return out
 
 

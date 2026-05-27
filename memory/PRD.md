@@ -25,6 +25,12 @@ Build and maintain the **DICE REACTION STORY ENGINE — Fused Master Runtime**, 
 - AI Routing v3.7: OpenRouter default model is `anthropic/claude-3-5-haiku`; fallback chain is Haiku → Sonnet → Mythomax; telemetry is persisted in dev diagnostics.
 - Rolling Memory Compression v3.8: session-level `rolling_state` is consolidated turn-to-turn while preserving unresolved causal state.
 - Context Budget Governor v3.9: pre-call prompt budget estimation/trimming protects recent turns and authoritative state.
+- Lightweight Custom World setup: selecting Custom World opens a concise 6-part ignition flow for world concept, player origin, active pressures, story focus, intensity/social settings, and seed questions.
+- Custom setup persistence: setup answers are stored as canonical simulation seed data and injected into protected rolling-state hooks including `simulation_hooks`, `world_instability`, `story_focus`, `relationship_threads`, `inventory_objects`, and `object_locations`.
+- Relationship/social settings are integrated as persistent systems affecting NPC memory, faction reaction, stress/trust/leverage, delayed consequences, and material behavior rather than isolated flavor toggles.
+- State Supremacy guard: deterministic backend guard prevents uncaused Health/Fatigue improvements against tracked prior state.
+- Object Permanence guard: deterministic backend guard reduces duplicate carried-vs-hidden/dropped/consumed/destroyed item contradictions and seeds object locations independently from inventory objects.
+- Runtime hardening prompt rules added for failure doctrine, world momentum, NPC realism, compression hardening, mechanic concealment, anti-stagnation, and choice quality.
 
 ## Confirmed Current Settings
 - Provider: OpenRouter.
@@ -50,6 +56,16 @@ Build and maintain the **DICE REACTION STORY ENGINE — Fused Master Runtime**, 
 - Play screen rendering passed in browser automation: generated chronicle displayed no visible `DEBUG`, `ROLLING`, `Roll:`, `Modifiers:`, `<rolling_state>`, or `<debug>` terms in the normal player view.
 - Test sessions created during verification were deleted afterward.
 
+## Verification Completed — Custom World Upgrade
+- TypeScript check passed: `yarn tsc --noEmit`.
+- Python lint passed for backend app code.
+- Python compile passed for backend runtime modules.
+- Backend regression suite passed: `30 passed`.
+- Independent testing agent verified frontend Custom World setup visibility, all six sections, chip/input interactions, custom story start, preset-flow regression, and mechanic-concealment probe.
+- Blocking issue found by testing agent was fixed: `object_locations` now seeds/merges independently when custom carried items exist, even if the model already produced `inventory_objects`.
+- Frontend preview was verified after restart; Custom World setup renders and remains interactive.
+- Expo/RN web still emits a development console warning about deprecated `pointerEvents`, but app source no longer contains `pointerEvents`; warning appears to originate from framework/runtime internals and did not block UI testing.
+
 ## Observations / Regressions
 - No runtime-breaking regressions found.
 - Expo preview is currently functional, but `expo.err.log` contains repeated historical tunnel errors (`Cannot read properties of undefined (reading 'body')`, `Premature close`). Current browser preview still loaded successfully.
@@ -60,7 +76,7 @@ Build and maintain the **DICE REACTION STORY ENGINE — Fused Master Runtime**, 
 
 ## Backlog
 - **P0**: None confirmed.
-- **P1**: Update automated backend tests to match current OpenRouter model, developer-mode behavior, and rolling-state contract.
+- **P1**: Run a fresh 20+ turn hostile stress test against the upgraded runtime to verify state supremacy, object permanence, and anti-stagnation behavior under adversarial play.
 - **P1**: Run a 15+ turn stress chronicle to confirm rolling compression activates after memory depth and context budget diagnostics remain stable.
 - **P1**: Test provider fallback deliberately with an invalid/disabled primary model, then restore Haiku.
 - **P2**: Add a dedicated in-app long-run diagnostics summary for dev-unlocked sessions.
