@@ -60,11 +60,148 @@ AUTHORITATIVE_LIST_KEYS = (
 def _key_for(item: Any) -> str:
     """Stable string fingerprint for de-duplicating consequence-style entries."""
     if isinstance(item, dict):
+        # Object-identity fields are checked FIRST so that the same physical
+        # object emitted on different turns (with different status / location)
+        # collapses to a single canonical row rather than accumulating
+        # contradictory historical states.
+        for k in ("object", "item"):
+            if k in item and item[k]:
+                return f"object:{_normalize_object_name(item[k])}"
         for k in ("id", "key", "name", "trigger", "description", "text", "label"):
             if k in item and item[k]:
                 return f"{k}:{str(item[k]).strip().lower()}"
         return str(sorted(item.items()))[:300]
     return str(item).strip().lower()
+
+
+# ---------------------------------------------------------------------------
+# Object-permanence canonicalization (P0 — anti-bloat)
+# ---------------------------------------------------------------------------
+# Reasons for this layer:
+#   • The LLM may emit the same physical object on multiple turns with
+#     slightly different label spellings ("the iron key" vs "iron key").
+#   • Union-merging protected lists without identity-collapse causes
+#     contradictory historical entries to accumulate (e.g. one row says
+#     "carried at start", another says "stored under shelf") for the SAME
+#     object. This is the rolling-memory bloat documented in QA #2.
+#   • We resolve it by collapsing each identity to a single row and keeping
+#     the most recent (fresh-wins) state.
+
+_OBJECT_STOP_WORDS = {
+    "the", "a", "an", "and", "with", "of", "on", "in", "at", "to",
+    "this", "that", "your", "my", "some",
+    "small", "large", "tiny", "big", "old", "new", "broken", "damaged",
+    "torn", "rusted", "worn", "metal", "wooden", "iron", "steel",
+    "good", "bad", "half", "full", "empty", "near", "under", "over",
+}
+
+
+def _normalize_object_name(name: Any) -> str:
+    """Reduce an object label to a stable identity token set string.
+
+    "The Iron Key (rusted)" → "key"
+    "old leather satchel"   → "leather satchel" (descriptors stripped)
+    "bone-handled knife"    → "bone handled knife" (hyphens broken to tokens)
+    """
+    if not name:
+        return ""
+    raw = str(name).lower()
+    # Strip parenthetical descriptors, including unclosed fragments (e.g.
+    # ledger row "iron key (1" left over after a sloppy split).
+    raw = _re.sub(r"\(.*?(?:\)|$)", " ", raw)
+    # Normalise hyphens / underscores to spaces so "bone-handled" and
+    # "bone handled" collapse to the same identity.
+    raw = _re.sub(r"[-_/]", " ", raw)
+    words = _re.findall(r"[a-z][a-z0-9]+", raw)
+    tokens = [w.rstrip("s") for w in words if w not in _OBJECT_STOP_WORDS]
+    if not tokens:
+        return str(name).strip().lower()[:40]
+    return " ".join(sorted(set(tokens)))
+
+
+# Status priority — when the same identity arrives with multiple statuses
+# in a single emission, prefer the most resolved/terminal state so the
+# ledger never carries a stale "carried" row alongside a "destroyed" row.
+_STATUS_PRIORITY = {
+    "destroyed": 90,
+    "consumed": 80,
+    "dropped": 70,
+    "hidden": 60,
+    "stored": 50,
+    "worn": 40,
+    "carried": 30,
+    "uncertain": 10,
+    "": 0,
+}
+
+
+def _status_rank(status: Any) -> int:
+    return _STATUS_PRIORITY.get(str(status or "").strip().lower(), 20)
+
+
+def canonicalize_object_registry(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Collapse `object_locations` and `inventory_objects` to a single row
+    per normalized object identity. Mutates and returns the input dict.
+
+    Rules:
+      • Each identity appears at most once across the registry.
+      • If the same identity has multiple rows in a list, keep the row with
+        the highest status rank (most final). Ties → the LAST occurrence
+        wins (fresh-from-LLM appears after restored survivors in our merge).
+      • Cross-list consistency: `object_locations` is the source of truth
+        for location_state; `inventory_objects.location_state` is rewritten
+        to match.
+    """
+    if not isinstance(state, dict):
+        return state
+
+    # ---- 1. Canonicalize object_locations ----
+    raw_locs = state.get("object_locations")
+    canonical: Dict[str, Dict[str, Any]] = {}
+    if isinstance(raw_locs, list):
+        for row in raw_locs:
+            if not isinstance(row, dict):
+                continue
+            ident = _normalize_object_name(row.get("object"))
+            if not ident:
+                continue
+            existing = canonical.get(ident)
+            if existing is None:
+                canonical[ident] = dict(row)
+                continue
+            # Prefer the higher-priority status; on tie, the newer row wins.
+            if _status_rank(row.get("status")) >= _status_rank(existing.get("status")):
+                canonical[ident] = dict(row)
+        state["object_locations"] = list(canonical.values())
+
+    # ---- 2. Canonicalize inventory_objects, aligning to object_locations ----
+    raw_inv = state.get("inventory_objects")
+    if isinstance(raw_inv, list):
+        inv_map: Dict[str, Dict[str, Any]] = {}
+        for row in raw_inv:
+            if not isinstance(row, dict):
+                continue
+            ident = _normalize_object_name(row.get("object"))
+            if not ident:
+                continue
+            existing = inv_map.get(ident)
+            if existing is None:
+                inv_map[ident] = dict(row)
+                continue
+            if _status_rank(row.get("location_state")) >= _status_rank(
+                existing.get("location_state")
+            ):
+                inv_map[ident] = dict(row)
+        # Rewrite location_state to match the canonical object_locations entry.
+        for ident, row in inv_map.items():
+            ref = canonical.get(ident)
+            if ref:
+                row["location_state"] = ref.get("status", row.get("location_state"))
+                if ref.get("where") and not row.get("where"):
+                    row["where"] = ref.get("where")
+        state["inventory_objects"] = list(inv_map.values())
+
+    return state
 
 
 def _is_unresolved(item: Any) -> bool:
@@ -136,6 +273,12 @@ def consolidate_rolling_state(
                 ):
                     union[k2] = v2
             merged[key] = union
+
+    # Final pass: collapse object_locations / inventory_objects to one row
+    # per canonical identity. This is the P0 anti-bloat guarantee — without
+    # it, the additive union above can stack contradictory historical states
+    # for the SAME physical object as turns accumulate.
+    canonicalize_object_registry(merged)
 
     return merged
 
