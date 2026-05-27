@@ -45,6 +45,7 @@ from memory import (  # noqa: E402
     compute_compression_metrics,
     enforce_context_budget,
     estimate_messages_tokens,
+    canonicalize_object_registry,
 )
 
 import json as _json  # noqa: E402
@@ -901,7 +902,7 @@ def _apply_state_supremacy(
     return adjustments
 
 
-_ITEM_SPLIT_RE = re.compile(r";|,\s*(?=[A-Za-z])")
+_ITEM_SPLIT_RE = re.compile(r"\s*;\s*")
 _ITEM_STOP_WORDS = {
     "the", "a", "an", "and", "with", "under", "over", "near", "inside", "outside",
     "hidden", "damaged", "torn", "small", "large", "metal", "wooden", "broken",
@@ -948,6 +949,139 @@ def _apply_object_permanence(parsed: ParsedTurn) -> List[str]:
         parsed.ledger = ledger
         return ["removed_duplicate_carried:" + " | ".join(removed[:4])]
     return []
+
+
+# Ledger category → canonical object_locations.status it represents.
+# `Weapons` and `Supplies` can be either carried or stored — they don't
+# pin a unique status, so they are NOT deduplicated against location truth;
+# we only enforce uniqueness across the four mutually-exclusive states.
+_LEDGER_STATUS_MAP = {
+    "Carried": {"carried"},
+    "Worn": {"worn"},
+    "Stored": {"stored", "hidden"},
+    "Uncertain": {"uncertain"},
+}
+
+
+def _apply_ledger_object_permanence(
+    parsed: ParsedTurn,
+    authoritative_state: Optional[Dict[str, Any]] = None,
+) -> List[str]:
+    """Cross-category deduplication of objects in the ledger.
+
+    Ensures the SAME physical object identity never appears in two
+    mutually-exclusive ledger categories simultaneously (e.g. listed
+    as Carried AND Stored). The `authoritative_state` (typically the
+    post-consolidation rolling_state) is treated as the source of truth
+    for `object_locations`; if not provided we fall back to
+    `parsed.rolling_state`. When no truth row exists we keep the most-final
+    status (destroyed > consumed > dropped > hidden > stored > worn >
+    carried > uncertain).
+    """
+    ledger = parsed.ledger or {}
+    if not ledger:
+        return []
+
+    # Build canonical truth map from rolling_state.object_locations.
+    truth: Dict[str, str] = {}
+    rolling = (
+        authoritative_state
+        if isinstance(authoritative_state, dict)
+        else (parsed.rolling_state if isinstance(parsed.rolling_state, dict) else {})
+    )
+    for row in (rolling.get("object_locations") or []):
+        if not isinstance(row, dict):
+            continue
+        ident = _normalize_object_identity(row.get("object"))
+        status = str(row.get("status", "")).strip().lower()
+        if ident and status:
+            truth[ident] = status
+
+    # Pass A — collect per-category item lists (only categories we police).
+    per_cat: Dict[str, List[str]] = {}
+    for cat in _LEDGER_STATUS_MAP:
+        items = _split_items(ledger.get(cat))
+        if items:
+            per_cat[cat] = items
+
+    # Pass B — for each identity, find every (cat, item) it appears in; if
+    # >1 hit, keep only the canonical category. If no truth row exists,
+    # fall back to highest-priority status.
+    sightings: Dict[str, List[Tuple[str, str]]] = {}
+    for cat, items in per_cat.items():
+        for raw in items:
+            ident = _normalize_object_identity(raw)
+            if not ident:
+                continue
+            sightings.setdefault(ident, []).append((cat, raw))
+
+    removed: List[str] = []
+    drops: Dict[str, set] = {cat: set() for cat in per_cat}
+
+    for ident, hits in sightings.items():
+        if len(hits) <= 1:
+            continue
+        canonical_status = truth.get(ident)
+        winner_cat: Optional[str] = None
+        if canonical_status:
+            for cat, statuses in _LEDGER_STATUS_MAP.items():
+                if canonical_status in statuses:
+                    winner_cat = cat
+                    break
+        if winner_cat is None or all(c != winner_cat for c, _ in hits):
+            # Fall back to most-final ledger status.
+            priority = ("Uncertain", "Worn", "Carried", "Stored")  # least → most
+            ordered = sorted(hits, key=lambda h: priority.index(h[0]) if h[0] in priority else -1)
+            winner_cat = ordered[-1][0]
+        for cat, raw in hits:
+            if cat == winner_cat:
+                continue
+            drops[cat].add(raw)
+            removed.append(f"{cat}:{raw}")
+
+    if not removed:
+        return []
+
+    for cat, dropset in drops.items():
+        if not dropset:
+            continue
+        survivors = [x for x in per_cat[cat] if x not in dropset]
+        ledger[cat] = "; ".join(survivors) if survivors else "—"
+    parsed.ledger = ledger
+    return ["ledger_cross_category_dedup:" + " | ".join(removed[:6])]
+
+
+_OBJECT_NAME_STOP = {
+    "the", "a", "an", "and", "with", "of", "on", "in", "at", "to", "this", "that",
+    "your", "my", "some", "small", "large", "tiny", "big", "old", "new", "broken",
+    "damaged", "torn", "rusted", "worn", "metal", "wooden", "iron", "steel",
+    "good", "bad", "half", "full", "empty", "near", "under", "over",
+}
+
+
+def _normalize_object_identity(name: Any) -> str:
+    """Identity string aligned with memory.canonicalize_object_registry.
+
+    Same normalisation used by the rolling-state canonicalizer so the
+    ledger dedup honours the same identity contract. Robust to unclosed
+    parens left over from sloppy ledger splits and to hyphenated tokens.
+    Strips ledger "Stored" location prefix like "shelf — item".
+    """
+    if not name:
+        return ""
+    raw = str(name).lower()
+    # Strip location prefix used in `Stored: [location] — item` rows so the
+    # identity reflects only the item, not the container.
+    raw = re.sub(r"^[^—\-]*[—–]\s*", "", raw)
+    raw = re.sub(r"\(.*?(?:\)|$)", " ", raw)
+    raw = re.sub(r"\bqty\s*:\s*[^,;)]+", " ", raw)
+    raw = re.sub(r"\bcondition\s*:\s*[^,;)]+", " ", raw)
+    raw = re.sub(r"[-_/]", " ", raw)
+    words = re.findall(r"[a-z][a-z0-9]+", raw)
+    tokens = [w.rstrip("s") for w in words if w not in _OBJECT_NAME_STOP]
+    if not tokens:
+        return str(name).strip().lower()[:40]
+    return " ".join(sorted(set(tokens)))
 
 
 # ======================================================================
@@ -1715,13 +1849,21 @@ async def new_story(req: NewStoryRequest):
 
     guard_adjustments = _apply_object_permanence(parsed)
     enriched_debug = _meta_into_debug(parsed.debug, meta)
-    if guard_adjustments:
-        enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
 
     # ---- Rolling Memory Compression v3.8 ----
     # Turn 1: no prior to merge from. Compression metrics for diagnostics only.
     merged_rolling = consolidate_rolling_state(None, parsed.rolling_state)
     merged_rolling = _seed_custom_setup_into_rolling(merged_rolling, custom_setup)
+    # Re-canonicalize after setup seeding so seeded inventory rows can't
+    # collide with model-emitted rows that share identity.
+    canonicalize_object_registry(merged_rolling)
+
+    # P0 — ledger-wide cross-category dedup using post-consolidation truth.
+    guard_adjustments.extend(
+        _apply_ledger_object_permanence(parsed, authoritative_state=merged_rolling)
+    )
+    if guard_adjustments:
+        enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
     memory_depth = int(settings.get("memory_depth", DEFAULT_MEMORY_DEPTH))
     compression = compute_compression_metrics(
         turn_number=1,
@@ -1806,12 +1948,20 @@ async def story_action(req: ActionRequest):
     guard_adjustments = _apply_state_supremacy(session, parsed, req.action_text)
     guard_adjustments.extend(_apply_object_permanence(parsed))
     enriched_debug = _meta_into_debug(parsed.debug, meta)
-    if guard_adjustments:
-        enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
 
     # ---- Rolling Memory Compression v3.8 ----
     prior_rolling = session.get("rolling_state")
     merged_rolling = consolidate_rolling_state(prior_rolling, parsed.rolling_state)
+
+    # P0 — ledger-wide cross-category dedup using the post-consolidation
+    # rolling_state as authoritative truth. Must run AFTER consolidation
+    # (so canonicalized object_locations is the source-of-truth map) but
+    # BEFORE the turn is persisted.
+    guard_adjustments.extend(
+        _apply_ledger_object_permanence(parsed, authoritative_state=merged_rolling)
+    )
+    if guard_adjustments:
+        enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
 
     # Diagnostics: which turn payloads were COMPRESSED OUT of this prompt?
     settings_for_metrics = await get_ai_settings()
