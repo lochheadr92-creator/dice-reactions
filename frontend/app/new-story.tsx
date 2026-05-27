@@ -17,7 +17,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONTS } from "../src/theme";
 import { getDeviceId, getSettings } from "../src/storage";
-import { newStory, listScenarios, Scenario } from "../src/api";
+import { newStory, listScenarios, Scenario, CustomWorldSetup } from "../src/api";
 import { friendlyError } from "../src/errors";
 
 type Genre = {
@@ -88,6 +88,16 @@ const GENRES: Genre[] = [
 
 const TONES = ["cinematic", "grim", "hopeful", "bleak", "mythic", "grounded"];
 const DIFFICULTIES = ["soft", "standard", "hard", "brutal"] as const;
+const PRESSURE_OPTIONS = ["starvation", "infection", "war", "predators", "political collapse", "insanity", "extreme weather", "AI surveillance", "supernatural corruption", "scarcity", "civil unrest"];
+const FOCUS_OPTIONS = ["survival", "horror", "mystery", "exploration", "warfare", "leadership", "revenge", "escape", "settlement building", "romance", "political manipulation", "emotional drama"];
+const CONTENT_ROWS = [
+  { key: "gore", label: "Gore", values: ["none", "low", "medium", "high"] },
+  { key: "psychological_horror", label: "Psych horror", values: ["none", "low", "medium", "high"] },
+  { key: "scarcity", label: "Scarcity", values: ["soft", "standard", "harsh", "brutal"] },
+  { key: "cruelty", label: "Cruelty", values: ["none", "low", "medium", "high"] },
+  { key: "moral_ambiguity", label: "Moral ambiguity", values: ["low", "medium", "high"] },
+  { key: "relationships", label: "Relationships", values: ["none", "light romance", "mature bonds", "dark dynamics", "seduction/manipulation", "adult world simulation"] },
+];
 
 export default function NewStoryScreen() {
   const router = useRouter();
@@ -102,6 +112,19 @@ export default function NewStoryScreen() {
   const [mode, setMode] = useState<"basic" | "advanced">("advanced");
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [scenarioId, setScenarioId] = useState<string | null>(null);
+  const [customSetup, setCustomSetup] = useState<CustomWorldSetup>({
+    pressures: [],
+    storyFocus: [],
+    contentSettings: {
+      gore: "low",
+      psychological_horror: "medium",
+      scarcity: "standard",
+      cruelty: "low",
+      moral_ambiguity: "medium",
+      relationships: "none",
+    },
+    seedAnswers: ["", "", ""],
+  });
 
   useEffect(() => {
     listScenarios().then((r) => setScenarios(r.scenarios)).catch(() => {});
@@ -120,8 +143,40 @@ export default function NewStoryScreen() {
     setMode((s.mode as any) || "advanced");
   };
 
-  const resolvedGenre = genre === "custom" ? customGenre.trim() : genre;
-  const canStart = (!!resolvedGenre || !!scenarioId) && !loading;
+  const setSetupField = (patch: Partial<CustomWorldSetup>) => {
+    setCustomSetup((prev) => ({ ...prev, ...patch }));
+  };
+
+  const toggleSetupList = (key: "pressures" | "storyFocus", value: string) => {
+    setCustomSetup((prev) => {
+      const current = prev[key] || [];
+      const next = current.includes(value)
+        ? current.filter((x) => x !== value)
+        : [...current, value];
+      return { ...prev, [key]: next };
+    });
+  };
+
+  const setContentSetting = (key: string, value: string) => {
+    setCustomSetup((prev) => ({
+      ...prev,
+      contentSettings: { ...(prev.contentSettings || {}), [key]: value },
+    }));
+  };
+
+  const updateSeedAnswer = (index: number, value: string) => {
+    const answers = [...(customSetup.seedAnswers || ["", "", ""] )];
+    answers[index] = value;
+    setSetupField({ seedAnswers: answers });
+  };
+
+  const testKey = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+  const resolvedGenre = genre === "custom"
+    ? (customGenre.trim() || customSetup.worldConcept?.trim() || "custom world")
+    : genre;
+  const customReady = genre !== "custom" || !!(customSetup.worldConcept?.trim() || customGenre.trim());
+  const canStart = (!!resolvedGenre || !!scenarioId) && customReady && !loading;
 
   const handleStart = async () => {
     if (!canStart) return;
@@ -132,13 +187,14 @@ export default function NewStoryScreen() {
       const res = await newStory({
         device_id,
         genre: resolvedGenre || (scenarios.find((s) => s.id === scenarioId)?.genre ?? ""),
-        role: role.trim() || undefined,
+        role: role.trim() || customSetup.origin?.trim() || undefined,
         tone,
         difficulty,
         debug_mode: debugMode || settings.debugDefault,
         custom_premise: premise.trim() || undefined,
         mode,
         scenario_id: scenarioId || undefined,
+        custom_world_setup: genre === "custom" ? customSetup : undefined,
       });
       router.replace(`/play/${res.session_id}`);
     } catch (e: any) {
@@ -256,16 +312,124 @@ export default function NewStoryScreen() {
           </View>
 
           {genre === "custom" && (
-            <View style={styles.customInputWrap}>
-              <Text style={styles.inlineLabel}>Name this world</Text>
-              <TextInput
-                value={customGenre}
-                onChangeText={setCustomGenre}
-                placeholder="e.g. dieselpunk espionage, undersea cult, solarpunk heist"
-                placeholderTextColor={COLORS.textMuted}
-                style={styles.input}
-                testID="custom-genre-input"
-              />
+            <View style={styles.customSetupBox} testID="custom-world-setup-panel">
+              <View style={styles.setupIntroRow}>
+                <Ionicons name="sparkles-outline" size={18} color={COLORS.primary} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.setupTitle}>CUSTOM · WORLD · IGNITION</Text>
+                  <Text style={styles.setupHelp}>Fast answers. Persistent consequences. Skip anything you want the engine to infer.</Text>
+                </View>
+              </View>
+
+              <View style={styles.setupStep} testID="custom-step-world-concept">
+                <Text style={styles.inlineLabel}>01 · WORLD CONCEPT</Text>
+                <TextInput
+                  value={customGenre}
+                  onChangeText={(v) => {
+                    setCustomGenre(v);
+                    setSetupField({ worldConcept: v });
+                  }}
+                  placeholder="flooded cyberpunk city, plague kingdom, collapsing colony…"
+                  placeholderTextColor={COLORS.textMuted}
+                  style={styles.input}
+                  testID="custom-world-concept-input"
+                />
+                <TextInput
+                  value={customSetup.worldTone || ""}
+                  onChangeText={(v) => setSetupField({ worldTone: v })}
+                  placeholder="Tone: intimate dread, brutal realism, strange wonder…"
+                  placeholderTextColor={COLORS.textMuted}
+                  style={styles.input}
+                  testID="custom-world-tone-input"
+                />
+                <TextInput
+                  value={customSetup.danger || ""}
+                  onChangeText={(v) => setSetupField({ danger: v })}
+                  placeholder="What feels wrong or dangerous here?"
+                  placeholderTextColor={COLORS.textMuted}
+                  style={[styles.input, styles.inputMultiSmall]}
+                  multiline
+                  testID="custom-world-danger-input"
+                />
+              </View>
+
+              <View style={styles.setupStep} testID="custom-step-player-origin">
+                <Text style={styles.inlineLabel}>02 · PLAYER ORIGIN</Text>
+                <TextInput value={customSetup.origin || ""} onChangeText={(v) => setSetupField({ origin: v })} placeholder="Who are you?" placeholderTextColor={COLORS.textMuted} style={styles.input} testID="custom-origin-input" />
+                <TextInput value={customSetup.formerLife || ""} onChangeText={(v) => setSetupField({ formerLife: v })} placeholder="What were you before this began?" placeholderTextColor={COLORS.textMuted} style={styles.input} testID="custom-former-life-input" />
+                <TextInput value={customSetup.strengths || ""} onChangeText={(v) => setSetupField({ strengths: v })} placeholder="What are you good at?" placeholderTextColor={COLORS.textMuted} style={styles.input} testID="custom-strengths-input" />
+                <TextInput value={customSetup.weakness || ""} onChangeText={(v) => setSetupField({ weakness: v })} placeholder="What weakness follows you?" placeholderTextColor={COLORS.textMuted} style={styles.input} testID="custom-weakness-input" />
+                <TextInput value={customSetup.carried || ""} onChangeText={(v) => setSetupField({ carried: v })} placeholder="What do you currently carry?" placeholderTextColor={COLORS.textMuted} style={styles.input} testID="custom-carried-input" />
+                <TextInput value={customSetup.desire || ""} onChangeText={(v) => setSetupField({ desire: v })} placeholder="What do you want most right now?" placeholderTextColor={COLORS.textMuted} style={styles.input} testID="custom-desire-input" />
+              </View>
+
+              <View style={styles.setupStep} testID="custom-step-active-pressures">
+                <Text style={styles.inlineLabel}>03 · ACTIVE PRESSURES</Text>
+                <View style={styles.chipRow}>
+                  {PRESSURE_OPTIONS.map((p) => {
+                    const active = (customSetup.pressures || []).includes(p);
+                    return (
+                      <TouchableOpacity key={p} style={[styles.chip, active && styles.chipActive]} onPress={() => toggleSetupList("pressures", p)} testID={`custom-pressure-${testKey(p)}`}>
+                        <Text style={[styles.chipText, active && styles.chipTextActive]}>{p}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+
+              <View style={styles.setupStep} testID="custom-step-story-focus">
+                <Text style={styles.inlineLabel}>04 · STORY FOCUS</Text>
+                <Text style={styles.setupHelp}>Pick what this world should naturally produce most often.</Text>
+                <View style={styles.chipRow}>
+                  {FOCUS_OPTIONS.map((f) => {
+                    const active = (customSetup.storyFocus || []).includes(f);
+                    return (
+                      <TouchableOpacity key={f} style={[styles.chip, active && styles.chipActive]} onPress={() => toggleSetupList("storyFocus", f)} testID={`custom-focus-${testKey(f)}`}>
+                        <Text style={[styles.chipText, active && styles.chipTextActive]}>{f}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+
+              <View style={styles.setupStep} testID="custom-step-content-settings">
+                <Text style={styles.inlineLabel}>05 · INTENSITY & SOCIAL SYSTEMS</Text>
+                <Text style={styles.setupHelp}>These affect NPC memory, faction reactions, stress, leverage, and delayed consequences.</Text>
+                {CONTENT_ROWS.map((row) => (
+                  <View key={row.key} style={styles.contentRow}>
+                    <Text style={styles.contentLabel}>{row.label}</Text>
+                    <View style={styles.chipRow}>
+                      {row.values.map((v) => {
+                        const active = customSetup.contentSettings?.[row.key] === v;
+                        return (
+                          <TouchableOpacity key={v} style={[styles.smallChip, active && styles.chipActive]} onPress={() => setContentSetting(row.key, v)} testID={`custom-content-${row.key}-${testKey(v)}`}>
+                            <Text style={[styles.smallChipText, active && styles.chipTextActive]}>{v}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </View>
+                ))}
+              </View>
+
+              <View style={styles.setupStep} testID="custom-step-seed-questions">
+                <Text style={styles.inlineLabel}>06 · SEED QUESTIONS</Text>
+                {[
+                  "What are you afraid of losing?",
+                  "Who already wants something from you?",
+                  "What mistake still follows you?",
+                ].map((q, idx) => (
+                  <TextInput
+                    key={q}
+                    value={(customSetup.seedAnswers || [])[idx] || ""}
+                    onChangeText={(v) => updateSeedAnswer(idx, v)}
+                    placeholder={q}
+                    placeholderTextColor={COLORS.textMuted}
+                    style={styles.input}
+                    testID={`custom-seed-answer-${idx}`}
+                  />
+                ))}
+              </View>
             </View>
           )}
 
@@ -475,6 +639,38 @@ const styles = StyleSheet.create({
   customInputWrap: {
     marginTop: 14,
   },
+  customSetupBox: {
+    marginTop: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.primarySoft,
+  },
+  setupIntroRow: {
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "flex-start",
+    marginBottom: 14,
+  },
+  setupTitle: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.primary,
+    fontSize: 11,
+    letterSpacing: 2,
+  },
+  setupHelp: {
+    fontFamily: FONTS.bodyItalic,
+    color: COLORS.textMuted,
+    fontSize: 13,
+    marginTop: 4,
+    lineHeight: 18,
+  },
+  setupStep: {
+    paddingTop: 14,
+    marginTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.borderDim,
+  },
   inlineLabel: {
     fontFamily: FONTS.mono,
     color: COLORS.textMuted,
@@ -494,6 +690,10 @@ const styles = StyleSheet.create({
   },
   inputMulti: {
     minHeight: 80,
+    textAlignVertical: "top",
+  },
+  inputMultiSmall: {
+    minHeight: 58,
     textAlignVertical: "top",
   },
   chipRow: {
@@ -520,6 +720,29 @@ const styles = StyleSheet.create({
   },
   chipTextActive: {
     color: COLORS.primary,
+  },
+  contentRow: {
+    marginTop: 12,
+    gap: 8,
+  },
+  contentLabel: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.textSecondary,
+    fontSize: 10,
+    letterSpacing: 2,
+  },
+  smallChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.surfaceDeep,
+  },
+  smallChipText: {
+    fontFamily: FONTS.mono,
+    color: COLORS.textSecondary,
+    fontSize: 10,
+    letterSpacing: 1,
   },
   diffHelp: {
     marginTop: 10,

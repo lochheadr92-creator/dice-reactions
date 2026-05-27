@@ -52,6 +52,22 @@ export type Scenario = {
   hidden_threat: string;
 };
 
+export type CustomWorldSetup = {
+  worldConcept?: string;
+  worldTone?: string;
+  danger?: string;
+  origin?: string;
+  formerLife?: string;
+  strengths?: string;
+  weakness?: string;
+  carried?: string;
+  desire?: string;
+  pressures?: string[];
+  storyFocus?: string[];
+  contentSettings?: Record<string, string>;
+  seedAnswers?: string[];
+};
+
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const text = await res.text();
@@ -70,6 +86,7 @@ export async function newStory(payload: {
   custom_premise?: string;
   mode?: string;
   scenario_id?: string;
+  custom_world_setup?: CustomWorldSetup;
 }): Promise<{ session_id: string; turn: Turn; session: SessionSummary }> {
   const res = await fetch(`${API}/story/new`, {
     method: "POST",

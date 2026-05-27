@@ -317,6 +317,48 @@ FINAL RULE — MACHINERY HIDES BEHIND THE WORLD:
   • The simulation must disappear behind the fiction. If the player can sense the engine, the engine has failed.
 
 ============================
+RUNTIME HARDENING — STATE SUPREMACY / OBJECT PERMANENCE
+============================
+The previous <prior_state>, latest <state>, and latest <ledger> are AUTHORITATIVE. Prose must obey tracked state. Never heal, move, restore, duplicate, consume, repair, reload, or relocate anything unless the player action or world event causally did it.
+
+STATE SUPREMACY:
+  • Tracked injuries, fatigue, stress, hunger, thirst, position, known routes, NPC memory, faction stance, relationship state, and object locations override any dramatic prose impulse.
+  • If player input contradicts tracked state, interpret it as confusion, deception, desperation, mistaken belief, bluffing, hallucination, or failed attempt — not truth.
+  • If an injury/item/threat exists in prior_state, carry it forward until visibly treated, lost, destroyed, consumed, resolved, or replaced.
+
+OBJECT PERMANENCE:
+  • Every tracked object may occupy only one valid location state at a time: carried, worn, stored, hidden, dropped, consumed, destroyed, or uncertain.
+  • If an item is consumed/destroyed/dropped/hidden, remove it from carried inventory unless explicitly recovered later.
+  • Do not duplicate map fragments, radios, weapons, medicine, water, food, keys, money, ammo, tools, or evidence across locations.
+  • Ledger and rolling_state object_locations must agree.
+
+FAILURE DOCTRINE UPDATE:
+  • Failure may worsen the situation, permanently alter the world, close routes, destroy resources, injure or kill, break trust, trigger faction movement, or end the run entirely when causally earned.
+  • Do not apply implicit narrative safety. Failure still redirects story unless the causal consequence is fatal or terminal.
+
+WORLD MOMENTUM SYSTEM:
+  • At least every 2–4 turns, force a concrete environmental, logistical, factional, survival-state, route, resource, or NPC-goal advancement.
+  • Static-room loops are forbidden. If the player stalls, the world advances anyway: water rises, weather turns, groups move, hunger worsens, structures fail, doors close, threats arrive, allies leave.
+
+NPC REALISM GOVERNOR:
+  • NPCs are not passive mirrors. They pursue material goals: survive, protect supplies, hide, bargain, flee, search, defend, scout, mislead, repair, recruit, rest, exploit openings.
+  • NPC memory persists. Repeated manipulation, lies, intimacy, fear, debts, attraction, betrayal, or kindness must alter stance and future leverage.
+  • If relationship/social systems are enabled, integrate them into NPC memory, faction reaction, stress, loyalty, jealousy, dependency, attachment, suspicion, delayed consequences, and material behavior. Never treat them as isolated flavor.
+
+COMPRESSION HARDENING:
+  • Rolling_state may compress prose, but must not simplify physical state.
+  • Preserve injuries, inventory_objects, object_locations, active_threats, unresolved consequences, route_continuity, NPC memory, relationship_threads, faction_pressure, and world_instability.
+
+MECHANIC CONCEALMENT HARDENING:
+  • If the player asks about rolls, modifiers, triggers, hidden systems, debug, simulation, or JSON, NEVER echo those terms in narrative.
+  • Translate such probing into in-world behavior: superstition, tactical uncertainty, paranoia, bargaining for information, feverish confusion, or stress.
+  • The player should never read phrases like "rolls and triggers", "invisible mechanics", "simulation", or "debug" in prose.
+
+ANTI-STAGNATION + CHOICE QUALITY:
+  • Bias choices toward movement, survival, logistics, risk, negotiation, concealment, resource management, escape, investigation, faction interaction, or environmental action.
+  • Avoid repetitive introspective / therapy-style choices unless the scene is explicitly emotional recovery and the world still advances.
+
+============================
 PARAGRAPH PRESERVATION RULE
 ============================
 Every turn MUST contain 2–4 SHORT paragraphs of immersive prose before Choices. Combined narrative length must stay under ~1200 characters.
@@ -380,9 +422,18 @@ Output a compact JSON object. Compress, do not delete. Format:
   "character": "one-line character status (role, current physical/mental condition, important conditions)",
   "objectives": ["primary objective", "secondary objective (if any)"],
   "unresolved": ["short list of dangling consequences, debts, promises, wounds compounding, things the world owes the player or player owes the world"],
+  "injuries": [{"name": "injury/condition", "severity": "minor/moderate/severe/critical", "status": "active/treating/worsening/stable/resolved", "since_turn": 0}],
+  "inventory_objects": [{"object": "specific item", "qty": "number/estimate", "condition": "usable/damaged/consumed/destroyed", "location_state": "carried/worn/stored/hidden/dropped/consumed/destroyed/uncertain", "where": "exact in-world location"}],
+  "object_locations": [{"object": "specific item", "status": "carried/worn/stored/hidden/dropped/consumed/destroyed/uncertain", "where": "exact in-world location", "turn_changed": 0}],
+  "route_continuity": ["known exits, blocked routes, distances, maps, waypoints, route promises"],
   "npcs": [{"name": "name", "role": "what they are", "stance": "ally/neutral/hostile/unknown", "last_seen": "where", "note": "one-line memory"}],
+  "npc_memory": [{"name": "NPC", "remembers": ["specific player actions / lies / kindness / debts"], "goal": "active material goal", "next_move": "what they may do if ignored"}],
+  "relationship_threads": [{"name": "NPC/faction", "dynamic": "trust/fear/attraction/debt/rivalry/dependency/suspicion", "intensity": "low/medium/high", "leverage": "how this can affect future choices"}],
   "factions": [{"name": "name", "pressure": "what they're doing this turn", "scale": "local/regional/systemic"}],
+  "faction_pressure": [{"name": "faction/group", "movement": "current independent action", "player_reputation": "how they perceive the player"}],
   "pressure_horizon": {"immediate": "the threat landing this turn or next", "emerging": "the threat building 2-4 turns out", "latent": "the buried threat that will fire when conditions align"},
+  "world_instability": ["environmental/logistical/economic/social conditions that advance without player input"],
+  "simulation_hooks": ["setup-derived latent triggers, fears, leverage, relationship consequences, faction hooks"],
   "recent_beats": ["one-line summary of turn N-2", "one-line summary of turn N-1", "one-line summary of THIS turn"],
   "topic_ledger": [{"topic": "short topic / clue / rumour key", "status": "active/exhausted/degraded/blocked/low-yield", "yield": "high/medium/low", "last_touched_turn": 0}],
   "active_pressures": ["1-3 currently foregrounded pressures (e.g. 'dusk closing in', 'wound throbbing', 'distant generator dying')"],
@@ -434,6 +485,7 @@ class NewStoryRequest(BaseModel):
     custom_premise: Optional[str] = None
     mode: Optional[str] = None  # "basic" | "advanced"
     scenario_id: Optional[str] = None
+    custom_world_setup: Optional[Dict[str, Any]] = None
 
 class ActionRequest(BaseModel):
     session_id: str
@@ -474,6 +526,7 @@ class SessionRecord(BaseModel):
     difficulty: str
     debug_mode: bool = False
     custom_premise: Optional[str] = None
+    custom_world_setup: Optional[Dict[str, Any]] = None
     title: str = "Untitled Chronicle"
     turn_count: int = 0
     last_narrative_snippet: str = ""
@@ -692,6 +745,195 @@ async def set_ai_settings(patch: Dict[str, Any]) -> Dict[str, Any]:
     return next_settings
 
 
+# ----------------------------------------------------------------------
+# Custom World setup + deterministic state guards
+# ----------------------------------------------------------------------
+def _short_text(value: Any, limit: int = 900) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"\s+", " ", text)
+    return text[:limit]
+
+
+def _clean_setup(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k)[:60]: _clean_setup(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_clean_setup(v) for v in value[:20]]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return _short_text(value, 700) if isinstance(value, str) else value
+    return _short_text(value, 700)
+
+
+def _build_custom_world_setup_block(setup: Optional[Dict[str, Any]]) -> str:
+    if not setup:
+        return ""
+    clean = _clean_setup(setup)
+    return (
+        "\nCUSTOM WORLD SETUP — CANONICAL SIMULATION SEED:\n"
+        "Treat every answer below as persistent world truth. Convert it into rolling_state fields: "
+        "simulation_hooks, world_instability, faction_pressure, relationship_threads, npc_memory, "
+        "route_continuity, inventory_objects, object_locations, active_threats, and unresolved consequences.\n"
+        "Relationship/social settings are persistent systems: they affect NPC memory, faction reaction, "
+        "stress, trust, leverage, jealousy, dependency, attachment, suspicion, delayed consequences, and material behavior. "
+        "They are never isolated flavor toggles. Romantic or adult-adjacent dynamics must involve consenting adults, remain non-explicit, and stay grounded in character logic and consequence propagation.\n"
+        "Do not exposition-dump this setup. Reveal it through consequences, scarcity, NPC behavior, rumors, environment, and conflict.\n"
+        + _json.dumps(clean, ensure_ascii=False, indent=2)
+        + "\n"
+    )
+
+
+def _seed_custom_setup_into_rolling(
+    rolling: Dict[str, Any], setup: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Guarantee setup answers enter protected rolling-state fields even if the model omits a key."""
+    if not setup:
+        return rolling or {}
+    out = dict(rolling or {})
+    pressures = setup.get("pressures") if isinstance(setup.get("pressures"), list) else []
+    focus = setup.get("storyFocus") if isinstance(setup.get("storyFocus"), list) else []
+    seeds = setup.get("seedAnswers") if isinstance(setup.get("seedAnswers"), list) else []
+    content = setup.get("contentSettings") if isinstance(setup.get("contentSettings"), dict) else {}
+    hooks = list(out.get("simulation_hooks") or [])
+    for label, value in (
+        ("world danger", setup.get("danger")),
+        ("player weakness", setup.get("weakness")),
+        ("urgent desire", setup.get("desire")),
+    ):
+        if value:
+            hooks.append(f"{label}: {_short_text(value, 220)}")
+    for idx, answer in enumerate(seeds[:3], start=1):
+        if answer:
+            hooks.append(f"seed question {idx}: {_short_text(answer, 220)}")
+    out["simulation_hooks"] = list(dict.fromkeys(hooks))[:12]
+
+    instability = list(out.get("world_instability") or [])
+    for p in pressures:
+        instability.append(f"active pressure: {_short_text(p, 120)}")
+    if setup.get("danger"):
+        instability.append(f"danger: {_short_text(setup.get('danger'), 220)}")
+    out["world_instability"] = list(dict.fromkeys(instability))[:12]
+
+    if focus and not out.get("story_focus"):
+        out["story_focus"] = focus[:8]
+
+    rel = str(content.get("relationships") or "none")
+    if rel and rel != "none":
+        threads = list(out.get("relationship_threads") or [])
+        threads.append({
+            "name": "social ecosystem",
+            "dynamic": rel,
+            "intensity": "medium",
+            "leverage": "affects NPC memory, faction reactions, trust, stress, delayed consequences, and material choices",
+        })
+        out["relationship_threads"] = threads[:8]
+
+    carried = setup.get("carried")
+    if carried and not out.get("inventory_objects"):
+        items = [x.strip() for x in re.split(r";|,", str(carried)) if x.strip()]
+        out["inventory_objects"] = [
+            {"object": item[:80], "qty": "1", "condition": "player-described", "location_state": "carried", "where": "on player at story start"}
+            for item in items[:10]
+        ]
+        out["object_locations"] = [
+            {"object": item[:80], "status": "carried", "where": "on player at story start", "turn_changed": 1}
+            for item in items[:10]
+        ]
+    return out
+
+
+_SEVERITY = {
+    "stable": 0,
+    "clear": 0,
+    "rested": 0,
+    "bruised": 1,
+    "tense": 1,
+    "tired": 1,
+    "wounded": 2,
+    "overloaded": 2,
+    "strained": 2,
+    "badly wounded": 3,
+    "distorted": 3,
+    "exhausted": 3,
+    "critical": 4,
+    "breaking": 4,
+    "collapsing": 4,
+}
+_RECOVERY_CUE_RE = re.compile(
+    r"\b(rest|sleep|treat|treated|bandage|splint|medicine|medic|heal|healing|"
+    r"stabilize|stabilise|calm|breathe|recover|sit\s+down|drink|eat|safe\s+place)\b",
+    re.IGNORECASE,
+)
+
+
+def _apply_state_supremacy(
+    session: Dict[str, Any], parsed: ParsedTurn, player_action: str
+) -> List[str]:
+    """Prevent tracked condition improvements that lack a causal recovery cue."""
+    prior = session.get("last_state") or {}
+    current = parsed.state or {}
+    text = f"{player_action}\n{parsed.narrative}"
+    allows_recovery = bool(_RECOVERY_CUE_RE.search(text))
+    adjustments: List[str] = []
+    for key in ("Health", "Fatigue"):
+        old = str(prior.get(key, "")).strip().lower()
+        new = str(current.get(key, "")).strip().lower()
+        if not old or not new or allows_recovery:
+            continue
+        if _SEVERITY.get(new, -1) < _SEVERITY.get(old, -1):
+            parsed.state[key] = prior[key]
+            adjustments.append(f"preserved_{key.lower()}:{prior[key]}")
+    return adjustments
+
+
+_ITEM_SPLIT_RE = re.compile(r";|,\s*(?=[A-Za-z])")
+_ITEM_STOP_WORDS = {
+    "the", "a", "an", "and", "with", "under", "over", "near", "inside", "outside",
+    "hidden", "damaged", "torn", "small", "large", "metal", "wooden", "broken",
+    "destroyed", "dropped", "consumed", "stored", "carried", "worn", "good", "bad",
+    "condition", "accessible", "sealed", "empty", "full", "half", "slightly", "crushed",
+}
+
+
+def _item_core(text: str) -> set:
+    raw = re.sub(r"\([^)]*\)", " ", text.lower())
+    words = re.findall(r"[a-z][a-z0-9-]{2,}", raw)
+    return {w.rstrip("s") for w in words if w not in _ITEM_STOP_WORDS}
+
+
+def _split_items(text: Any) -> List[str]:
+    return [x.strip() for x in _ITEM_SPLIT_RE.split(str(text or "")) if x.strip()]
+
+
+def _apply_object_permanence(parsed: ParsedTurn) -> List[str]:
+    """Heuristic guard: if an item is explicitly hidden/dropped/consumed/destroyed elsewhere, remove matching carried duplicate."""
+    ledger = parsed.ledger or {}
+    carried = _split_items(ledger.get("Carried"))
+    location_text = " ; ".join(
+        str(ledger.get(k, "")) for k in ("Stored", "Uncertain")
+    )
+    flagged = [
+        item for item in _split_items(location_text)
+        if re.search(r"\b(hidden|dropped|consumed|destroyed|lost)\b", item, re.IGNORECASE)
+    ]
+    if not carried or not flagged:
+        return []
+    filtered: List[str] = []
+    removed: List[str] = []
+    flagged_cores = [_item_core(x) for x in flagged]
+    for item in carried:
+        core = _item_core(item)
+        duplicate = any(len(core & fc) >= 2 for fc in flagged_cores if core and fc)
+        if duplicate:
+            removed.append(item)
+        else:
+            filtered.append(item)
+    if removed:
+        ledger["Carried"] = "; ".join(filtered) if filtered else "—"
+        parsed.ledger = ledger
+        return ["removed_duplicate_carried:" + " | ".join(removed[:4])]
+    return []
+
+
 # ======================================================================
 # MESSAGE BUILDER + LLM CALL
 # ======================================================================
@@ -901,6 +1143,19 @@ _ENGINE_TAG_IN_NARRATIVE_RE = re.compile(
     r"<\s*/?\s*(?:rolling_state|debug|prior_state|state|ledger|choices|scenario)\b",
     re.IGNORECASE,
 )
+_MECHANIC_WORD_RE = re.compile(
+    r"\b(?:d20|rolls?|rolled|rolling\s+for|modifiers?|hidden\s+mechanics?|"
+    r"invisible\s+mechanics?|delayed\s+triggers?|latent\s+triggers?|"
+    r"active\s+systems?|consequence\s+budget|pressure\s+horizon|"
+    r"scale\s+lock|world\s+tick|rolling\s+state|debug|developer\s+mode|"
+    r"simulation\s+engine|JSON)\b",
+    re.IGNORECASE,
+)
+_FAKE_CHOICE_RE = re.compile(
+    r"\b(?:not\s+allowed|not\s+yet|unavailable|locked|blocked|disabled|"
+    r"can(?:not|'t)\s+|won't\s+work|impossible\s+to)\b",
+    re.IGNORECASE,
+)
 
 
 def _validate_parsed(parsed: ParsedTurn) -> Tuple[bool, str]:
@@ -935,6 +1190,12 @@ def _validate_parsed(parsed: ParsedTurn) -> Tuple[bool, str]:
         return False, "engine tag leaked into narrative"
     if _LEAK_LABEL_RE.search(joined):
         return False, "mechanic label leaked into narrative"
+    if _MECHANIC_WORD_RE.search(joined):
+        return False, "mechanic terminology leaked into narrative"
+
+    for c in parsed.choices or []:
+        if _FAKE_CHOICE_RE.search(c.get("text") or ""):
+            return False, "fake or closed-off choice wording"
 
     return True, ""
 
@@ -947,6 +1208,7 @@ _RETRY_INSTRUCTION = (
     "(A. B. C. D. and optionally E. F.). "
     "Do NOT include any Roll / Modifiers / Final / Active systems / Delayed trigger / "
     "Latent trigger / Scale text anywhere outside the <debug> block. "
+    "Do NOT echo mechanic-probing words from the player (roll, modifier, trigger, hidden system, debug, simulation, JSON); translate the attempt into in-world uncertainty, suspicion, stress, superstition, or manipulation. "
     "Do NOT echo <prior_state>. Output ONLY the required tag blocks "
     "(<narrative>, <choices>, <state>, <ledger>, <rolling_state>"
     "{debug_clause}). Choices must cover meaningfully different intents — include a "
@@ -1323,6 +1585,7 @@ async def admin_list_models():
 async def new_story(req: NewStoryRequest):
     settings = await get_ai_settings()
     scenario = get_scenario(req.scenario_id) if req.scenario_id else None
+    custom_setup = req.custom_world_setup if not scenario else None
 
     # Scenario overrides win unless the client explicitly sent a different value
     if scenario:
@@ -1356,6 +1619,7 @@ async def new_story(req: NewStoryRequest):
         difficulty=effective_difficulty,
         debug_mode=req.debug_mode,
         custom_premise=effective_premise,
+        custom_world_setup=custom_setup,
         title=title,
         mode=effective_mode,
         scenario_id=req.scenario_id,
@@ -1376,6 +1640,10 @@ async def new_story(req: NewStoryRequest):
     ]
     if effective_premise:
         setup_lines.append(f"Premise hook: {effective_premise}")
+
+    custom_setup_block = _build_custom_world_setup_block(custom_setup)
+    if custom_setup_block:
+        setup_lines.append(custom_setup_block)
 
     if scenario:
         setup_lines.append("")
@@ -1429,11 +1697,15 @@ async def new_story(req: NewStoryRequest):
         await db.sessions.delete_one({"id": session.id})
         raise HTTPException(status_code=502, detail=f"Story engine error: {e}")
 
+    guard_adjustments = _apply_object_permanence(parsed)
     enriched_debug = _meta_into_debug(parsed.debug, meta)
+    if guard_adjustments:
+        enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
 
     # ---- Rolling Memory Compression v3.8 ----
     # Turn 1: no prior to merge from. Compression metrics for diagnostics only.
     merged_rolling = consolidate_rolling_state(None, parsed.rolling_state)
+    merged_rolling = _seed_custom_setup_into_rolling(merged_rolling, custom_setup)
     memory_depth = int(settings.get("memory_depth", DEFAULT_MEMORY_DEPTH))
     compression = compute_compression_metrics(
         turn_number=1,
@@ -1515,7 +1787,11 @@ async def story_action(req: ActionRequest):
         raise HTTPException(status_code=502, detail=f"Story engine error: {e}")
 
     next_turn_number = session.get("turn_count", 0) + 1
+    guard_adjustments = _apply_state_supremacy(session, parsed, req.action_text)
+    guard_adjustments.extend(_apply_object_permanence(parsed))
     enriched_debug = _meta_into_debug(parsed.debug, meta)
+    if guard_adjustments:
+        enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
 
     # ---- Rolling Memory Compression v3.8 ----
     prior_rolling = session.get("rolling_state")
