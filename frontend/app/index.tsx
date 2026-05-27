@@ -105,7 +105,7 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.heroWrap}>
-          <Animated.View style={[styles.heroGlow, glowStyle, { pointerEvents: "none" }]} />
+          <Animated.View style={[styles.heroGlow, glowStyle]} />
           <Animated.View style={heroStyle}>
             <Image source={{ uri: D20_IMAGE }} style={styles.hero} resizeMode="contain" />
           </Animated.View>
