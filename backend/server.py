@@ -369,9 +369,15 @@ ROOM AUDIT ON REVISIT:
   • If an object should be gone, say WHY in one phrase (e.g. "the bag you left is missing — boot prints lead away").
 
 NPC MEMORY + FACTION TICK (LIGHTWEIGHT, LOCAL):
-  • `npc_memory[*].remembers` entries SHOULD be tagged with a `severity` field: "major" (theft, violence, promise, betrayal, rescue, debt, witness) or "minor" (small talk, fleeting impression).
+  • Any time the player commits a memorable act toward a named or noticeable NPC, you MUST emit a `npc_memory` entry for that NPC, even briefly. Empty `npc_memory` after theft/violence/rescue/promise/betrayal is a hardening failure.
+  • `npc_memory[*].remembers[*]` is an OBJECT with `event` (string), `severity` ("major"|"minor"), and `since_turn` (integer). Tag major = theft, violence, promise, betrayal, rescue, debt, witness. Minor = small talk, glances.
   • Major entries persist indefinitely. Minor entries decay naturally over time and may be dropped.
   • Faction reactions stay LOCAL and PROPORTIONAL. Repeated theft raises local suspicion/prices; sustained violence increases guard attention in THIS settlement; a rescue improves cooperation NEARBY. Do NOT cascade globally without a named courier, rumour, or shared kin.
+  • WORKED EXAMPLE — after the player steals bread from a vendor named "Mira" on turn 6:
+      "npc_memory": [{"name": "Mira", "remembers": [{"event": "player stole bread from her stall", "severity": "major", "since_turn": 6}], "goal": "feed her children before dusk", "next_move": "tell the constable if she sees the player again"}]
+      "faction_pressure": [{"name": "Market Watch", "movement": "checking stalls for losses", "player_reputation": "unknown suspect"}]
+  • WORKED EXAMPLE — after the player rescues a child from a burning cart on turn 13:
+      "npc_memory": [{"name": "the rescued child", "remembers": [{"event": "player pulled them from the fire", "severity": "major", "since_turn": 13}], "goal": "find their parents", "next_move": "follow the player at a distance"}]
 
 ANTI-STAGNATION + CHOICE QUALITY:
   • Bias choices toward movement, survival, logistics, risk, negotiation, concealment, resource management, escape, investigation, faction interaction, or environmental action.
@@ -446,10 +452,10 @@ Output a compact JSON object. Compress, do not delete. Format:
   "object_locations": [{"object": "specific item", "status": "carried/worn/stored/hidden/dropped/consumed/destroyed/uncertain", "where": "exact in-world location", "turn_changed": 0}],
   "route_continuity": ["known exits, blocked routes, distances, maps, waypoints, route promises"],
   "npcs": [{"name": "name", "role": "what they are", "stance": "ally/neutral/hostile/unknown", "last_seen": "where", "note": "one-line memory"}],
-  "npc_memory": [{"name": "NPC", "remembers": ["specific player actions / lies / kindness / debts"], "goal": "active material goal", "next_move": "what they may do if ignored"}],
+  "npc_memory": [{"name": "NPC", "remembers": [{"event": "what the player did to them", "severity": "major|minor", "since_turn": <int>}], "goal": "active material goal", "next_move": "what they may do if ignored"}],
   "relationship_threads": [{"name": "NPC/faction", "dynamic": "trust/fear/attraction/debt/rivalry/dependency/suspicion", "intensity": "low/medium/high", "leverage": "how this can affect future choices"}],
   "factions": [{"name": "name", "pressure": "what they're doing this turn", "scale": "local/regional/systemic"}],
-  "faction_pressure": [{"name": "faction/group", "movement": "current independent action", "player_reputation": "how they perceive the player"}],
+  "faction_pressure": [{"name": "faction/group", "movement": "current independent action", "player_reputation": "how they perceive the player", "ticks": {"suspicion": 0, "guard_attention": 0, "goodwill": 0, "debt": 0}}],
   "pressure_horizon": {"immediate": "the threat landing this turn or next", "emerging": "the threat building 2-4 turns out", "latent": "the buried threat that will fire when conditions align"},
   "world_instability": ["environmental/logistical/economic/social conditions that advance without player input"],
   "simulation_hooks": ["setup-derived latent triggers, fears, leverage, relationship consequences, faction hooks"],
@@ -1380,6 +1386,116 @@ def _apply_faction_consequence_tick(
     return []
 
 
+# ==========================================================================
+# F1 (P1.5) — Rolling-state STRING-FIELD hygiene
+# ==========================================================================
+# The narrative validator catches meta phrases in the player-facing prose,
+# but the LLM can still bleed meta language into rolling_state STRING fields
+# (e.g. scene="...probing system boundaries", objectives=["Maintain
+# immersion"], recent_choice_signatures=["probe_system"]). These then re-enter
+# the prompt and subtly bias future turns. We strip them here, post-merge.
+
+# Fields scanned for meta leakage. Lists of strings AND scalar strings.
+_HYGIENE_STRING_FIELDS = (
+    "scene",
+    "character",
+    "world_clock",
+    "objectives",
+    "unresolved",
+    "recent_beats",
+    "recent_choice_signatures",
+    "active_pressures",
+    "simulation_hooks",
+    "world_instability",
+    "route_continuity",
+    "archived",
+)
+
+# State-field meta is broader than narrative meta. State strings often
+# describe game intent rather than world events, so we accept a wider net.
+# These patterns are scanned IN ADDITION to _MECHANIC_WORD_RE and
+# _SOFT_META_PHRASE_RE.
+_STATE_FIELD_META_RE = re.compile(
+    r"(?:"
+    r"\bsystem(?:s)?\s+boundar(?:y|ies)\b|"
+    r"\bsystem\s+boundaries\b|"
+    r"\bhidden\s+\w+\s+mechanic(?:s)?\b|"           # "hidden narrative mechanics"
+    r"\b(?:narrative|simulation|mechanical|immersion)\s+(?:concealment|protection|redirection|tension|mechanic(?:s)?|generator|boundary|hooks?|engine)\b|"
+    r"\b(?:probe|test|maintain|understand|preserve|conceal)_\w+\b|"  # signature-style snake_case
+    r"\bmaintain\s+immersion\b|\bimmersion\b|\bconcealment\b|"
+    r"\bnarrative\s+limits?\b|\bnarrative\s+sentinel\b|"
+    r"\btesting\s+(?:narrative|simulation|system|boundaries|limits)\b|"
+    r"\b(?:hidden|invisible|underlying|internal)\s+(?:narrative|mechanic|simulation|system|logic)\w*\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _scrub_meta_from_text(text: str) -> Tuple[str, int]:
+    """Replace meta/mechanic terms inside a string with `[…]` placeholders.
+
+    Returns ``(scrubbed_text, hit_count)``. Uses the same regexes that the
+    narrative validator uses PLUS a state-field-specific net so common
+    state-string meta phrasing is also caught.
+    """
+    if not text or not isinstance(text, str):
+        return text, 0
+    hits = 0
+
+    def _sub(match: "re.Match[str]") -> str:
+        nonlocal hits
+        hits += 1
+        return "[…]"
+
+    out = _MECHANIC_WORD_RE.sub(_sub, text)
+    out = _SOFT_META_PHRASE_RE.sub(_sub, out)
+    out = _STATE_FIELD_META_RE.sub(_sub, out)
+    # Collapse repeated placeholders and double-spaces left by substitution.
+    out = re.sub(r"(\[…\]\s*){2,}", "[…] ", out)
+    out = re.sub(r"\s{2,}", " ", out).strip()
+    return out, hits
+
+
+def _apply_rolling_state_hygiene(rolling_state: Dict[str, Any]) -> List[str]:
+    """Scrub meta language from rolling_state string fields. Mutates in place.
+
+    Bounded:
+      • Only touches the curated `_HYGIENE_STRING_FIELDS` list.
+      • Leaves non-string values untouched.
+      • Drops a list entry entirely if scrubbing leaves it empty.
+    """
+    if not isinstance(rolling_state, dict):
+        return []
+    total_hits = 0
+    fields_touched: List[str] = []
+    for key in _HYGIENE_STRING_FIELDS:
+        val = rolling_state.get(key)
+        if isinstance(val, str):
+            scrubbed, hits = _scrub_meta_from_text(val)
+            if hits:
+                rolling_state[key] = scrubbed
+                total_hits += hits
+                fields_touched.append(key)
+        elif isinstance(val, list):
+            new_list: List[Any] = []
+            field_hits = 0
+            for item in val:
+                if isinstance(item, str):
+                    scrubbed, hits = _scrub_meta_from_text(item)
+                    field_hits += hits
+                    if scrubbed and scrubbed != "[…]":
+                        new_list.append(scrubbed)
+                else:
+                    new_list.append(item)
+            if field_hits:
+                rolling_state[key] = new_list
+                total_hits += field_hits
+                fields_touched.append(key)
+    if total_hits:
+        return [f"rolling_state_hygiene:fields={','.join(fields_touched)};hits={total_hits}"]
+    return []
+
+
 
 # ======================================================================
 # MESSAGE BUILDER + LLM CALL
@@ -1628,16 +1744,20 @@ _FAKE_CHOICE_RE = re.compile(
 # --------------------------------------------------------------------------
 # P1-B — Direct Inspection Enforcement
 # --------------------------------------------------------------------------
-# Player verbs that demand a CONCRETE in-world resolution.
+# DEMAND verbs only — verbs that require a quantitative or itemized answer.
+# Weak verbs like "pick up", "handle", "read", "look at" produce legitimately
+# evocative prose without a count, so we exclude them to avoid false-positives
+# (regression: F3 from 20-turn live QA — "pick up the knife" was wrongly
+# flagged when prose contained a single unrelated hedge word).
 _INSPECTION_VERB_RE = re.compile(
-    r"\b(?:count|counts|open|opens|search|searches|"
-    r"check(?:s)?|examine(?:s)?|inspect(?:s)?|"
-    r"look\s+(?:inside|in|at|under|behind|through|into)|"
-    r"peek(?:s)?\s+(?:inside|in|under|behind|through|into)|"
-    r"peer(?:s)?\s+(?:inside|in|under|behind|through|into)|"
-    r"read(?:s)?|study(?:s|ies)?|scan(?:s)?|handle(?:s)?|"
-    r"pick(?:s)?\s+up|test(?:s)?|tally(?:s|ies)?|"
-    r"empty(?:s|ies)?\s+(?:out|the))\b",
+    r"\b(?:count|counts|counting|"
+    r"open|opens|opening|"
+    r"search|searches|searching|"
+    r"check(?:s|ing)?|examine(?:s|d|ing)?|inspect(?:s|ed|ing)?|"
+    r"tally(?:s|ies|ing)?|empty(?:s|ies|ing)?\s+(?:out|the)|"
+    r"peek(?:s|ed|ing)?\s+(?:inside|in|under|behind|through|into)|"
+    r"peer(?:s|ed|ing)?\s+(?:inside|in|under|behind|through|into)|"
+    r"look\s+(?:inside|in|under|behind|through|into))\b",
     re.IGNORECASE,
 )
 # Vague hedging phrases that should NOT appear when the player directly
@@ -2263,6 +2383,9 @@ async def new_story(req: NewStoryRequest):
         _apply_npc_memory_bounds(merged_rolling, current_turn=1)
     )
     guard_adjustments.extend(_apply_faction_consequence_tick(merged_rolling))
+    # F1 (P1.5) — strip meta leakage from rolling_state string fields so it
+    # cannot re-enter the prompt on subsequent turns.
+    guard_adjustments.extend(_apply_rolling_state_hygiene(merged_rolling))
     if guard_adjustments:
         enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
     memory_depth = int(settings.get("memory_depth", DEFAULT_MEMORY_DEPTH))
@@ -2368,6 +2491,9 @@ async def story_action(req: ActionRequest):
         _apply_npc_memory_bounds(merged_rolling, current_turn=next_turn_number)
     )
     guard_adjustments.extend(_apply_faction_consequence_tick(merged_rolling))
+    # F1 (P1.5) — strip meta leakage from rolling_state string fields so it
+    # cannot re-enter the prompt on subsequent turns.
+    guard_adjustments.extend(_apply_rolling_state_hygiene(merged_rolling))
     if guard_adjustments:
         enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
 
