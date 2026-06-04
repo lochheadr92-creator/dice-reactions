@@ -1386,6 +1386,162 @@ def _apply_faction_consequence_tick(
     return []
 
 
+_RUMOUR_MAX_CAP = 15
+_RUMOUR_MAX_HOPS = 6
+
+def _apply_delayed_consequence_tick(rolling_state: Dict[str, Any], current_turn: int) -> List[str]:
+    """P2 - Deterministic delayed consequence evaluation."""
+    if not isinstance(rolling_state, dict):
+        return []
+    
+    delayed = rolling_state.get("delayed_consequences")
+    if not isinstance(delayed, list):
+        return []
+
+    adjustments = []
+
+    # Calculate witness count from npc_memory
+    witness_count = 0
+    for npc in rolling_state.get("npc_memory", []):
+        if isinstance(npc, dict):
+            for mem in npc.get("remembers", []):
+                if isinstance(mem, dict):
+                    if "witness" in str(mem.get("event", "")).lower() or mem.get("severity") == "major":
+                        witness_count += 1
+                        break
+
+    for i, csq in enumerate(delayed):
+        if not isinstance(csq, dict):
+            continue
+            
+        if csq.get("state") == "fired":
+            continue
+
+        trigger = csq.get("trigger")
+        if not isinstance(trigger, dict):
+            continue
+            
+        condition = trigger.get("condition")
+        if not condition:
+            continue
+            
+        should_fire = False
+        
+        if condition == "fire_on_turn":
+            target = trigger.get("turn")
+            if isinstance(target, int) and current_turn >= target:
+                should_fire = True
+        elif condition == "witness_count>=N":
+            target = trigger.get("N")
+            if isinstance(target, int) and witness_count >= target:
+                should_fire = True
+
+        if should_fire:
+            csq["state"] = "fired"
+            csq["fired_turn"] = current_turn
+            
+            desc = csq.get("description") or csq.get("name") or "A delayed consequence has fired"
+            unresolved = rolling_state.get("unresolved")
+            if not isinstance(unresolved, list):
+                unresolved = []
+                rolling_state["unresolved"] = unresolved
+            unresolved.append(f"FIRED CONSEQUENCE: {desc}")
+            
+            adjustments.append(f"delayed_fired:{i}")
+
+    return adjustments
+
+
+def _apply_rumour_propagation_tick(rolling_state: Dict[str, Any], current_turn: int) -> List[str]:
+    """P2 - Factual rumour seeding and propagation."""
+    if not isinstance(rolling_state, dict):
+        return []
+    
+    rumours = rolling_state.get("rumours")
+    if not isinstance(rumours, list):
+        rumours = []
+        rolling_state["rumours"] = rumours
+        
+    adjustments = []
+
+    # 1. Seed rumours from major npc memory
+    for npc in rolling_state.get("npc_memory", []):
+        if not isinstance(npc, dict):
+            continue
+        for mem in npc.get("remembers", []):
+            if not isinstance(mem, dict):
+                continue
+            if mem.get("severity") == "major":
+                event = mem.get("event")
+                if not event:
+                    continue
+                
+                # Check if already seeded
+                is_seeded = any(r.get("seed_event") == event for r in rumours if isinstance(r, dict))
+                if not is_seeded:
+                    rumours.append({
+                        "summary": event,
+                        "seed_event": event,
+                        "spread_count": 0,
+                        "heat_level": 1,
+                        "delivered_factions": [],
+                        "witnesses": [npc.get("name", "Unknown")],
+                        "hops": 0,
+                        "last_propagated_turn": current_turn,
+                        "state": "active",
+                        "turn_seeded": current_turn,
+                        "original_severity": "major"
+                    })
+                    adjustments.append("rumour_seeded")
+
+    # 2. Propagate active rumours
+    for r in rumours:
+        if not isinstance(r, dict):
+            continue
+        if r.get("state") != "active":
+            continue
+        
+        # Idempotency check: only propagate once per turn
+        if r.get("last_propagated_turn") == current_turn:
+            continue
+            
+        r["last_propagated_turn"] = current_turn
+        r["hops"] = r.get("hops", 0) + 1
+        r["spread_count"] = r.get("spread_count", 0) + 1
+        r["heat_level"] = r.get("heat_level", 1) + 1
+        
+        # Deliver to one new faction
+        factions = rolling_state.get("faction_pressure")
+        if isinstance(factions, list):
+            delivered = r.get("delivered_factions", [])
+            for fac in factions:
+                if not isinstance(fac, dict):
+                    continue
+                fac_name = fac.get("name")
+                if fac_name and fac_name not in delivered:
+                    delivered.append(fac_name)
+                    r["delivered_factions"] = delivered
+                    
+                    # Update faction tick
+                    tick = fac.setdefault("ticks", {})
+                    if isinstance(tick, dict):
+                        tick["suspicion"] = tick.get("suspicion", 0) + 1
+                    adjustments.append(f"rumour_delivered:{fac_name}")
+                    break
+        
+        # Decay/Expire
+        if r["hops"] >= _RUMOUR_MAX_HOPS:
+            r["state"] = "expired"
+            adjustments.append("rumour_expired")
+            
+    # 3. Cap
+    if len(rumours) > _RUMOUR_MAX_CAP:
+        # Keep active first, then newest
+        rumours.sort(key=lambda x: (1 if x.get("state") == "active" else 0, x.get("turn_seeded", 0)), reverse=True)
+        rolling_state["rumours"] = rumours[:_RUMOUR_MAX_CAP]
+        adjustments.append("rumours_capped")
+
+    return adjustments
 # ==========================================================================
 # F1 (P1.5) — Rolling-state STRING-FIELD hygiene
 # ==========================================================================
@@ -2383,6 +2539,8 @@ async def new_story(req: NewStoryRequest):
         _apply_npc_memory_bounds(merged_rolling, current_turn=1)
     )
     guard_adjustments.extend(_apply_faction_consequence_tick(merged_rolling))
+    guard_adjustments.extend(_apply_delayed_consequence_tick(merged_rolling, current_turn=1))
+    guard_adjustments.extend(_apply_rumour_propagation_tick(merged_rolling, current_turn=1))
     # F1 (P1.5) — strip meta leakage from rolling_state string fields so it
     # cannot re-enter the prompt on subsequent turns.
     guard_adjustments.extend(_apply_rolling_state_hygiene(merged_rolling))
@@ -2491,6 +2649,8 @@ async def story_action(req: ActionRequest):
         _apply_npc_memory_bounds(merged_rolling, current_turn=next_turn_number)
     )
     guard_adjustments.extend(_apply_faction_consequence_tick(merged_rolling))
+    guard_adjustments.extend(_apply_delayed_consequence_tick(merged_rolling, current_turn=next_turn_number))
+    guard_adjustments.extend(_apply_rumour_propagation_tick(merged_rolling, current_turn=next_turn_number))
     # F1 (P1.5) — strip meta leakage from rolling_state string fields so it
     # cannot re-enter the prompt on subsequent turns.
     guard_adjustments.extend(_apply_rolling_state_hygiene(merged_rolling))
