@@ -3,7 +3,7 @@ from pathlib import Path
 import json
 
 # Add backend dir to path so we can import server.py functions
-sys.path.append(str(Path(__file__).parent.parent))
+sys.path.append(str(Path('/app/backend')))
 
 from server import _apply_delayed_consequence_tick, _apply_rumour_propagation_tick
 
@@ -226,6 +226,70 @@ def run_tests():
     except Exception as e:
         print(f"❌ 12. save/load compatible JSON shape FAILED: {e}")
         raise
+
+    # ---------------------------------------------------------
+    # TEST 13: Scoped witness_count fires when enough NPC memories match the same subject/tag.
+    # ---------------------------------------------------------
+    rs = {
+        "delayed_consequences": [
+            {
+                "description": "Tavern mob",
+                "trigger": {"condition": "witness_count>=N", "N": 2},
+                "subject": "tavern_fire",
+                "state": "pending"
+            }
+        ],
+        "npc_memory": [
+            {"name": "Alice", "remembers": [{"event": "saw fire", "severity": "major", "subject": "Tavern_Fire"}]},
+            {"name": "Bob", "remembers": [{"event": "saw smoke", "severity": "major", "subject": "tavern_fire"}]}
+        ]
+    }
+    adj = _apply_delayed_consequence_tick(rs, 1)
+    assert "delayed_fired:0" in adj[0], "Test 13 failed: Should fire with 2 scoped witnesses"
+    print("✅ 13. Scoped witness_count fires when enough NPC memories match the same subject/tag")
+
+    # ---------------------------------------------------------
+    # TEST 14: Scoped witness_count does not fire when NPCs only remember unrelated major events.
+    # ---------------------------------------------------------
+    rs = {
+        "delayed_consequences": [
+            {
+                "description": "Tavern mob",
+                "trigger": {"condition": "witness_count>=N", "N": 2},
+                "subject": "tavern_fire",
+                "state": "pending"
+            }
+        ],
+        "npc_memory": [
+            {"name": "Alice", "remembers": [{"event": "saw fire", "severity": "major", "subject": "tavern_fire"}]},
+            {"name": "Bob", "remembers": [{"event": "saw theft", "severity": "major", "subject": "market_theft"}]},
+            {"name": "Charlie", "remembers": [{"event": "saw murder", "severity": "major"}]}
+        ]
+    }
+    adj = _apply_delayed_consequence_tick(rs, 1)
+    assert not adj, "Test 14 failed: Should not fire because only 1 scoped witness exists"
+    print("✅ 14. Scoped witness_count does not fire when NPCs only remember unrelated major events")
+
+    # ---------------------------------------------------------
+    # TEST 15: Legacy unscoped witness_count still works as before.
+    # ---------------------------------------------------------
+    rs = {
+        "delayed_consequences": [
+            {
+                "description": "General mob",
+                "trigger": {"condition": "witness_count>=N", "N": 2},
+                "state": "pending"
+            }
+        ],
+        "npc_memory": [
+            {"name": "Alice", "remembers": [{"event": "player killed guard", "severity": "major"}]},
+            {"name": "Bob", "remembers": [{"event": "saw player sneak", "severity": "major"}]}
+        ]
+    }
+    adj = _apply_delayed_consequence_tick(rs, 1)
+    assert "delayed_fired:0" in adj[0], "Test 15 failed: Should fire with legacy unscoped witnesses"
+    print("✅ 15. Legacy unscoped witness_count still works as before")
+
 
     print("\nAll synthetic tests passed successfully! 🎉")
 
