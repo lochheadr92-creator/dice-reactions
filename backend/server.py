@@ -452,7 +452,7 @@ Output a compact JSON object. Compress, do not delete. Format:
   "object_locations": [{"object": "specific item", "status": "carried/worn/stored/hidden/dropped/consumed/destroyed/uncertain", "where": "exact in-world location", "turn_changed": 0}],
   "route_continuity": ["known exits, blocked routes, distances, maps, waypoints, route promises"],
   "npcs": [{"name": "name", "role": "what they are", "stance": "ally/neutral/hostile/unknown", "last_seen": "where", "note": "one-line memory"}],
-  "npc_memory": [{"name": "NPC", "remembers": [{"event": "what the player did to them", "severity": "major|minor", "since_turn": <int>}], "goal": "active material goal", "next_move": "what they may do if ignored"}],
+  "npc_memory": [{"name": "NPC", "remembers": [{"event": "what the player did to them", "severity": "major|minor", "since_turn": 0, "subject": "optional tag"}], "goal": "active material goal", "next_move": "what they may do if ignored"}],
   "relationship_threads": [{"name": "NPC/faction", "dynamic": "trust/fear/attraction/debt/rivalry/dependency/suspicion", "intensity": "low/medium/high", "leverage": "how this can affect future choices"}],
   "factions": [{"name": "name", "pressure": "what they're doing this turn", "scale": "local/regional/systemic"}],
   "faction_pressure": [{"name": "faction/group", "movement": "current independent action", "player_reputation": "how they perceive the player", "ticks": {"suspicion": 0, "guard_attention": 0, "goodwill": 0, "debt": 0}}],
@@ -1400,16 +1400,6 @@ def _apply_delayed_consequence_tick(rolling_state: Dict[str, Any], current_turn:
 
     adjustments = []
 
-    # Calculate witness count from npc_memory
-    witness_count = 0
-    for npc in rolling_state.get("npc_memory", []):
-        if isinstance(npc, dict):
-            for mem in npc.get("remembers", []):
-                if isinstance(mem, dict):
-                    if "witness" in str(mem.get("event", "")).lower() or mem.get("severity") == "major":
-                        witness_count += 1
-                        break
-
     for i, csq in enumerate(delayed):
         if not isinstance(csq, dict):
             continue
@@ -1433,8 +1423,40 @@ def _apply_delayed_consequence_tick(rolling_state: Dict[str, Any], current_turn:
                 should_fire = True
         elif condition == "witness_count>=N":
             target = trigger.get("N")
-            if isinstance(target, int) and witness_count >= target:
-                should_fire = True
+            if isinstance(target, int):
+                # Calculate scoped witness_count
+                scope_key = None
+                scope_val = None
+                for key in ["tag", "subject", "theme", "event_type"]:
+                    val = csq.get(key)
+                    if val is None:
+                        val = trigger.get(key)
+                    if val is not None:
+                        scope_key = key
+                        scope_val = str(val).strip().lower()
+                        break
+                        
+                local_witness_count = 0
+                for npc in rolling_state.get("npc_memory", []):
+                    if not isinstance(npc, dict):
+                        continue
+                    for mem in npc.get("remembers", []):
+                        if not isinstance(mem, dict):
+                            continue
+                        
+                        if scope_key:
+                            mem_val = mem.get(scope_key)
+                            if mem_val is not None and str(mem_val).strip().lower() == scope_val:
+                                local_witness_count += 1
+                                break
+                        else:
+                            # Legacy fallback
+                            if "witness" in str(mem.get("event", "")).lower() or mem.get("severity") == "major":
+                                local_witness_count += 1
+                                break
+
+                if local_witness_count >= target:
+                    should_fire = True
 
         if should_fire:
             csq["state"] = "fired"
