@@ -13,7 +13,7 @@ import {
 } from "react-native";
 import { useRouter, useFocusEffect } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import Animated, { useSharedValue, useAnimatedStyle, withRepeat, withTiming, Easing } from "react-native-reanimated";
+import Animated, { useSharedValue, useAnimatedStyle, withRepeat, withTiming, cancelAnimation, Easing } from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONTS } from "../src/theme";
 import { getDeviceId } from "../src/storage";
@@ -34,6 +34,14 @@ export default function HomeScreen() {
   useEffect(() => {
     float.value = withRepeat(withTiming(1, { duration: 3200, easing: Easing.inOut(Easing.ease) }), -1, true);
     glow.value = withRepeat(withTiming(1, { duration: 2400, easing: Easing.inOut(Easing.ease) }), -1, true);
+    // Cancel the infinite animations when this screen unmounts. Orphaned
+    // withRepeat animations on detached native views are a known cause of
+    // Android-native ArrayIndexOutOfBoundsException crashes (the frame-callback
+    // node array keeps an index for a view that no longer exists).
+    return () => {
+      cancelAnimation(float);
+      cancelAnimation(glow);
+    };
   }, [float, glow]);
 
   const heroStyle = useAnimatedStyle(() => ({
