@@ -19,6 +19,7 @@ import { COLORS, FONTS } from "../src/theme";
 import { getDeviceId, getSettings } from "../src/storage";
 import { newStory, listScenarios, Scenario, CustomWorldSetup } from "../src/api";
 import { friendlyError } from "../src/errors";
+import { clampIndex } from "../src/sanitize";
 
 type Genre = {
   key: string;
@@ -166,7 +167,8 @@ export default function NewStoryScreen() {
 
   const updateSeedAnswer = (index: number, value: string) => {
     const answers = [...(customSetup.seedAnswers || ["", "", ""] )];
-    answers[index] = value;
+    const safeIndex = clampIndex(index, answers.length, 0);
+    answers[safeIndex] = value;
     setSetupField({ seedAnswers: answers });
   };
 

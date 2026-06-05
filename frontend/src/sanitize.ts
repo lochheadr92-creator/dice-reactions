@@ -123,6 +123,27 @@ export function sanitizeParagraphs(
 }
 
 /**
+ * Defensive index clamp. Guarantees a returned integer in [0, length - 1]
+ * regardless of NaN, negative, out-of-range, or non-numeric input. Returns
+ * the fallback (default 0) when the collection is empty.
+ *
+ * Use this anywhere an index is derived from saved state, route params, or
+ * selected items before it is handed to a native indexed call. Prevents the
+ * class of `ArrayIndexOutOfBoundsException` crashes seen on Android.
+ */
+export function clampIndex(
+  value: unknown,
+  length: number,
+  fallback = 0,
+): number {
+  const len = Number.isFinite(length) ? Math.floor(length) : 0;
+  if (len <= 0) return fallback;
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n)) return Math.max(0, Math.min(fallback, len - 1));
+  return Math.max(0, Math.min(n, len - 1));
+}
+
+/**
  * Filter the A-F choices so empty / placeholder slots are removed.
  */
 export function sanitizeChoices<T extends { label: string; text: string }>(
