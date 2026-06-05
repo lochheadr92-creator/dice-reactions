@@ -63,6 +63,12 @@ export default function PlayScreen() {
   const [mode, setMode] = useState<"basic" | "advanced">("advanced");
   const [devUnlocked, setDevUnlocked] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
+  // Scroll orchestration. After a turn is appended (or on initial load) we want
+  // to land at the TOP of the newest turn — the start of the narration — not at
+  // the bottom of the content and not on the choices. We record the newest
+  // turn's y-offset on layout and scroll exactly once when a scroll is pending.
+  const pendingScrollRef = useRef<null | boolean>(null); // null = no scroll, boolean = animated?
+  const latestTurnYRef = useRef(0);
 
   // Read developer unlock state on mount (defaults to false until user has
   // completed the 7-tap unlock in Settings → ABOUT).
@@ -86,6 +92,8 @@ export default function PlayScreen() {
       const res = await getSession(sessionId);
       setSession(res.session);
       setTurns(res.turns);
+      // On initial load, land at the start of the most recent turn (no animation).
+      pendingScrollRef.current = false;
       setDebugMode(res.session.debug_mode);
       setMode(((res.session as any).mode as "basic" | "advanced") || "advanced");
     } catch (e) {
@@ -99,11 +107,6 @@ export default function PlayScreen() {
     load();
   }, [load]);
 
-  useEffect(() => {
-    const t = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 120);
-    return () => clearTimeout(t);
-  }, [turns.length]);
-
   const submit = async (text: string) => {
     if (!text.trim() || submitting) return;
     setSubmitting(true);
@@ -114,6 +117,8 @@ export default function PlayScreen() {
         debug_mode: debugMode,
       });
       setTurns((prev) => [...prev, res.turn]);
+      // Request a scroll to the TOP of this newly generated turn (animated).
+      pendingScrollRef.current = true;
       setCustomAction("");
     } catch (e: any) {
       const { title, message } = friendlyError(e);
@@ -233,8 +238,32 @@ export default function PlayScreen() {
           showsVerticalScrollIndicator={false}
           testID="story-scroll"
         >
-          {turns.map((turn, i) => (
-            <View key={turn.id} style={styles.turnBlock}>
+          {turns.map((turn, i) => {
+            const isLatest = i === turns.length - 1;
+            return (
+            <View
+              key={turn.id}
+              style={styles.turnBlock}
+              onLayout={
+                isLatest
+                  ? (e) => {
+                      const y = e.nativeEvent.layout.y;
+                      latestTurnYRef.current = y;
+                      if (pendingScrollRef.current !== null) {
+                        const animated = pendingScrollRef.current;
+                        pendingScrollRef.current = null;
+                        // Land a touch above the turn's top so the first line of
+                        // narration sits at the top of the viewport. rAF lets the
+                        // layout settle before scrolling (works on web + Android).
+                        const targetY = Math.max(0, y - 10);
+                        requestAnimationFrame(() => {
+                          scrollRef.current?.scrollTo({ y: targetY, animated });
+                        });
+                      }
+                    }
+                  : undefined
+              }
+            >
               {turn.player_action ? (
                 <View style={styles.playerActionRow}>
                   <Text style={styles.playerActionLabel}>›</Text>
@@ -300,7 +329,8 @@ export default function PlayScreen() {
 
               {i < turns.length - 1 && <View style={styles.turnDivider} />}
             </View>
-          ))}
+            );
+          })}
 
           {/* Choices for latest turn */}
           {visibleChoices.length > 0 && (
