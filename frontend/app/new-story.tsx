@@ -87,6 +87,37 @@ const GENRES: Genre[] = [
   },
 ];
 
+// ---------------------------------------------------------------------------
+// World Themes — defensive normalisation.
+//
+// The card UI requires a guaranteed `label`/`tagline`/`image`. We normalise
+// each source object so the list still renders correctly even if a field is
+// renamed (name/title/displayName/description/cover/etc.) or missing. This
+// prevents blank rows caused by undefined fields.
+// ---------------------------------------------------------------------------
+type WorldTheme = { key: string; label: string; tagline: string; image: string };
+
+function normalizeTheme(raw: any, idx: number): WorldTheme {
+  const pick = (...vals: any[]) => {
+    for (const v of vals) {
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+    return "";
+  };
+  const key = pick(raw?.key, raw?.id, raw?.value, raw?.slug) || `theme-${idx}`;
+  const label = pick(raw?.label, raw?.name, raw?.title, raw?.displayName) || "Untitled Theme";
+  const tagline = pick(raw?.tagline, raw?.description, raw?.subtitle, raw?.tag);
+  const image = pick(raw?.image, raw?.imageUrl, raw?.image_url, raw?.cover, raw?.thumbnail);
+  return { key, label, tagline, image };
+}
+
+const WORLD_THEMES: WorldTheme[] = GENRES.map(normalizeTheme);
+
+if (__DEV__) {
+  // One-time visibility into theme shape — helps diagnose blank-row issues.
+  console.log("[new-story] world themes sample:", WORLD_THEMES.slice(0, 3));
+}
+
 const TONES = ["cinematic", "grim", "hopeful", "bleak", "mythic", "grounded"];
 const DIFFICULTIES = ["soft", "standard", "hard", "brutal"] as const;
 const PRESSURE_OPTIONS = ["starvation", "infection", "war", "predators", "political collapse", "insanity", "extreme weather", "AI surveillance", "supernatural corruption", "scarcity", "civil unrest"];
@@ -279,7 +310,7 @@ export default function NewStoryScreen() {
           <Text style={styles.stepHelp}>Each world unlocks its own systems, pressures, and textures.</Text>
 
           <View style={styles.grid}>
-            {GENRES.map((g) => {
+            {WORLD_THEMES.map((g) => {
               const active = genre === g.key;
               return (
                 <TouchableOpacity
@@ -289,12 +320,20 @@ export default function NewStoryScreen() {
                   activeOpacity={0.8}
                   testID={`genre-${g.key}`}
                 >
-                  <Image source={{ uri: g.image }} style={styles.genreImage} />
+                  {g.image ? (
+                    <Image source={{ uri: g.image }} style={styles.genreImage} />
+                  ) : (
+                    <View style={[styles.genreImage, styles.genreImageFallback]}>
+                      <Ionicons name="planet-outline" size={30} color={COLORS.textMuted} />
+                    </View>
+                  )}
                   <View style={styles.genreOverlay} />
                   {active && <View style={styles.genreActiveRing} />}
                   <View style={styles.genreTextWrap}>
-                    <Text style={styles.genreTitle}>{g.label}</Text>
-                    <Text style={styles.genreTag} numberOfLines={2}>{g.tagline}</Text>
+                    <Text style={styles.genreTitle} numberOfLines={1}>{g.label || "Untitled Theme"}</Text>
+                    {g.tagline ? (
+                      <Text style={styles.genreTag} numberOfLines={2}>{g.tagline}</Text>
+                    ) : null}
                   </View>
                 </TouchableOpacity>
               );
@@ -584,6 +623,7 @@ const styles = StyleSheet.create({
   genreCard: {
     width: "48.5%",
     aspectRatio: 0.95,
+    minHeight: 160,
     borderWidth: 1,
     borderColor: COLORS.border,
     overflow: "hidden",
@@ -594,6 +634,11 @@ const styles = StyleSheet.create({
     borderColor: COLORS.primary,
   },
   genreImage: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, width: "100%", height: "100%" },
+  genreImageFallback: {
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.surfaceDeep,
+  },
   genreOverlay: {
     position: "absolute",
     top: 0,
