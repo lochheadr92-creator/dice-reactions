@@ -47,6 +47,7 @@ PROTECTED_LIST_KEYS = (
     "clues",
     "known_rooms",  # P1-C — persistent room state for revisit reconciliation
     "deceased",     # Ch 31 — engine-owned death registry (never resurrect)
+    "relationship_vectors",  # Ch 29 — engine-owned NPC→player relationship vectors
 )
 
 # Keys where the model is authoritative each turn (it actively prunes them).

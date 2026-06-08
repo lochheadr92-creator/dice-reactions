@@ -268,3 +268,61 @@ def test_destruction_registry_end_to_end():
     lantern3 = [r for r in t3_locs if "lantern" in str(r.get("object", "")).lower()]
     assert lantern3 and lantern3[0]["status"] == "destroyed", f"lantern revived: {t3_locs}"
     assert "iron lantern" not in str(t3["ledger"].get("Carried", "")).lower()
+
+
+# ---------------------------------------------------------------------------
+# Relationship Calculus e2e (Ch 29) — helping an NPC raises trust in state
+# ---------------------------------------------------------------------------
+_RC1 = _raw(
+    "In the ash-choked plaza you meet Mira, a wary scavenger eyeing your pack.",
+    {"scene": "plaza", "npcs": [{"name": "Mira", "stance": "neutral"}]},
+    {"Carried": "knife"},
+)
+_RC2 = _raw(
+    "You help Mira to her feet and shield her from the falling debris.",
+    {"npcs": [{"name": "Mira", "stance": "neutral"}]},
+    {"Carried": "knife"},
+)
+
+
+def test_relationship_calculus_end_to_end():
+    scripts = [_RC1, _RC2]
+    call = {"n": 0}
+
+    async def fake_chat(**kwargs):
+        content = scripts[min(call["n"], len(scripts) - 1)]
+        call["n"] += 1
+        return {"content": content, "model_used": "test", "model_requested": "test",
+                "telemetry": {"provider": "test"}, "fallback_events": [], "attempts_per_model": {}}
+
+    original = gateway.invoke_llm
+    gateway.invoke_llm = fake_chat
+    device_id = f"e2e-rel-{uuid.uuid4()}"
+
+    async def scenario():
+        session_id = None
+        try:
+            new_res = await server.new_story(server.NewStoryRequest(
+                device_id=device_id, genre="post-apocalyptic", role="scavenger",
+                difficulty="standard", debug_mode=True, mode="advanced"))
+            session_id = new_res["session_id"]
+            await server.story_action(server.ActionRequest(
+                session_id=session_id, action_text="help Mira to her feet and shield her", debug_mode=True))
+            t2 = await server.db.turns.find_one(
+                {"session_id": session_id, "turn_number": 2}, {"_id": 0})
+            return t2
+        finally:
+            if session_id:
+                await server.db.turns.delete_many({"session_id": session_id})
+                await server.db.sessions.delete_one({"id": session_id})
+
+    try:
+        t2 = _run(scenario)
+    finally:
+        gateway.invoke_llm = original
+
+    vectors = t2["rolling_state"].get("relationship_vectors", [])
+    mira = [v for v in vectors if v.get("name") == "Mira"]
+    assert mira, f"no relationship vector for Mira: {vectors}"
+    assert mira[0]["trust"] > 0, f"helping did not raise trust: {mira[0]}"
+    assert "rel:" in t2["debug"].get("state_guard_adjustments", "")

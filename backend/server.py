@@ -46,6 +46,7 @@ from memory import (  # noqa: E402
     canonicalize_object_registry,
 )
 import gateway  # noqa: E402  — Anti-Hallucination Gateway (Ch 31)
+import relationships  # noqa: E402  — Relationship Calculus (Ch 29)
 
 import json as _json  # noqa: E402
 
@@ -1758,12 +1759,17 @@ async def _build_messages(
         # Ch 31.11 — preventive half of the Anti-Hallucination Gateway: tell the
         # model the engine-authoritative facts it may not contradict.
         truth_block = gateway.build_immutable_truth_block(rolling)
+        rel_block = relationships.build_relationship_block(rolling)
         prior_state_block = (
             "<prior_state>\n"
             + _json.dumps(rolling, indent=2, ensure_ascii=False)
             + "\n</prior_state>\n\n"
         )
-        prefix = (truth_block + "\n\n") if truth_block else ""
+        prefix = ""
+        if truth_block:
+            prefix += truth_block + "\n\n"
+        if rel_block:
+            prefix += rel_block + "\n\n"
         user_text = prefix + prior_state_block + user_text
 
     messages.append({"role": "user", "content": user_text})
@@ -2620,6 +2626,10 @@ async def new_story(req: NewStoryRequest):
     guard_adjustments.extend(
         gateway.update_destruction_registry(parsed, None, merged_rolling, None)
     )
+    # Ch 29 — seed NPC→player relationship vectors from the opening scene.
+    guard_adjustments.extend(
+        relationships.update_relationship_calculus(parsed, None, merged_rolling, None, 1)
+    )
     if guard_adjustments:
         enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
     memory_depth = int(settings.get("memory_depth", DEFAULT_MEMORY_DEPTH))
@@ -2750,6 +2760,12 @@ async def story_action(req: ActionRequest):
     guard_adjustments.extend(
         gateway.update_destruction_registry(
             parsed, prior_rolling, merged_rolling, req.action_text
+        )
+    )
+    # Ch 29 — recompute NPC→player relationship vectors (engine-owned).
+    guard_adjustments.extend(
+        relationships.update_relationship_calculus(
+            parsed, prior_rolling, merged_rolling, req.action_text, next_turn_number
         )
     )
     if guard_adjustments:
