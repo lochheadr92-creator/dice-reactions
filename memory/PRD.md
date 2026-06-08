@@ -1,83 +1,198 @@
-# Dice Reaction Story Engine — Current-State PRD
+# Dice Reaction Story Engine — Source-of-Truth Conformance Tracker
 
-## Problem Statement
-Build and maintain the **DICE REACTION STORY ENGINE — Fused Master Runtime**, a persistent causal D20 story simulation for Expo mobile. The player should experience an immersive living world while internal mechanics, debug payloads, rolling memory, and provider diagnostics remain hidden from the normal play view.
+> **Authority:** `Source of Truth 1–32` (Living World Simulation Bible, v1.0, Canonical).
+> This file is NOT the bible. It tracks how far the running app conforms to each
+> chapter, chapter-by-chapter. The bible wins every conflict.
 
-## Confirmed Architecture
-- **Frontend**: Expo SDK 54 + Expo Router mobile app.
-  - `app/index.tsx`: home screen, save slots, settings entry.
-  - `app/new-story.tsx`: scenario/genre intake, role, tone, difficulty, mode, premise.
-  - `app/play/[id].tsx`: chronicle reader, state chips, objective bar, choices, custom action, ledger modal, gated diagnostics.
-  - `src/sanitize.ts`: presentation filter for leaked engine tags/mechanic lines.
-  - `src/api.ts`: API client using `EXPO_PUBLIC_BACKEND_URL + /api`.
-- **Backend**: FastAPI + MongoDB + OpenRouter.
-  - `server.py`: story routes, validation/retry pipeline, runtime governance prompt, player/dev sanitization, diagnostics endpoints.
-  - `ai_service.py`: OpenRouter chat-completions integration with retry/fallback telemetry.
-  - `ai_config.py`: model routing, fallback chain, token budgets, low-cost/runtime settings.
-  - `memory.py`: rolling memory consolidation and context budget trimming.
-- **Persistence**: MongoDB stores `sessions` and `turns`; device identity is stored client-side via AsyncStorage.
+## Prime Doctrine (the lens for everything below)
+- **Ch 31:** *"The LLM writes prose. The engine writes truth."* The LLM must never
+  decide outcomes, choose NPC actions, or mutate state — only render prose.
+- **Ch 3 / Ch 2:** State is truth; simulation first, narrative second.
+- **Reality of this app today:** the LLM still invents narrative + state + choices each
+  turn; the backend applies deterministic *guards/ticks* on top. This is the inverse of
+  Ch 31 and is being corrected **incrementally** (agreed approach — no full rebuild yet).
 
-## Implemented Runtime Capabilities
-- Player-facing rendering sanitizer removes raw JSON/debug/mechanic leaks from the main chronicle view.
-- Runtime Governance v3.6: anti-loop rules, forward pressure, topic ledger, active pressures, choice freshness.
-- Output format validation: backend enforces 2–4 short paragraphs, 4–6 A–F choices, and retries once on invalid output.
-- Narrative Immersion Governor: prompt rules prevent system/tutorial-style exposition in prose.
-- AI Routing v3.7: OpenRouter default model is `anthropic/claude-3-5-haiku`; fallback chain is Haiku → Sonnet → Mythomax; telemetry is persisted in dev diagnostics.
-- Rolling Memory Compression v3.8: session-level `rolling_state` is consolidated turn-to-turn while preserving unresolved causal state.
-- Context Budget Governor v3.9: pre-call prompt budget estimation/trimming protects recent turns and authoritative state.
-- Lightweight Custom World setup: selecting Custom World opens a concise 6-part ignition flow for world concept, player origin, active pressures, story focus, intensity/social settings, and seed questions.
-- Custom setup persistence: setup answers are stored as canonical simulation seed data and injected into protected rolling-state hooks including `simulation_hooks`, `world_instability`, `story_focus`, `relationship_threads`, `inventory_objects`, and `object_locations`.
-- Relationship/social settings are integrated as persistent systems affecting NPC memory, faction reaction, stress/trust/leverage, delayed consequences, and material behavior rather than isolated flavor toggles.
-- State Supremacy guard: deterministic backend guard prevents uncaused Health/Fatigue improvements against tracked prior state.
-- Object Permanence guard: deterministic backend guard reduces duplicate carried-vs-hidden/dropped/consumed/destroyed item contradictions and seeds object locations independently from inventory objects.
-- Runtime hardening prompt rules added for failure doctrine, world momentum, NPC realism, compression hardening, mechanic concealment, anti-stagnation, and choice quality.
+## Runtime facts (current)
+- Stack: Expo SDK 54 + Expo Router · FastAPI · MongoDB · OpenRouter.
+- Active model: `cognitivecomputations/dolphin-mistral-24b-venice-edition:free`
+  (kept intentionally cheap until architecture is more compliant). ⚠️ Currently
+  rate-limited upstream (HTTP 429) and auto-falling back to `anthropic/claude-3-5-haiku`.
+- Fallback chain: haiku → claude-3-5-sonnet → mythomax.
+- Key backend modules: `server.py` (routes + guards + prompt), `ai_service.py`
+  (OpenRouter client), `ai_config.py` (routing), `memory.py` (rolling-state
+  consolidation/compression/budget), `gateway.py` (**Anti-Hallucination Gateway, Ch 31**).
 
-## Confirmed Current Settings
-- Provider: OpenRouter.
-- Active model: `anthropic/claude-3-5-haiku`.
-- Fallback models: `anthropic/claude-3-5-haiku`, `anthropic/claude-3-5-sonnet`, `gryphe/mythomax-l2-13b`.
-- Current max output tokens: `1536`.
-- Current history window: `22`.
-- Current memory depth: `3`.
-- Current default mode: `advanced`.
-- Current compression level: `standard`.
-- Current backend developer mode: `true`.
+## Status legend
+- ❌ None — not implemented.
+- 🟡 Partial — LLM-driven with deterministic guard(s), not a true engine.
+- 🟢 Conformant — deterministic engine owns this truth.
+- 🔵 Active — currently being built.
 
-## Verification Completed — 2026-05-27
-- Backend health passed locally: `/api/health` returned `status=ok`, `llm_configured=true`, `provider=openrouter`.
-- Admin/runtime endpoints passed locally: `/api/admin/settings` and `/api/admin/runtime` returned expected model, fallback, memory, and context budget data.
-- Story runtime passed a 3-turn live OpenRouter verification using Haiku:
-  - Turn 1: 2 paragraphs, 4 choices, valid state/ledger, no narrative mechanic leaks.
-  - Turn 2: 2 paragraphs, 5 choices, valid persistence.
-  - Turn 3: 2 paragraphs, 5 choices, valid persistence.
-  - Session retrieval confirmed `turn_count=3`, turns sorted `[1,2,3]`, and `rolling_state` present with expected continuity keys.
-  - Diagnostics confirmed active model `anthropic/claude-3-5-haiku`, no model fallback, context under budget, no trimming required in this short run.
-- Preview health passed in browser automation at `https://chronicle-runtime.preview.emergentagent.com`.
-- Play screen rendering passed in browser automation: generated chronicle displayed no visible `DEBUG`, `ROLLING`, `Roll:`, `Modifiers:`, `<rolling_state>`, or `<debug>` terms in the normal player view.
-- Test sessions created during verification were deleted afterward.
+---
 
-## Verification Completed — Custom World Upgrade
-- TypeScript check passed: `yarn tsc --noEmit`.
-- Python lint passed for backend app code.
-- Python compile passed for backend runtime modules.
-- Backend regression suite passed: `30 passed`.
-- Independent testing agent verified frontend Custom World setup visibility, all six sections, chip/input interactions, custom story start, preset-flow regression, and mechanic-concealment probe.
-- Blocking issue found by testing agent was fixed: `object_locations` now seeds/merges independently when custom carried items exist, even if the model already produced `inventory_objects`.
-- Frontend preview was verified after restart; Custom World setup renders and remains interactive.
-- Expo/RN web still emits a development console warning about deprecated `pointerEvents`, but app source no longer contains `pointerEvents`; warning appears to originate from framework/runtime internals and did not block UI testing.
+## ✅ Increment log
+- **Inc-1 (Ch 31 — Anti-Hallucination Gateway):** `gateway.py` added.
+  - PREVENT: `build_immutable_truth_block` injects established facts (destroyed/consumed
+    objects, dead NPCs, ongoing wounds) into the prompt as "do not contradict".
+  - STRIP: `strip_illegal_state_changes` reverts terminal-object revival, silent injury
+    resolution/improvement (no recovery cue), and deceased-NPC revival — on the FRESH
+    parsed turn before consolidation. Removes revived items from the player ledger.
+  - DETECT: `detect_prose_contradictions` flags prose that uses a destroyed/consumed
+    object as intact or shows a dead NPC speaking/acting → triggers a correction
+    re-prompt (`_HALLUCINATION_RETRY_INSTRUCTION`) via `_full_validate`.
+  - REGISTRY: `update_death_registry` records clear NPC deaths into engine-owned
+    `rolling_state.deceased` (now a PROTECTED_LIST_KEY, never resurrected).
+  - Tests: `tests/test_anti_hallucination_gateway.py` (13 passing).
 
-## Observations / Regressions
-- No runtime-breaking regressions found.
-- Expo preview is currently functional, but `expo.err.log` contains repeated historical tunnel errors (`Cannot read properties of undefined (reading 'body')`, `Premature close`). Current browser preview still loaded successfully.
-- Static lint tooling is not currently clean:
-  - Python lint flags one existing test-only style issue in `backend/tests/test_story_engine.py` (`E741 ambiguous variable name`).
-  - The generic JavaScript lint tool failed to parse TypeScript/TSX files, so it is not a reliable signal for this Expo project as configured.
-- Existing `backend/tests/test_story_engine.py` is outdated against the current OpenRouter/Haiku implementation and should not be treated as the current source of truth without updating assertions.
+---
 
-## Backlog
-- **P0**: None confirmed.
-- **P1**: Run a fresh 20+ turn hostile stress test against the upgraded runtime to verify state supremacy, object permanence, and anti-stagnation behavior under adversarial play.
-- **P1**: Run a 15+ turn stress chronicle to confirm rolling compression activates after memory depth and context budget diagnostics remain stable.
-- **P1**: Test provider fallback deliberately with an invalid/disabled primary model, then restore Haiku.
-- **P2**: Add a dedicated in-app long-run diagnostics summary for dev-unlocked sessions.
-- **P2**: Add a share/export-friendly chronicle summary view for memorable runs.
+## Conformance table (Ch 1–32)
+
+### Ch 1 — Living World Doctrine
+- Required: world has independent motion, persistent memory, resource movement, pressure.
+- Status: 🟡 (world_instability / faction / rumour ticks simulate light independent motion).
+- Gap: no true off-screen world heartbeat; motion is prompt-driven + light ticks.
+- Plan: later — World Heartbeat (Ch 5) engine.
+- Priority: P3. Test: Dead World Test (Ch 32.5) automated — not yet.
+
+### Ch 2 — Simulation First Philosophy
+- Required: causality/consequence outrank narrative; emergence over script.
+- Status: 🟡 (prompt rules + consequence/rumour ticks).
+- Gap: narrative still authored by LLM, not derived from sim.
+- Plan: shrinks as engine systems land. Priority: P3. Test: anti-script audit.
+
+### Ch 3 — State Is Truth
+- Required: state is authoritative; nothing changes without a tracked cause.
+- Status: 🟡 (state-supremacy guard for Health/Fatigue; gateway adds objects/injuries/deaths).
+- Gap: many state fields still trust the LLM.
+- Plan: extend gateway strip to more tracked fields. Priority: **P1**.
+- Test: gateway unit tests + adversarial revival/heal probes.
+
+### Ch 4 — The Simulation Loop (validate→context→resolve→consequence)
+- Required: hidden D20 resolution; validation of action legality.
+- Status: 🟡 (hidden D20 in prompt/debug; format validation; direct-inspection guard).
+- Gap: resolution decided by LLM prose, not engine. Plan: P2. Test: resolution audit.
+
+### Ch 5 — World Heartbeat Architecture
+- Required: micro/local/regional/macro ticks advancing the world.
+- Status: ❌ (no real heartbeat; per-turn ticks only).
+- Plan: P3 engine. Test: off-screen change over N ticks.
+
+### Ch 6 — Pressure Ecology
+- Required: pressures generate/relieve/cascade.
+- Status: 🟡 (`active_pressures`, `pressure_horizon`, faction_pressure in rolling_state).
+- Gap: not numeric/cascading. Plan: P3. Test: pressure propagation.
+
+### Ch 7 — Settlement Organism Theory
+- Required: settlements with food/wealth/security/stability variables.
+- Status: ❌. Plan: P3 (depends on World Genesis). Test: settlement variance.
+
+### Ch 8 — Resource Flow Theory
+- Required: resources move/deplete/renew.
+- Status: ❌ (object inventory only, no economy). Plan: P3. Test: flow audit.
+
+### Ch 9 — Information Theory
+- Required: information spreads as rumours with distortion.
+- Status: 🟡 (`_apply_rumour_propagation_tick`). Gap: not graph-based. Plan: P3.
+- Test: rumour reaches NPC after N turns.
+
+### Ch 10 — NPC Architecture
+- Required: NPCs with identity, drives, goals, memory, relationships.
+- Status: 🟡 (`npc_memory`, `npcs`, goals/next_move in rolling_state).
+- Gap: no numeric drives/utility. Plan: feeds Ch 27/29. Priority: P2.
+
+### Ch 11 — Goal Systems
+- Required: goal hierarchy (core→life→strategic→operational→action).
+- Status: 🟡 (single `goal` per NPC). Gap: no hierarchy. Plan: P3.
+
+### Ch 12 — Memory Systems
+- Required: weighted memories that decay/compress.
+- Status: 🟡 (`npc_memory` severity + decay bounds; rolling compression).
+- Gap: no retrieval probability. Plan: feeds Ch 28. Priority: P2.
+
+### Ch 13 — Relationship Systems
+- Required: relationships as histories.
+- Status: 🟡 (`relationship_threads` qualitative). Gap: not the 4-vector. Plan: Ch 29. P2.
+
+### Ch 14 — Stress & Breaking Point Systems
+- Required: numeric stress driving behaviour/breaks.
+- Status: ❌ (Fatigue chip only). Plan: P3. Test: stress→behaviour.
+
+### Ch 15 — Social Structures / Ch 16 — Reputation / Ch 17 — Faction Architecture
+- Required: groups, reputation grounded in interactions, factions act.
+- Status: 🟡 (`faction_pressure` ticks: suspicion/guard_attention/goodwill/debt).
+- Gap: reputation not derived from relationship calculus. Plan: P3.
+
+### Ch 18 — Consequence Ledger / Ch 19 — Delayed Consequences
+- Required: consequences tracked + fire later.
+- Status: 🟡 (`active_consequences`/`delayed_consequences`/`latent_triggers` protected;
+  `_apply_delayed_consequence_tick`). Gap: heuristic firing. Plan: P2. Test: delayed fire.
+
+### Ch 20 — Context Gravity / Ch 26 — Gravity Governance Layer
+- Required: single retention score governs keep/compress/archive/forget.
+- Status: ❌ (ad-hoc compression in `memory.py`; no unified retention score).
+- Plan: **candidate next increment** (unifies memory/compression). Priority: P2.
+- Test: Governance Test (Ch 26.11) — retention bands trigger correct action.
+
+### Ch 21 — Scar Theory / Ch 22 — Event Sourcing / Ch 23 — Historical Layering
+- Required: permanent scars; every state change traceable to an event; legends.
+- Status: ❌ (turns stored, but not an event-sourced reconstructable log).
+- Plan: P3 (large). Test: Event Sourcing Test (Ch 32.7).
+
+### Ch 24 — Discovery Architecture
+- Required: player assembles clues; engine never hands the solution.
+- Status: 🟡 (`clues`/`topic_ledger`). Plan: P3.
+
+### Ch 25 — Actor Resolution Scaling
+- Required: Hero/Active/Relevant/Dormant/Archived tiers.
+- Status: ❌ (all NPCs treated equally). Plan: P3. Test: Actor Resolution Test (32.8).
+
+### Ch 27 — NPC Decision Engine (Utility AI)
+- Required: deterministic utility AI chooses NPC actions (NOT the LLM).
+- Status: ❌ (NPC behaviour authored by LLM). Plan: P2 (high doctrine value).
+- Test: Decision Engine Test (32.3) — starving NPC eats.
+
+### Ch 28 — Memory Retrieval System
+- Required: probabilistic recency/emotion/cue retrieval into working memory.
+- Status: ❌. Plan: P3 (after Ch 27). Test: Memory Retrieval Test (32.3).
+
+### Ch 29 — Relationship Calculus
+- Required: trust/loyalty/fear/resentment 4-vector with decay + events.
+- Status: ❌ (qualitative threads only). Plan: **strong candidate** P2.
+- Test: Relationship Calculus Test (32.4) — betrayal damages trust+loyalty, raises resentment.
+
+### Ch 30 — World Genesis & Burn-In
+- Required: pre-played history before player enters.
+- Status: 🟡 (Custom World setup seeds hooks/instability; no burn-in sim).
+- Plan: P3 (large). Test: World Genesis Test (32.11).
+
+### Ch 31 — LLM Architecture & Integration  🔵→🟡
+- Required: LLM = prose only; anti-hallucination gateway validates against state.
+- Status: 🟡 (**Inc-1 done**: truth injection + strip + detect + death registry +
+  correction re-prompt). LLM still authors state proposals (stripped/validated, not yet
+  fully engine-owned).
+- Gap: knowledge-boundary + action-assertion checks; gateway as the *only* LLM caller.
+- Plan: next sub-increments. Priority: **P1**. Test: `tests/test_anti_hallucination_gateway.py`
+  + live adversarial probes (revive destroyed item / resurrect dead NPC).
+
+### Ch 32 — Simulation Testing Framework
+- Required: every doctrine becomes an automated, deterministic test.
+- Status: 🟡 (pytest suites: custom world, story engine, **gateway**; live QA scripts).
+- Gap: no Dead/Living/Event-Sourcing/Governance world tests.
+- Plan: grow alongside each engine increment. Priority: P2.
+
+---
+
+## Backlog / next candidate increments (in priority order)
+1. **P1 — Ch 31 sub-increments:** route ALL LLM calls through the gateway; add
+   knowledge-boundary + action-assertion checks; expand strip coverage (Ch 3).
+2. **P2 — Ch 29 Relationship Calculus:** numeric trust/loyalty/fear/resentment vector
+   maintained by the engine, fed from interaction events. Highest emergent-behaviour ROI.
+3. **P2 — Ch 26 Gravity Governance:** unify retention scoring; replace ad-hoc compression.
+4. **P2 — Ch 27 Utility AI:** deterministic NPC action selection.
+5. **P3 — Ch 25 Actor Resolution, Ch 5 Heartbeat, Ch 30 Burn-In, Ch 22 Event Sourcing.**
+
+## Verification status
+- `tests/test_anti_hallucination_gateway.py`: 13 passing (unit).
+- `tests/test_custom_world_system.py`: 7 passing (live).
+- Live end-to-end gateway probe (revive/resurrect): **pending testing_agent run.**

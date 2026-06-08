@@ -47,6 +47,7 @@ from memory import (  # noqa: E402
     estimate_messages_tokens,
     canonicalize_object_registry,
 )
+import gateway  # noqa: E402  — Anti-Hallucination Gateway (Ch 31)
 
 import json as _json  # noqa: E402
 
@@ -1755,12 +1756,16 @@ async def _build_messages(
 
     # Inject the compressed rolling state IMMEDIATELY before the new user turn
     if rolling:
+        # Ch 31.11 — preventive half of the Anti-Hallucination Gateway: tell the
+        # model the engine-authoritative facts it may not contradict.
+        truth_block = gateway.build_immutable_truth_block(rolling)
         prior_state_block = (
             "<prior_state>\n"
             + _json.dumps(rolling, indent=2, ensure_ascii=False)
             + "\n</prior_state>\n\n"
         )
-        user_text = prior_state_block + user_text
+        prefix = (truth_block + "\n\n") if truth_block else ""
+        user_text = prefix + prior_state_block + user_text
 
     messages.append({"role": "user", "content": user_text})
     return messages
@@ -2057,6 +2062,39 @@ _RETRY_INSTRUCTION = (
     "social/communication option where the scene supports it."
 )
 
+# Ch 31.5 — correction re-prompt when prose contradicts engine-authoritative truth.
+_HALLUCINATION_RETRY_INSTRUCTION = (
+    "[TRUTH_VIOLATION: {reason}]\n"
+    "Your narrative contradicted established, FINAL facts of this world. "
+    "Rewrite the response so it does NOT contradict them: a destroyed or consumed "
+    "object is gone forever (it cannot be held, used, drawn, worn, or found intact); "
+    "a dead character cannot speak, move, or act (reference them only as a corpse, "
+    "memory, or absence). Keep the same scene, tone, and continuity, but obey the "
+    "established truth. Output ONLY the required tag blocks (<narrative>, <choices>, "
+    "<state>, <ledger>, <rolling_state>{debug_clause}). Do NOT echo <prior_state> or "
+    "<established_truth>."
+)
+
+
+def _full_validate(
+    parsed: ParsedTurn,
+    session: Dict[str, Any],
+    player_action: Optional[str],
+) -> Tuple[bool, str, str]:
+    """Format validation first, then Anti-Hallucination prose check.
+
+    Returns ``(ok, reason, kind)`` where kind ∈ {"format", "hallucination", "ok"}.
+    """
+    ok, reason = _validate_parsed(parsed, player_action=player_action)
+    if not ok:
+        return False, reason, "format"
+    contradictions = gateway.detect_prose_contradictions(
+        session.get("rolling_state"), parsed, player_action
+    )
+    if contradictions:
+        return False, "; ".join(contradictions[:3]), "hallucination"
+    return True, "", "ok"
+
 
 async def _generate_validated_turn(
     session: Dict[str, Any], user_text: str,
@@ -2069,14 +2107,19 @@ async def _generate_validated_turn(
     """
     raw, meta = await _generate_turn(session, user_text)
     parsed = parse_turn(raw)
-    ok, reason = _validate_parsed(parsed, player_action=player_action)
+    ok, reason, kind = _full_validate(parsed, session, player_action)
     if ok:
         return parsed, raw, meta
 
     dev_on = "[DEV_MODE: ON]" in user_text
     debug_clause = ", <debug>" if dev_on else ""
-    retry_note = _RETRY_INSTRUCTION.format(reason=reason, debug_clause=debug_clause)
-    logger.info("Turn validation failed (%s) — retrying once", reason)
+    if kind == "hallucination":
+        retry_note = _HALLUCINATION_RETRY_INSTRUCTION.format(
+            reason=reason, debug_clause=debug_clause
+        )
+    else:
+        retry_note = _RETRY_INSTRUCTION.format(reason=reason, debug_clause=debug_clause)
+    logger.info("Turn validation failed (%s/%s) — retrying once", kind, reason)
 
     # Build a proper conversation: original history + bad output + corrective user turn.
     settings = await get_ai_settings()
@@ -2143,7 +2186,7 @@ async def _generate_validated_turn(
         result2["budget"] = retry_budget_diag
         raw2 = result2["content"]
         parsed2 = parse_turn(raw2)
-        ok2, reason2 = _validate_parsed(parsed2, player_action=player_action)
+        ok2, reason2, kind2 = _full_validate(parsed2, session, player_action)
 
         combined_meta: Dict[str, Any] = {
             "model_used": result2["model_used"],
@@ -2153,6 +2196,7 @@ async def _generate_validated_turn(
             + list(result2.get("fallback_events") or []),
             "attempts_per_model": result2.get("attempts_per_model"),
             "validation_retried": True,
+            "validation_retry_kind": kind,
             "validation_first_fail": reason,
             "validation_second_fail": None if ok2 else reason2,
             "budget": result2.get("budget"),
@@ -2162,7 +2206,8 @@ async def _generate_validated_turn(
             return parsed2, raw2, combined_meta
 
         logger.warning(
-            "Retry still invalid (%s) — using best-available output",
+            "Retry still invalid (%s/%s) — using best-available output",
+            kind2,
             reason2,
         )
         if len(parsed2.choices or []) > len(parsed.choices or []):
@@ -2220,6 +2265,8 @@ def _meta_into_debug(
         debug["fallback_reason"] = str(fe[-1].get("reason") or "")
     if meta.get("validation_retried"):
         debug["validation_retried"] = "yes"
+    if meta.get("validation_retry_kind"):
+        debug["validation_retry_kind"] = str(meta["validation_retry_kind"])
     if meta.get("validation_first_fail"):
         debug["validation_first_fail"] = str(meta["validation_first_fail"])
     if meta.get("validation_second_fail"):
@@ -2566,6 +2613,10 @@ async def new_story(req: NewStoryRequest):
     # F1 (P1.5) — strip meta leakage from rolling_state string fields so it
     # cannot re-enter the prompt on subsequent turns.
     guard_adjustments.extend(_apply_rolling_state_hygiene(merged_rolling))
+    # Ch 31 — record any NPC deaths introduced in the opening scene.
+    guard_adjustments.extend(
+        gateway.update_death_registry(parsed, None, merged_rolling, None)
+    )
     if guard_adjustments:
         enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
     memory_depth = int(settings.get("memory_depth", DEFAULT_MEMORY_DEPTH))
@@ -2651,10 +2702,19 @@ async def story_action(req: ActionRequest):
     next_turn_number = session.get("turn_count", 0) + 1
     guard_adjustments = _apply_state_supremacy(session, parsed, req.action_text)
     guard_adjustments.extend(_apply_object_permanence(parsed))
+
+    # ---- Anti-Hallucination Gateway (Ch 31) — STRIP illegal mutations ----
+    # Runs on the FRESH parsed turn (pre-consolidation) so corrected truth
+    # feeds rolling-state consolidation below.
+    prior_rolling = session.get("rolling_state")
+    guard_adjustments.extend(
+        gateway.strip_illegal_state_changes(
+            prior_rolling, session.get("last_state"), parsed, req.action_text
+        )
+    )
     enriched_debug = _meta_into_debug(parsed.debug, meta)
 
     # ---- Rolling Memory Compression v3.8 ----
-    prior_rolling = session.get("rolling_state")
     merged_rolling = consolidate_rolling_state(prior_rolling, parsed.rolling_state)
 
     # P0 — ledger-wide cross-category dedup using the post-consolidation
@@ -2676,6 +2736,12 @@ async def story_action(req: ActionRequest):
     # F1 (P1.5) — strip meta leakage from rolling_state string fields so it
     # cannot re-enter the prompt on subsequent turns.
     guard_adjustments.extend(_apply_rolling_state_hygiene(merged_rolling))
+    # Ch 31 — record any NPC deaths this turn into the engine death registry.
+    guard_adjustments.extend(
+        gateway.update_death_registry(
+            parsed, prior_rolling, merged_rolling, req.action_text
+        )
+    )
     if guard_adjustments:
         enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
 
