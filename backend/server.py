@@ -331,6 +331,7 @@ STATE SUPREMACY:
 OBJECT PERMANENCE:
   • Every tracked object may occupy only one valid location state at a time: carried, worn, stored, hidden, dropped, consumed, destroyed, or uncertain.
   • If an item is consumed/destroyed/dropped/hidden, remove it from carried inventory unless explicitly recovered later.
+  • When an item is irreversibly destroyed or used up, KEEP it in object_locations under its ORIGINAL name with status "destroyed" or "consumed" — never rename it to "fragments/ash/powder/remains" or silently delete it to dodge tracking. A destroyed/consumed item is gone forever and can never be carried, used, worn, or found intact again.
   • Do not duplicate map fragments, radios, weapons, medicine, water, food, keys, money, ammo, tools, or evidence across locations.
   • Ledger and rolling_state object_locations must agree.
 
@@ -2617,6 +2618,10 @@ async def new_story(req: NewStoryRequest):
     guard_adjustments.extend(
         gateway.update_death_registry(parsed, None, merged_rolling, None)
     )
+    # Ch 31 — record any items destroyed/consumed in the opening scene.
+    guard_adjustments.extend(
+        gateway.update_destruction_registry(parsed, None, merged_rolling, None)
+    )
     if guard_adjustments:
         enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
     memory_depth = int(settings.get("memory_depth", DEFAULT_MEMORY_DEPTH))
@@ -2739,6 +2744,13 @@ async def story_action(req: ActionRequest):
     # Ch 31 — record any NPC deaths this turn into the engine death registry.
     guard_adjustments.extend(
         gateway.update_death_registry(
+            parsed, prior_rolling, merged_rolling, req.action_text
+        )
+    )
+    # Ch 31 — record destroyed/consumed items as terminal object truth even when
+    # the model renames or silently drops them instead of marking status.
+    guard_adjustments.extend(
+        gateway.update_destruction_registry(
             parsed, prior_rolling, merged_rolling, req.action_text
         )
     )

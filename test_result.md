@@ -390,3 +390,20 @@ agent_communication:
       NOT yet done (next Ch 31 sub-increments): knowledge-boundary + action-assertion
       checks; making the gateway the sole LLM caller. Live adversarial e2e (real model)
       not run — deterministic e2e covers the logic.
+
+  - agent: "main"
+    message: |
+      INCREMENT 1b — Destruction/Consumption Registry (fix for live-probe CRITICAL).
+      Live probe (iteration_3) found the real model NEVER emits status=destroyed/consumed;
+      it RENAMES destroyed items ("iron lantern"→"lantern fragments") or silently drops
+      consumed items, so gateway.build_truth().terminal_objects was empty against the live
+      model. Added gateway.update_destruction_registry(): detects (a) rename-shaped
+      destruction (husk rows like *fragments/ash/powder or destroyed-style condition whose
+      base identity matches a known object) and (b) verb-based destroy/consume in prose with
+      an intent/hypothetical guard, then writes a terminal object_locations row under the
+      ORIGINAL identity and drops the husk. Wired into both routes after consolidation.
+      Added a system-prompt rule telling the model to mark destroyed/consumed under the
+      original name. Tests: gateway unit suite now 19 passing (6 new destruction tests),
+      e2e 2 passing incl. a 3-turn rename→destroy→revive-blocked pipeline test
+      (test_gateway_e2e.py::test_destruction_registry_end_to_end). Re-running live probe
+      for object tests 1/2/5 next; model still dolphin-mistral until probe confirms.

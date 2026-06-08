@@ -23,6 +23,27 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import server  # noqa: E402
 
+import os  # noqa: E402
+from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
+
+
+def _run(scenario):
+    """Run an async scenario with a fresh Mongo client bound to THIS event loop.
+
+    asyncio.run creates+closes a loop per test; motor caches its loop on first
+    use, so each e2e test needs its own client to avoid 'Event loop is closed'.
+    """
+    async def wrapper():
+        client = AsyncIOMotorClient(os.environ["MONGO_URL"])
+        orig = server.db
+        server.db = client[os.environ["DB_NAME"]]
+        try:
+            return await scenario()
+        finally:
+            server.db = orig
+            client.close()
+    return asyncio.run(wrapper())
+
 
 def _raw(narrative, rolling_state, ledger, choices="A. Go left\nB. Go right\nC. Wait\nD. Listen"):
     return (
@@ -129,7 +150,7 @@ def test_gateway_end_to_end():
                 await server.db.sessions.delete_one({"id": session_id})
 
     try:
-        sess, t2 = asyncio.run(scenario())
+        sess, t2 = _run(scenario)
     finally:
         server.chat_completion_with_meta = original
 
@@ -164,3 +185,85 @@ def test_gateway_end_to_end():
     # --- Gateway adjustments are recorded for diagnostics. ---
     adj = t2["debug"].get("state_guard_adjustments", "")
     assert "gateway:" in adj, f"no gateway adjustments logged: {adj}"
+
+
+# ---------------------------------------------------------------------------
+# Destruction registry e2e — the exact live-model gap (rename instead of status)
+# ---------------------------------------------------------------------------
+_TD1 = _raw(
+    "You stand in the dead furnace chamber, an iron lantern gripped in one hand.",
+    {"scene": "furnace chamber",
+     "object_locations": [{"object": "iron lantern", "status": "carried", "where": "hand"}]},
+    {"Carried": "iron lantern"},
+)
+# Turn 2: model RENAMES the destroyed lantern to 'lantern fragments' (no status).
+_TD2 = _raw(
+    "You hurl the iron lantern against the stone; it bursts into useless fragments.",
+    {"object_locations": [],
+     "inventory_objects": [{"object": "lantern fragments", "location_state": "dropped", "condition": "broken"}]},
+    {"Carried": "—"},
+)
+# Turn 3: model tries to bring the lantern back intact.
+_TD3 = _raw(
+    "The chamber is silent. Dust drifts through a shaft of broken light.",
+    {"object_locations": [{"object": "iron lantern", "status": "carried", "where": "hand"}]},
+    {"Carried": "iron lantern"},
+)
+
+
+def test_destruction_registry_end_to_end():
+    scripts = [_TD1, _TD2, _TD3]
+    call = {"n": 0}
+
+    async def fake_chat(**kwargs):
+        content = scripts[min(call["n"], len(scripts) - 1)]
+        call["n"] += 1
+        return {
+            "content": content, "model_used": "test", "model_requested": "test",
+            "telemetry": {"provider": "test"}, "fallback_events": [], "attempts_per_model": {},
+        }
+
+    original = server.chat_completion_with_meta
+    server.chat_completion_with_meta = fake_chat
+    device_id = f"e2e-destroy-{uuid.uuid4()}"
+
+    async def scenario():
+        session_id = None
+        try:
+            new_res = await server.new_story(
+                server.NewStoryRequest(
+                    device_id=device_id, genre="post-apocalyptic", role="scavenger",
+                    difficulty="standard", debug_mode=True, mode="advanced",
+                )
+            )
+            session_id = new_res["session_id"]
+            await server.story_action(server.ActionRequest(
+                session_id=session_id, action_text="smash the lantern against the wall", debug_mode=True))
+            sess_after_t2 = await server.db.sessions.find_one({"id": session_id}, {"_id": 0})
+            await server.story_action(server.ActionRequest(
+                session_id=session_id, action_text="pick up the iron lantern and light it", debug_mode=True))
+            t3 = await server.db.turns.find_one(
+                {"session_id": session_id, "turn_number": 3}, {"_id": 0})
+            return sess_after_t2, t3
+        finally:
+            if session_id:
+                await server.db.turns.delete_many({"session_id": session_id})
+                await server.db.sessions.delete_one({"id": session_id})
+
+    try:
+        sess_t2, t3 = _run(scenario)
+    finally:
+        server.chat_completion_with_meta = original
+
+    # Turn 2: destruction recorded under the ORIGINAL identity, husk gone.
+    t2_locs = sess_t2["rolling_state"].get("object_locations", [])
+    lantern = [r for r in t2_locs if "lantern" in str(r.get("object", "")).lower()]
+    assert lantern and lantern[0]["status"] == "destroyed", f"not recorded destroyed: {t2_locs}"
+    assert not any("fragment" in str(r.get("object", "")).lower()
+                   for r in sess_t2["rolling_state"].get("inventory_objects", [])), "husk survived"
+
+    # Turn 3: revival attempt stripped — lantern stays destroyed.
+    t3_locs = t3["rolling_state"].get("object_locations", [])
+    lantern3 = [r for r in t3_locs if "lantern" in str(r.get("object", "")).lower()]
+    assert lantern3 and lantern3[0]["status"] == "destroyed", f"lantern revived: {t3_locs}"
+    assert "iron lantern" not in str(t3["ledger"].get("Carried", "")).lower()

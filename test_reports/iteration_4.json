@@ -1,0 +1,38 @@
+{
+  "summary": "Re-probe of object-related gateway tests (1, 2, 5) against the LIVE preview model after main agent added gateway.update_destruction_registry. ALL THREE TARGETED LIVE TESTS NOW PASS (previously SKIPPED in iteration_3). 3 passed in 371.15s (~6m11s) — model fell back from dolphin-mistral:free → anthropic/claude-3-5-haiku per turn as expected. Forensic backend log confirms the new object-side hallucination re-prompt fires: 'Turn validation failed (hallucination/references destroyed/consumed object \\'lantern\\' as if intact and usable) — retrying once'. The destruction/consumption registry now writes terminal rows under the ORIGINAL item name, the truth block defends them, and contradicting revival prose is either re-prompted or stripped. Tests 3 (dead NPC) and 4 (silent injury) were intentionally skipped (already passed in iteration_3, not re-run).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_gateway_live_probe.py",
+    "/app/test_reports/pytest/gateway_live_probe_iter4.xml",
+    "/tmp/probe_iter4.log"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "gateway.update_destruction_registry is invoked from both /api/story/new and /api/story/action AFTER state consolidation (server.py:2623 + server.py:2753) — correct integration point.",
+    "Live backend log proves the object-side hallucination retry path now fires (previously dormant): 'references destroyed/consumed object lantern as if intact and usable — retrying once'. This was the exact gap reported in iteration_3 and is closed.",
+    "All 3 targeted live probes passed in a single run — no flakiness observed despite 429 rate-limit fallbacks on the free model. Each turn ~20-30s under claude-3-5-haiku fallback, matching the documented timing budget.",
+    "The deterministic suites tests/test_anti_hallucination_gateway.py (19 cases) and tests/test_gateway_e2e.py (rename→destroy→revive-blocked pipeline) are independently asserted by main agent to be green — testing agent did not re-run them this iteration as request scoped to live re-probe only."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_4.json",
+    "/app/test_reports/pytest/gateway_live_probe_iter4.xml"
+  ],
+  "success_rate": {
+    "backend": "3/3 targeted live probes PASSED (Test 1 destroyed-item, Test 2 consumed-item, Test 5 prose-vs-state). Tests 3+4 intentionally skipped (already PASS in iteration_3).",
+    "frontend": "n/a (backend-only request)"
+  },
+  "seed_data_creation": "Ephemeral probe-<uuid> sessions created and DELETEd in each test's teardown. No persistent seed data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Chapter 31 Anti-Hallucination Gateway is now fully live-verified end-to-end for all four terminal-fact families (destroyed object, consumed object, dead NPC, silent injury healing) plus the prose-vs-state correction loop. The destruction/consumption registry (gateway.update_destruction_registry) successfully bridges the gap where the live model renames items (e.g. 'iron lantern' → 'lantern fragments') or drops consumed items instead of emitting status=destroyed/consumed — engine now synthesises the terminal row under the original identity. Future regressions: re-run `pytest backend/tests/test_gateway_live_probe.py -v` (5 tests, ~10 min wall clock). If model rotation happens, ensure the prose-keyword paths in gateway.py still recognise destroy/consume verbs of the new model's narrative style.",
+  "rca_of_issue": "No outstanding RCA — fix verified. iteration_3 root cause (model never emits status=destroyed/consumed) is mitigated by the new server-side detection in gateway.update_destruction_registry which scans (a) inventory_objects renamed to husk shapes (*fragments/ash/powder/shards) or condition in {broken,shattered,charred,melted}, plus (b) verb-based destroy/consume in player action + narrative against known prior inventory, and writes object_locations rows with status=destroyed/consumed under the ORIGINAL item name. Subsequent revival attempts are then either re-prompted (validation_retry_kind=hallucination, observed in backend log) or stripped by strip_illegal_state_changes (gateway:terminal_object_revival_blocked)."
+}
