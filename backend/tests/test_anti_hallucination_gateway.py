@@ -180,3 +180,79 @@ def test_no_prior_state_is_safe():
     parsed = _Parsed(narrative="You grab the brass lantern and run.")
     assert gateway.detect_prose_contradictions(None, parsed, "run") == []
     assert gateway.strip_illegal_state_changes(None, None, parsed, "run") == []
+
+
+# ---------------------------------------------------------------------------
+# update_destruction_registry — the live-model gap (rename / drop instead of status)
+# ---------------------------------------------------------------------------
+def _terminal_status(merged, needle):
+    for r in merged.get("object_locations", []):
+        if needle in str(r.get("object", "")).lower():
+            return r.get("status")
+    return None
+
+
+def test_destruction_registry_handles_rename_to_fragments():
+    # Model renamed "iron lantern" -> "lantern fragments" in inventory only.
+    prior = {"object_locations": [{"object": "iron lantern", "status": "carried"}]}
+    merged = {
+        "object_locations": [{"object": "iron lantern", "status": "carried"}],
+        "inventory_objects": [
+            {"object": "lantern fragments", "location_state": "dropped", "condition": "broken"}
+        ],
+    }
+    parsed = _Parsed(narrative="The lantern bursts apart against the wall.")
+    adj = gateway.update_destruction_registry(parsed, prior, merged, "smash the lantern")
+    assert _terminal_status(merged, "lantern") == "destroyed"
+    # Husk row removed from inventory.
+    assert not any("fragment" in str(r.get("object", "")).lower()
+                   for r in merged.get("inventory_objects", []))
+    assert any("object_terminal_recorded" in a for a in adj)
+
+
+def test_destruction_registry_verb_based_destroy():
+    prior = {"object_locations": [{"object": "wooden crate", "status": "stored"}]}
+    merged = {"object_locations": [{"object": "wooden crate", "status": "stored"}]}
+    parsed = _Parsed(narrative="You smash the wooden crate to splinters with the axe.")
+    gateway.update_destruction_registry(parsed, prior, merged, "break open the wooden crate")
+    assert _terminal_status(merged, "crate") == "destroyed"
+
+
+def test_destruction_registry_verb_based_consume():
+    prior = {"object_locations": [{"object": "ration pack", "status": "carried"}]}
+    # Model silently dropped the consumed item from current state.
+    merged = {"object_locations": []}
+    parsed = _Parsed(narrative="You tear open the ration pack and eat every crumb.")
+    gateway.update_destruction_registry(parsed, prior, merged, "eat the ration pack")
+    assert _terminal_status(merged, "ration") == "consumed"
+
+
+def test_destruction_registry_ignores_hypothetical():
+    prior = {"object_locations": [{"object": "old map", "status": "carried"}]}
+    merged = {"object_locations": [{"object": "old map", "status": "carried"}]}
+    parsed = _Parsed(narrative="You could burn the old map if the guards get close.")
+    adj = gateway.update_destruction_registry(parsed, prior, merged, "consider burning the map")
+    assert _terminal_status(merged, "map") == "carried"  # unchanged
+    assert adj == []
+
+
+def test_destruction_then_strip_blocks_revival_next_turn():
+    # Turn N: destroy. Turn N+1: model tries to carry it again -> strip reverts.
+    prior = {"object_locations": [{"object": "brass key", "status": "carried"}]}
+    merged = {"object_locations": [{"object": "brass key", "status": "carried"}]}
+    parsed = _Parsed(narrative="The brass key melts to slag in the furnace.")
+    gateway.update_destruction_registry(parsed, prior, merged, "throw the brass key into the furnace")
+    assert _terminal_status(merged, "key") == "destroyed"
+
+    # Next turn: prior is `merged` (key destroyed); model revives it.
+    next_parsed = _Parsed(
+        narrative="You pocket the key.",
+        rolling_state={"object_locations": [{"object": "brass key", "status": "carried"}]},
+    )
+    gateway.strip_illegal_state_changes(merged, {}, next_parsed, "grab the key")
+    assert next_parsed.rolling_state["object_locations"][0]["status"] == "destroyed"
+
+
+def test_destruction_registry_no_known_objects_is_safe():
+    parsed = _Parsed(narrative="You smash everything in sight.")
+    assert gateway.update_destruction_registry(parsed, None, {"object_locations": []}, "smash") == []

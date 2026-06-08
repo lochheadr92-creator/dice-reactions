@@ -30,7 +30,7 @@ from __future__ import annotations
 import re as _re
 from typing import Any, Dict, List, Optional
 
-from memory import _normalize_object_name
+from memory import _normalize_object_name, _status_rank, canonicalize_object_registry
 
 # Object statuses that are irreversible. dropped / hidden / stored / lost are
 # recoverable (the player can pick the item back up), so they are NOT terminal.
@@ -407,6 +407,214 @@ def update_death_registry(
             deduped.append(n)
     merged_rolling["deceased"] = deduped
     return ["gateway:death_recorded:" + " | ".join(newly_dead[:6])]
+
+
+# ---------------------------------------------------------------------------
+# Destruction / consumption registry — engine records terminal object states
+# the live model expresses by RENAMING ("lantern" → "lantern fragments") or by
+# silently dropping a consumed item, instead of emitting status=destroyed/consumed.
+# ---------------------------------------------------------------------------
+# Words a model appends when it renames a destroyed object instead of marking it.
+_DESTRUCTION_SUFFIX_WORDS = {
+    "fragment", "fragments", "shard", "shards", "ash", "ashes", "powder", "dust",
+    "splinter", "splinters", "husk", "remains", "remnant", "remnants", "slag",
+    "wreckage", "scrap", "scraps", "ruins", "debris", "shreds", "cinders", "rubble",
+}
+# Destruction expressed in a row's condition / status / location_state.
+_DESTROY_COND_RE = _re.compile(
+    r"\b(broken|shattered|smashed|ash|ashes|charred|burnt|burned|melted|"
+    r"disintegrated|destroyed|crushed|obliterated|pulverized|pulverised|"
+    r"incinerated|ruined|wrecked)\b",
+    _re.IGNORECASE,
+)
+# Destruction verbs in prose/action.
+_DESTROY_VERB_RE = _re.compile(
+    r"\b(shatter|smash|burn|incinerate|melt|destroy|crush|break|broke|broken|"
+    r"snap|snapped|explode|exploded|blow\s+up|blew\s+up|disintegrate|obliterate|"
+    r"rip\s+apart|tear\s+apart|pulverize|pulverise|reduce[d]?\s+to)\w*",
+    _re.IGNORECASE,
+)
+# Consumption verbs in prose/action.
+_CONSUME_VERB_RE = _re.compile(
+    r"\b(eat|eats|ate|eaten|drink|drinks|drank|drunk|swallow|swallowed|devour|"
+    r"devoured|gulp|guzzle|consume|consumed|finish\s+off|finished\s+off|"
+    r"use\s+up|used\s+up)\w*",
+    _re.IGNORECASE,
+)
+_TERMINAL_RANK = {"destroyed": 90, "consumed": 80}
+
+# Intent / hypothetical guard for OBJECT destruction — broader than the death
+# guard because a player ACTION often only states intent ("consider burning the
+# map"), which must not be treated as a completed destruction.
+_OBJECT_INTENT_RE = _re.compile(
+    r"\b(would|could|might|may|if|when|unless|threaten(?:s|ed)?|warn(?:s|ed)?|"
+    r"don'?t|do\s+not|won'?t|will\s+not|never|avoid|nearly|almost|risk|"
+    r"consider(?:s|ing)?|tr(?:y|ies|ying)|attempt(?:s|ing)?|think(?:s|ing)?|"
+    r"want(?:s|ed)?|plan(?:s|ned)?|intend(?:s|ed)?|about\s+to|going\s+to|"
+    r"prepare[sd]?|ready\s+to|ponder(?:s|ing)?|contemplat\w+|hesitat\w+|"
+    r"debate[sd]?|weigh\w*)\b",
+    _re.IGNORECASE,
+)
+
+
+def _object_index(*sources) -> Dict[str, str]:
+    """Map normalized identity -> a display name, from object_locations/inventory."""
+    idx: Dict[str, str] = {}
+    for src in sources:
+        if not isinstance(src, dict):
+            continue
+        for key in ("object_locations", "inventory_objects"):
+            for row in src.get(key) or []:
+                if not isinstance(row, dict):
+                    continue
+                ident = _normalize_object_name(row.get("object"))
+                if ident and ident not in idx:
+                    idx[ident] = row.get("object")
+    return idx
+
+
+def _strip_destruction_suffix(name: Any) -> str:
+    """Identity of a renamed-destroyed object with the destruction suffix removed.
+
+    "lantern fragments" -> identity of "lantern".
+    """
+    toks = _re.findall(r"[a-z]+", str(name or "").lower())
+    base = [t for t in toks if t.rstrip("s") not in
+            {w.rstrip("s") for w in _DESTRUCTION_SUFFIX_WORDS}]
+    return _normalize_object_name(" ".join(base)) if base else ""
+
+
+def _match_known(base_ident: str, known: Dict[str, str]) -> Optional[str]:
+    """Resolve a (possibly partial) identity to a known object identity."""
+    if not base_ident:
+        return None
+    if base_ident in known:
+        return base_ident
+    bt = set(base_ident.split())
+    fallback = None
+    for k in known:
+        kt = set(k.split())
+        if bt and (bt <= kt or kt <= bt):
+            return k
+        if {t for t in (bt & kt) if len(t) >= 4}:
+            fallback = k
+    return fallback
+
+
+def _verb_near(text: str, verb_re, esc_noun: str, window: int = 60, negation_re=None) -> bool:
+    """True if `verb_re` and the noun co-occur within `window` chars, not negated."""
+    negation_re = negation_re or _DEATH_NEGATION_RE
+    noun_re = _re.compile(rf"\b{esc_noun}\w*", _re.IGNORECASE)
+    for vm in verb_re.finditer(text):
+        seg = text[vm.start(): vm.end() + window]
+        if noun_re.search(seg):
+            w = text[max(0, vm.start() - 40): vm.end()]
+            if not negation_re.search(w):
+                return True
+    for nm in noun_re.finditer(text):
+        seg = text[nm.start(): nm.end() + window]
+        if verb_re.search(seg):
+            w = text[max(0, nm.start() - 40): nm.end() + window]
+            if not negation_re.search(w):
+                return True
+    return False
+
+
+def _upsert_terminal_object(merged: Dict[str, Any], ident: str, display: Any, status: str) -> None:
+    locs = merged.setdefault("object_locations", [])
+    if not isinstance(locs, list):
+        locs = []
+        merged["object_locations"] = locs
+    for row in locs:
+        if isinstance(row, dict) and _normalize_object_name(row.get("object")) == ident:
+            if _status_rank(row.get("status")) < _TERMINAL_RANK[status]:
+                row["status"] = status
+                row.setdefault("where", status)
+            return
+    locs.append({"object": display or ident, "status": status, "where": status})
+
+
+def update_destruction_registry(
+    parsed: Any,
+    prior_rolling: Optional[Dict[str, Any]],
+    merged_rolling: Optional[Dict[str, Any]],
+    player_action: Optional[str] = None,
+) -> List[str]:
+    """Record items destroyed/consumed THIS turn as terminal object_locations rows.
+
+    Handles the two shapes the live model uses instead of status=destroyed/consumed:
+      (a) RENAME — a fresh row named "<thing> fragments/ash/..." or with a
+          destroyed-style condition, whose base identity matches a known object.
+      (b) VERB — prose/action destroys or consumes a known object by name.
+    The terminal row is written under the ORIGINAL identity so build_truth() and
+    the strip/prose guards can defend it on later turns.
+    """
+    if not isinstance(merged_rolling, dict):
+        return []
+    known = _object_index(prior_rolling, merged_rolling)
+    if not known:
+        return []
+
+    text = f"{player_action or ''}\n{getattr(parsed, 'narrative', '') or ''}"
+    marks: Dict[str, tuple] = {}      # ident -> (status, display)
+    rows_to_drop: List[tuple] = []    # (list_key, identity) for rename husks
+
+    # (a) Rename-shaped destruction in current rows.
+    for key in ("object_locations", "inventory_objects"):
+        for row in merged_rolling.get(key) or []:
+            if not isinstance(row, dict):
+                continue
+            disp = row.get("object")
+            name_tokens = set(_re.findall(r"[a-z]+", str(disp or "").lower()))
+            cond = " ".join(
+                str(row.get(k, "")) for k in ("condition", "status", "location_state")
+            )
+            has_suffix = bool(name_tokens & _DESTRUCTION_SUFFIX_WORDS)
+            cond_destroyed = bool(_DESTROY_COND_RE.search(cond))
+            if not (has_suffix or cond_destroyed):
+                continue
+            base = _strip_destruction_suffix(disp) if has_suffix else _normalize_object_name(disp)
+            matched = _match_known(base, known)
+            if matched:
+                marks[matched] = ("destroyed", known[matched])
+                if has_suffix:
+                    rows_to_drop.append((key, _normalize_object_name(disp)))
+
+    # (b) Verb-based destruction / consumption against known objects.
+    for ident, disp in known.items():
+        if ident in marks:
+            continue
+        tokens = [t for t in ident.split() if len(t) >= 3] or _noun_tokens(ident)
+        for tok in tokens:
+            esc = _re.escape(tok)
+            if _verb_near(text, _CONSUME_VERB_RE, esc, negation_re=_OBJECT_INTENT_RE):
+                marks[ident] = ("consumed", disp)
+                break
+            if _verb_near(text, _DESTROY_VERB_RE, esc, negation_re=_OBJECT_INTENT_RE):
+                marks[ident] = ("destroyed", disp)
+                break
+
+    if not marks:
+        return []
+
+    # Drop rename husks (their base identity now carries the terminal row).
+    for key, drop_ident in rows_to_drop:
+        rows = merged_rolling.get(key)
+        if isinstance(rows, list):
+            merged_rolling[key] = [
+                r for r in rows
+                if not (isinstance(r, dict)
+                        and _normalize_object_name(r.get("object")) == drop_ident)
+            ]
+
+    for ident, (status, disp) in marks.items():
+        _upsert_terminal_object(merged_rolling, ident, disp, status)
+
+    # Collapse to one row per identity (terminal status wins).
+    canonicalize_object_registry(merged_rolling)
+    return ["gateway:object_terminal_recorded:" + " | ".join(
+        f"{disp}={status}" for _, (status, disp) in list(marks.items())[:6]
+    )]
 
 
 # ---------------------------------------------------------------------------
