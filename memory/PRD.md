@@ -35,14 +35,24 @@
   - PREVENT: `build_immutable_truth_block` injects established facts (destroyed/consumed
     objects, dead NPCs, ongoing wounds) into the prompt as "do not contradict".
   - STRIP: `strip_illegal_state_changes` reverts terminal-object revival, silent injury
-    resolution/improvement (no recovery cue), and deceased-NPC revival — on the FRESH
-    parsed turn before consolidation. Removes revived items from the player ledger.
-  - DETECT: `detect_prose_contradictions` flags prose that uses a destroyed/consumed
-    object as intact or shows a dead NPC speaking/acting → triggers a correction
-    re-prompt (`_HALLUCINATION_RETRY_INSTRUCTION`) via `_full_validate`.
-  - REGISTRY: `update_death_registry` records clear NPC deaths into engine-owned
-    `rolling_state.deceased` (now a PROTECTED_LIST_KEY, never resurrected).
-  - Tests: `tests/test_anti_hallucination_gateway.py` (13 passing).
+    resolution/improvement (no recovery cue), and deceased-NPC revival.
+  - DETECT: `detect_prose_contradictions` → correction re-prompt.
+  - REGISTRY: `update_death_registry` → engine-owned `rolling_state.deceased`.
+- **Inc-1b (Ch 31 — Destruction/Consumption registry):** `update_destruction_registry`
+  records terminal object truth even when the live model RENAMES a destroyed item
+  ("lantern"→"lantern fragments") or silently drops a consumed item — writes the terminal
+  row under the ORIGINAL identity. Closes the live-probe CRITICAL (iteration_3).
+- **Inc-1c (Ch 31 — remaining sub-increments):**
+  - SOLE CALLER: `gateway.invoke_llm` is now the ONLY entry point to the provider
+    (Ch 31.11); `server.py` no longer imports `chat_completion*`.
+  - ACTION ASSERTION: prose claiming the player acquired a tracked item whose state
+    wasn't updated to a possession status → correction re-prompt.
+  - KNOWLEDGE BOUNDARY (partial): a dead NPC framed as a future/interactive actor
+    ("Garrett will help", "ask Mira") → correction re-prompt. NOTE: full per-NPC
+    working-memory knowledge boundary (an NPC knowing facts they never witnessed)
+    requires the Ch 28 memory-retrieval model and is deferred to P2/P3.
+  - Tests: `tests/test_anti_hallucination_gateway.py` (24 unit), `tests/test_gateway_e2e.py`
+    (2 full-pipeline). Live: 5/5 adversarial families verified (iteration_3 + iteration_4).
 
 ---
 

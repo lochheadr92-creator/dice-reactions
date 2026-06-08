@@ -176,6 +176,48 @@ def test_detect_ignores_dead_npc_referenced_as_memory():
     assert reasons == []
 
 
+# --- Knowledge-boundary: dead NPC as future/interactive actor ---
+def test_detect_flags_dead_npc_future_reference():
+    prior = {"deceased": ["Garrett"]}
+    parsed = _Parsed(narrative="Garrett will guide you through the tunnels at dawn.")
+    reasons = gateway.detect_prose_contradictions(prior, parsed, "wait")
+    assert any("Garrett" in r for r in reasons)
+
+
+def test_detect_flags_interacting_with_dead_npc():
+    prior = {"deceased": ["Mira"]}
+    parsed = _Parsed(narrative="You ask Mira for directions to the bunker.")
+    reasons = gateway.detect_prose_contradictions(prior, parsed, "ask around")
+    assert any("Mira" in r for r in reasons)
+
+
+def test_detect_ignores_asking_about_dead_npc():
+    prior = {"deceased": ["Mira"]}
+    parsed = _Parsed(narrative="You ask the trader about Mira and her final days.")
+    reasons = gateway.detect_prose_contradictions(prior, parsed, "ask the trader")
+    assert reasons == []
+
+
+# --- Action assertion: acquisition not reflected in state ---
+def test_detect_flags_acquisition_not_in_state():
+    parsed = _Parsed(
+        narrative="You grab the brass keycard from the table and slip away.",
+        rolling_state={"object_locations": [{"object": "brass keycard", "status": "hidden", "where": "table"}]},
+        ledger={"Carried": "torch"},
+    )
+    reasons = gateway.detect_prose_contradictions(None, parsed, "take the keycard")
+    assert any("brass" in r or "keycard" in r for r in reasons)
+
+
+def test_detect_allows_acquisition_reflected_in_state():
+    parsed = _Parsed(
+        narrative="You grab the brass keycard and pocket it.",
+        rolling_state={"object_locations": [{"object": "brass keycard", "status": "carried", "where": "pocket"}]},
+        ledger={"Carried": "brass keycard; torch"},
+    )
+    assert gateway.detect_prose_contradictions(None, parsed, "take the keycard") == []
+
+
 def test_no_prior_state_is_safe():
     parsed = _Parsed(narrative="You grab the brass lantern and run.")
     assert gateway.detect_prose_contradictions(None, parsed, "run") == []

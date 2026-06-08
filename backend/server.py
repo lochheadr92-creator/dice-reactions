@@ -16,8 +16,6 @@ load_dotenv(ROOT_DIR / '.env')
 
 # Local AI service (OpenRouter)
 from ai_service import (  # noqa: E402
-    chat_completion,
-    chat_completion_with_meta,
     get_supported_models,
     get_default_settings,
     is_configured as ai_is_configured,
@@ -1855,7 +1853,7 @@ async def _generate_turn(
         protected_recent_msgs=protected_recent_msgs,
     )
 
-    result = await chat_completion_with_meta(
+    result = await gateway.invoke_llm(
         messages=messages,
         primary_model=requested_model,
         fallback_chain=fallback_chain,
@@ -2176,7 +2174,7 @@ async def _generate_validated_turn(
             or list(FALLBACK_MODELS)
         )
 
-        result2 = await chat_completion_with_meta(
+        result2 = await gateway.invoke_llm(
             messages=messages,
             primary_model=primary_for_retry,
             fallback_chain=fallback_chain,

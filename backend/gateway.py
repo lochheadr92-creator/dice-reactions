@@ -31,6 +31,17 @@ import re as _re
 from typing import Any, Dict, List, Optional
 
 from memory import _normalize_object_name, _status_rank, canonicalize_object_registry
+from ai_service import chat_completion_with_meta as _provider_call
+
+
+# ---------------------------------------------------------------------------
+# Ch 31.11 — the SINGLE chokepoint through which the simulation may call the LLM.
+# No other module may invoke the provider directly; route every call through
+# here so validation/guards can never be bypassed.
+# ---------------------------------------------------------------------------
+async def invoke_llm(**kwargs):
+    """The one and only entry point to the language model (Ch 31.11)."""
+    return await _provider_call(**kwargs)
 
 # Object statuses that are irreversible. dropped / hidden / stored / lost are
 # recoverable (the player can pick the item back up), so they are NOT terminal.
@@ -620,6 +631,25 @@ def update_destruction_registry(
 # ---------------------------------------------------------------------------
 # DETECT — prose contradictions that warrant a correction re-prompt
 # ---------------------------------------------------------------------------
+# Action-assertion: verbs by which the player claims to ACQUIRE an item.
+_ACQUIRE_VERB_RE = _re.compile(
+    r"\b(grab|grabs|grabbed|pick(?:s|ed)?\s+up|take|takes|took|taken|snatch(?:es|ed)?|"
+    r"collect(?:s|ed)?|retriev(?:e|es|ed)|claim(?:s|ed)?|pocket(?:s|ed)?|"
+    r"scoop(?:s|ed)?\s+up|seiz(?:e|es|ed)|now\s+(?:hold|have|carry|carries|carrying|holding))\b",
+    _re.IGNORECASE,
+)
+_POSSESSION_STATUSES = {"carried", "worn", "stored", "equipped", "holstered"}
+# Knowledge-boundary: a dead NPC framed as a future/able actor.
+_DECEASED_FUTURE_RE = (
+    r"(?:will|shall|can|could|would|is\s+going\s+to|is\s+about\s+to|is\s+ready\s+to|"
+    r"agrees?\s+to|offers?\s+to|promises?\s+to)"
+)
+_DECEASED_INTERACT_RE = (
+    r"(?:ask|asks|tell|tells|call|calls|summon|summons|find|finds|meet|meets|join|joins|"
+    r"follow|follows|wait\s+for|count\s+on|rely\s+on|turn\s+to|signal|signals|recruit|recruits)"
+)
+
+
 def detect_prose_contradictions(
     prior_rolling: Optional[Dict[str, Any]],
     parsed: Any,
@@ -629,6 +659,7 @@ def detect_prose_contradictions(
 
     Conservative by design — false positives cost a re-prompt, so each rule
     requires tight proximity between the offending verb and the protected fact.
+    Covers Ch 31.5: factual consistency, knowledge boundary, action assertion.
     """
     truth = build_truth(prior_rolling)
     reasons: List[str] = []
@@ -641,7 +672,7 @@ def detect_prose_contradictions(
 
     joined = "\n".join(paragraphs)
 
-    # 1. Terminal object used/held as if intact.
+    # 1. Terminal object used/held as if intact (factual consistency).
     for ident in truth["terminal_objects"]:
         for tok in _noun_tokens(ident):
             esc = _re.escape(tok)
@@ -660,19 +691,62 @@ def detect_prose_contradictions(
             )
             break
 
-    # 2. Dead NPC speaking / acting alive.
+    # 2. Dead NPC speaking / acting / promised as a future actor (factual +
+    #    knowledge boundary).
     for name in truth["deceased"]:
         esc = _re.escape(name)
-        rx = _re.compile(
-            rf"\b{esc}\b[\sa-z,'\"-]{{0,30}}\b{_LIVE_ACTION_VERB_RE}\b",
-            _re.IGNORECASE,
+        patterns = (
+            rf"\b{esc}\b[\sa-z,'\"-]{{0,30}}\b{_LIVE_ACTION_VERB_RE}\b",      # acts
+            rf"\b{esc}\b[\sa-z,'\"-]{{0,15}}\b{_DECEASED_FUTURE_RE}\b",        # will act
+            rf"\b{_DECEASED_INTERACT_RE}\b[\sa-z,'\"-]{{0,15}}\b{esc}\b",      # you interact
         )
-        m = rx.search(joined)
-        if not m:
-            continue
-        window = joined[max(0, m.start() - 40): m.end() + 20]
-        if _DECEASED_OK_QUALIFIER_RE.search(window):
-            continue
-        reasons.append(f"dead NPC '{name}' speaks or acts alive in the narrative")
+        for pat in patterns:
+            m = _re.compile(pat, _re.IGNORECASE).search(joined)
+            if not m:
+                continue
+            # "ask about Mira" / "news of Garrett" is referential, not interaction.
+            if _re.search(r"\b(about|of|regarding|concerning)\b", m.group(), _re.IGNORECASE):
+                continue
+            window = joined[max(0, m.start() - 40): m.end() + 20]
+            if _DECEASED_OK_QUALIFIER_RE.search(window):
+                continue
+            reasons.append(f"dead NPC '{name}' is treated as alive/able in the narrative")
+            break
+
+    # 3. Action assertion: prose claims acquiring a tracked item whose state was
+    #    NOT updated to a possession status this turn.
+    new_rolling = getattr(parsed, "rolling_state", None)
+    if isinstance(new_rolling, dict):
+        possessed: set = set()
+        ledger = getattr(parsed, "ledger", None) or {}
+        for cat in ("Carried", "Worn", "Stored"):
+            for raw in _split_items(ledger.get(cat)):
+                ident = _normalize_object_name(raw)
+                if ident:
+                    possessed.add(ident)
+        for row in new_rolling.get("object_locations") or []:
+            if isinstance(row, dict) and str(row.get("status", "")).lower() in _POSSESSION_STATUSES:
+                possessed.add(_normalize_object_name(row.get("object")))
+        for row in new_rolling.get("inventory_objects") or []:
+            if isinstance(row, dict) and str(row.get("location_state", "")).lower() in _POSSESSION_STATUSES:
+                possessed.add(_normalize_object_name(row.get("object")))
+
+        for row in new_rolling.get("object_locations") or []:
+            if not isinstance(row, dict):
+                continue
+            status = str(row.get("status", "")).strip().lower()
+            ident = _normalize_object_name(row.get("object"))
+            if (not ident or ident in possessed
+                    or status in _POSSESSION_STATUSES
+                    or status in TERMINAL_OBJECT_STATUSES):
+                continue
+            for tok in _noun_tokens(ident):
+                if _verb_near(joined, _ACQUIRE_VERB_RE, _re.escape(tok),
+                              window=25, negation_re=_OBJECT_INTENT_RE):
+                    reasons.append(
+                        f"narrative claims taking '{tok}' but state still records it "
+                        f"as '{status}', not in inventory"
+                    )
+                    break
 
     return reasons
