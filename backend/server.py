@@ -47,6 +47,7 @@ from memory import (  # noqa: E402
 )
 import gateway  # noqa: E402  — Anti-Hallucination Gateway (Ch 31)
 import relationships  # noqa: E402  — Relationship Calculus (Ch 29)
+import hud  # noqa: E402  — player-facing HUD shaping (status chips + Pressure)
 
 import json as _json  # noqa: E402
 
@@ -424,8 +425,10 @@ You must always output 4 to 6 choices labelled in order A. B. C. D. (E. F. optio
 Health: [stable / bruised / wounded / badly wounded / critical]
 Stress: [clear / tense / overloaded / distorted / breaking]
 Fatigue: [rested / tired / strained / exhausted / collapsing]
+Danger: [none / low / elevated / high / critical]
+Momentum: [surging / steady / stalling / declining / lost]
 Position: [short in-world description of current location + cover/visibility]
-Objective: [current goal in one in-character sentence]
+Pressure: [the SINGLE most immediate problem or threatening condition the character faces RIGHT NOW, as a short in-world clause describing the PROBLEM, never the solution. Examples: "Bleeding wound worsening", "Nightfall approaching", "Unknown movement nearby", "Shelter feels unstable". NEVER phrase it as a goal, objective, task, instruction, or correct action (no "find", "secure", "locate", "reach", "get", "escape to", "must", "should"). If several pressures exist, state only the most immediate one. "—" only if genuinely nothing presses.]
 Conditions: [active in-world conditions: wounds, hunger, cold, fear, debts — or "—" if none. NEVER list internal trigger/system labels.]
 Inventory Summary: [compact one-line in-world summary of carried essentials]
 </state>
@@ -2630,6 +2633,8 @@ async def new_story(req: NewStoryRequest):
     guard_adjustments.extend(
         relationships.update_relationship_calculus(parsed, None, merged_rolling, None, 1)
     )
+    # HUD — drop objective guidance; set Danger/Momentum chips + Pressure line.
+    guard_adjustments.extend(hud.shape_hud(parsed.state, merged_rolling))
     if guard_adjustments:
         enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
     memory_depth = int(settings.get("memory_depth", DEFAULT_MEMORY_DEPTH))
@@ -2768,6 +2773,8 @@ async def story_action(req: ActionRequest):
             parsed, prior_rolling, merged_rolling, req.action_text, next_turn_number
         )
     )
+    # HUD — drop objective guidance; set Danger/Momentum chips + Pressure line.
+    guard_adjustments.extend(hud.shape_hud(parsed.state, merged_rolling))
     if guard_adjustments:
         enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
 
