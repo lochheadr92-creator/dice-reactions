@@ -444,3 +444,12 @@ agent_communication:
       regression 7 passing. About to run a live Ch 29 probe (vectors evolve + influence
       NPC behaviour in real play). Deferred: NPC<->NPC/faction calculus (Ch 29.11),
       emotional-intensity/personality multipliers, memory-weighting (Ch 28).
+
+  - agent: "main"
+    message: |
+      Ch 29 VERIFIED LIVE (iteration_5). Testing agent ran an 11-unit suite + 2 live e2e
+      (new test_relationship_calculus_live.py): full 9-turn arc help+gift->save->threaten->
+      attack->betray->3 neutral decay turns. Final live vector trust=-39 loyalty=0 fear=58
+      resentment=88 -> state betrayal_risk; debug carried rel:<name>:<events> markers; decay
+      worked; no 500s/regressions. Ch 29 (NPC->player) complete. Next per user order: Ch 27
+      Utility AI, then Ch 26 Gravity Governance, then Ch 28.
