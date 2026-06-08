@@ -30,8 +30,8 @@ _PRESCRIPTIVE_RE = _re.compile(
     r"\b(find|finds|locate|locates|secure|secures|reach|reaches|get|gets|retrieve|"
     r"obtain|acquire|search|seek|gather|collect|head\s+to|go\s+to|return\s+to|"
     r"escape|flee\s+to|run\s+to|hide|use\s+the|talk\s+to|speak\s+to|kill|defeat|"
-    r"craft|build|repair|restore|deliver|bring|reach\s+for|must|need\s+to|"
-    r"should|have\s+to|objective|goal|mission|task|quest)\b",
+    r"craft|build|repair|restore|deliver|bring|reach\s+for|must|need|needs|needed|"
+    r"requires?|required|requiring|have\s+to|should|objective|goal|mission|task|quest)\b",
     _re.IGNORECASE,
 )
 

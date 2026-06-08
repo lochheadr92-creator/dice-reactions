@@ -51,6 +51,15 @@ def test_pressure_rejects_prescriptive_phrase():
     assert state["Pressure"]  # a grounded fallback exists
 
 
+def test_pressure_rejects_requires_needs_phrasing():
+    for bad in ("Leg wound requires continued care", "Wound needs attention"):
+        state = {"Health": "wounded", "Pressure": bad}
+        hud.shape_hud(state, {})
+        assert state["Pressure"] != bad
+        assert "require" not in state["Pressure"].lower()
+        assert "need" not in state["Pressure"].lower()
+
+
 def test_pressure_threat_fallback():
     state = {"Health": "stable"}
     rolling = {"active_threats": [{"desc": "raiders"}]}

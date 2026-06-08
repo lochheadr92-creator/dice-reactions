@@ -31,6 +31,15 @@
 ---
 
 ## ✅ Increment log
+- **Inc-HUD (player agency — no quest markers):** Removed player-facing OBJ/objective bar.
+  Backend `<state>` now emits Danger/Momentum + a non-prescriptive Pressure; new
+  `hud.py` strips Objective, guarantees DNG/MOM vocab, and derives a single
+  most-immediate Pressure (survival flag > grounded model phrase > engine fallback),
+  rejecting any prescriptive/quest phrasing (find/secure/must/requires/needs/...).
+  Frontend `play/[id].tsx` shows DNG/MOM chips + a danger-tinted PRS line; relationship
+  vectors stay hidden (dev rolling_state dump only). Tests: `tests/test_hud.py` (9) +
+  live frontend verify (iteration_6). Aligns with Ch 6 (Pressure) / Ch 24 (Discovery:
+  engine never hands the solution).
 - **Inc-1 (Ch 31 — Anti-Hallucination Gateway):** `gateway.py` added.
   - PREVENT: `build_immutable_truth_block` injects established facts (destroyed/consumed
     objects, dead NPCs, ongoing wounds) into the prompt as "do not contradict".
