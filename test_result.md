@@ -357,3 +357,36 @@ agent_communication:
          - DELETE /api/story/session/{id} removes session + turns
       3. Skip /api/story tests against gryphe/mythomax-l2-13b unless credits are added;
          use the free model override for any LLM-dependent assertions.
+
+  - agent: "main"
+    message: |
+      INCREMENT 1 — Anti-Hallucination Gateway (Source of Truth Ch 31). Source of
+      Truth 1-32 is now the conformance authority; /app/memory/PRD.md rewritten as a
+      chapter-by-chapter tracker. Approach: incremental alignment (no rebuild). Model
+      kept as dolphin-mistral:free (currently rate-limited upstream → auto-falls back
+      to anthropic/claude-3-5-haiku).
+
+      New module: /app/backend/gateway.py — "The LLM writes prose. The engine writes
+      truth." It (1) PREVENTS via build_immutable_truth_block injected into the prompt,
+      (2) STRIPS illegal state mutations (terminal-object revival, silent injury
+      resolution/improvement without a recovery cue, deceased-NPC revival) on the fresh
+      parsed turn before consolidation, (3) DETECTS prose contradictions (destroyed/
+      consumed object used as intact, dead NPC speaking) → hallucination correction
+      re-prompt, and (4) records clear NPC deaths into engine-owned rolling_state.deceased
+      (now a PROTECTED_LIST_KEY). Wired into _build_messages, _generate_validated_turn
+      (_full_validate), and both /api/story/new and /api/story/action routes.
+
+      Verified deterministically (no live LLM):
+        - tests/test_anti_hallucination_gateway.py — 13 passed (unit: truth extraction,
+          strip terminal object/injury/deceased, death registry incl. threat negatives,
+          prose detection incl. memory/charred-remains negatives).
+        - tests/test_gateway_e2e.py — 1 passed (full route pipeline w/ scripted LLM:
+          death recorded turn1, truth block injected turn2, hallucination re-prompt fired
+          [validation_retry_kind=hallucination], revived key reverted to destroyed,
+          dead NPC forced stance=dead, destroyed key removed from player ledger).
+        - tests/test_custom_world_system.py — 7 passed (live regression, no breakage).
+      Frontend untouched; home screen smoke-tested OK after expo restart.
+
+      NOT yet done (next Ch 31 sub-increments): knowledge-boundary + action-assertion
+      checks; making the gateway the sole LLM caller. Live adversarial e2e (real model)
+      not run — deterministic e2e covers the logic.
