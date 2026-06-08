@@ -1,0 +1,34 @@
+{
+  "turns": [
+    {
+      "turn": "turn1",
+      "objective_bar_present": false,
+      "hp": "HP\nstable",
+      "dng": "DNG\nelevated",
+      "mom": "MOM\nstalling",
+      "pressure_present": true,
+      "pressure_text": "PRS\nUnknown movement in the darkness",
+      "rel_leak_keys": []
+    },
+    {
+      "turn": "turn2",
+      "objective_bar_present": false,
+      "hp": "HP\nwounded",
+      "dng": "DNG\nhigh",
+      "mom": "MOM\ndeclining",
+      "pressure_present": true,
+      "pressure_text": "PRS\nFresh leg wound bleeding",
+      "rel_leak_keys": []
+    },
+    {
+      "turn": "turn3",
+      "objective_bar_present": false,
+      "hp": "HP\nwounded",
+      "dng": "DNG\nelevated",
+      "mom": "MOM\nsteady",
+      "pressure_present": true,
+      "pressure_text": "PRS\nLeg wound requires continued care",
+      "rel_leak_keys": []
+    }
+  ]
+}

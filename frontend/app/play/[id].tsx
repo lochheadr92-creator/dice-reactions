@@ -39,6 +39,22 @@ const STRESS_COLOR_MAP: Record<string, string> = {
   breaking: COLORS.danger,
 };
 
+const DANGER_COLOR_MAP: Record<string, string> = {
+  none: COLORS.objective,
+  low: "#FBBF24",
+  elevated: "#F97316",
+  high: COLORS.health,
+  critical: COLORS.danger,
+};
+
+const MOMENTUM_COLOR_MAP: Record<string, string> = {
+  surging: COLORS.objective,
+  steady: COLORS.textSecondary,
+  stalling: "#FBBF24",
+  declining: "#F97316",
+  lost: COLORS.danger,
+};
+
 function chip(state: Record<string, string>, key: string, label: string, colorMap?: Record<string, string>) {
   const v = state[key];
   if (!v) return null;
@@ -181,7 +197,9 @@ export default function PlayScreen() {
   const healthChip = chip(state, "Health", "HP", HEALTH_COLOR_MAP);
   const stressChip = chip(state, "Stress", "STR", STRESS_COLOR_MAP);
   const fatigueChip = chip(state, "Fatigue", "FTG");
-  const objective = state["Objective"];
+  const dangerChip = chip(state, "Danger", "DNG", DANGER_COLOR_MAP);
+  const momentumChip = chip(state, "Momentum", "MOM", MOMENTUM_COLOR_MAP);
+  const pressure = state["Pressure"];
 
   return (
     <SafeAreaView style={styles.safe} testID="play-screen">
@@ -211,6 +229,18 @@ export default function PlayScreen() {
                 <Text style={[styles.statVal, { color: COLORS.textSecondary }]}>{fatigueChip.value}</Text>
               </View>
             )}
+            {dangerChip && (
+              <View style={styles.statChip} testID="state-danger">
+                <Text style={styles.statKey}>{dangerChip.label}</Text>
+                <Text style={[styles.statVal, { color: dangerChip.color }]}>{dangerChip.value}</Text>
+              </View>
+            )}
+            {momentumChip && (
+              <View style={styles.statChip} testID="state-momentum">
+                <Text style={styles.statKey}>{momentumChip.label}</Text>
+                <Text style={[styles.statVal, { color: momentumChip.color }]}>{momentumChip.value}</Text>
+              </View>
+            )}
           </View>
 
           <View style={styles.topActions}>
@@ -223,10 +253,10 @@ export default function PlayScreen() {
           </View>
         </View>
 
-        {objective ? (
-          <View style={styles.objectiveBar} testID="objective-bar">
-            <Text style={styles.objectiveLabel}>OBJ</Text>
-            <Text style={styles.objectiveText} numberOfLines={1}>{objective}</Text>
+        {pressure ? (
+          <View style={styles.pressureBar} testID="pressure-bar">
+            <Text style={styles.pressureLabel}>PRS</Text>
+            <Text style={styles.pressureText} numberOfLines={1}>{pressure}</Text>
           </View>
         ) : null}
 
@@ -598,7 +628,7 @@ const styles = StyleSheet.create({
   statKey: { fontFamily: FONTS.monoBold, color: COLORS.textMuted, fontSize: 9, letterSpacing: 1 },
   statVal: { fontFamily: FONTS.mono, fontSize: 10, letterSpacing: 0.5 },
   topActions: { flexDirection: "row", gap: 14, alignItems: "center" },
-  objectiveBar: {
+  pressureBar: {
     flexDirection: "row",
     gap: 10,
     alignItems: "center",
@@ -607,14 +637,16 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.surfaceDeep,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.borderDim,
+    borderLeftWidth: 2,
+    borderLeftColor: COLORS.danger,
   },
-  objectiveLabel: {
+  pressureLabel: {
     fontFamily: FONTS.monoBold,
-    color: COLORS.objective,
+    color: COLORS.danger,
     fontSize: 9,
     letterSpacing: 2,
   },
-  objectiveText: {
+  pressureText: {
     flex: 1,
     fontFamily: FONTS.bodyItalic,
     color: COLORS.textProse,

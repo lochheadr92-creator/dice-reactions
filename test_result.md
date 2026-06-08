@@ -453,3 +453,20 @@ agent_communication:
       resentment=88 -> state betrayal_risk; debug carried rel:<name>:<events> markers; decay
       worked; no 500s/regressions. Ch 29 (NPC->player) complete. Next per user order: Ch 27
       Utility AI, then Ch 26 Gravity Governance, then Ch 28.
+
+  - agent: "main"
+    message: |
+      HUD/OBJECTIVE CORRECTION (player-agency). Removed player-facing OBJ/objective guidance;
+      replaced with non-prescriptive PRESSURE + Danger/Momentum chips.
+      Backend: prompt <state> schema dropped "Objective", added Danger [none/low/elevated/high/
+      critical], Momentum [surging/steady/stalling/declining/lost], and Pressure (most-immediate
+      PROBLEM not solution). New module hud.py shape_hud(): strips Objective, guarantees DNG/MOM
+      with valid vocab, derives single most-immediate Pressure grounded in state (survival flag >
+      grounded model phrase > engine fallback) and REJECTS prescriptive/quest phrasing
+      (_PRESCRIPTIVE_RE). Wired into both routes after relationship calculus.
+      Frontend (app/play/[id].tsx): removed objective bar; added DNG/MOM status chips with color
+      maps; added PRS line (danger-tinted) beneath the status bar; relationship vectors remain
+      hidden (only in dev rolling_state dump). Tests: tests/test_hud.py (8) + full backend suite
+      46 passing; frontend lint clean. Player rules honored: no correct-action hints, bad choices
+      still possible (consequences come from cause-effect elsewhere). Next: live frontend verify,
+      then Ch 27 Utility AI.
