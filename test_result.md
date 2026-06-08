@@ -427,3 +427,20 @@ agent_communication:
         negatives), e2e 2 passing, custom-world live regression 7 passing, server imports OK.
       Next: awaiting user choice for P2 (Ch 29 Relationship Calculus vs Ch 26 Gravity
       Governance). Per user, P2 not to start until Ch 31 enforcement confirmed closed.
+
+  - agent: "main"
+    message: |
+      P2 INCREMENT — Ch 29 Relationship Calculus (NPC->player). New module relationships.py.
+      Engine-owned 4-vector per NPC (trust -100..100, loyalty/fear/resentment 0..100) stored
+      in rolling_state.relationship_vectors (PROTECTED_LIST_KEY). Each turn: neglect decay
+      toward neutral, event detection from action+narrative -> canonical Ch 29.8 deltas
+      (betrayal/save_life/help/threaten/attack/lie/gift/reward/keep_promise/break_promise/
+      humiliate/apology) with subsumption + hypothetical guard, derived behavioural state,
+      coarse stance sync, and a <relationships> prompt block so the LLM renders NPC behaviour
+      to match. LLM-injected vectors are ignored (engine reads PRIOR as authority). Wired into
+      both routes (after destruction registry) and _build_messages. Deceased NPCs excluded.
+      Tests: tests/test_relationship_calculus.py (11) + e2e test_gateway_e2e.py::
+      test_relationship_calculus_end_to_end. Full suite 38 passing; custom-world live
+      regression 7 passing. About to run a live Ch 29 probe (vectors evolve + influence
+      NPC behaviour in real play). Deferred: NPC<->NPC/faction calculus (Ch 29.11),
+      emotional-intensity/personality multipliers, memory-weighting (Ch 28).

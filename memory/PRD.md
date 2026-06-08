@@ -120,9 +120,20 @@
 - Status: 🟡 (`npc_memory` severity + decay bounds; rolling compression).
 - Gap: no retrieval probability. Plan: feeds Ch 28. Priority: P2.
 
-### Ch 13 — Relationship Systems
-- Required: relationships as histories.
-- Status: 🟡 (`relationship_threads` qualitative). Gap: not the 4-vector. Plan: Ch 29. P2.
+### Ch 29 — Relationship Calculus  🟢 (NPC↔player)
+- Required: trust/loyalty/fear/resentment 4-vector with decay + events.
+- Status: 🟢 for NPC→player. `relationships.py` — engine-owned vectors in
+  `rolling_state.relationship_vectors` (PROTECTED). Per turn: neglect decay toward
+  neutral (Ch 29.10), event detection from action+narrative applying canonical
+  Ch 29.8 deltas (betrayal/save_life/help/threaten/attack/lie/gift/reward/keep_promise/
+  break_promise/humiliate/apology, with subsumption + hypothetical guard), derived
+  states (collapsed/betrayal_risk/cowed/devoted/trusting/resentful/wary/neutral),
+  coarse stance sync, and a `<relationships>` prompt block so the LLM renders behaviour
+  to match. LLM-injected vectors are ignored (engine reads PRIOR as authority).
+- Gap: NPC↔NPC / faction-level calculus (Ch 29.11) and emotional-intensity/personality
+  multipliers not yet modelled (base values used). Memory-retrieval weighting = Ch 28.
+- Priority: NPC↔player done. Test: `tests/test_relationship_calculus.py` (11) +
+  e2e `tests/test_gateway_e2e.py::test_relationship_calculus_end_to_end`.
 
 ### Ch 14 — Stress & Breaking Point Systems
 - Required: numeric stress driving behaviour/breaks.

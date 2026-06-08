@@ -1,0 +1,40 @@
+{
+  "summary": "Ch 29 Relationship Calculus verified END-TO-END against the live preview API + anthropic/claude-3-5-haiku. 11/11 unit tests (test_relationship_calculus.py) pass. 2/2 live E2E tests (test_relationship_calculus_live.py) pass against the public base URL. Tests A (positive vector creation), B (hostile fear/resentment rise + trust fall), C (betrayal -> 'betrayal_risk' state), D (decay on neglect), E (qualitative tone observation), and F (regression: /story/new + /story/action stay well-formed with 4-6 choices) all confirmed. Per-turn debug.state_guard_adjustments contains 'rel:<name>:<events>' markers exactly as documented (e.g. 'rel:Unknown Observer:help+gift', 'rel:Unknown Observer:save_life'). Final live vector on the long arc: trust=-39, loyalty=0, fear=58, resentment=88 -> state='betrayal_risk' after help+protect -> threaten+attack -> betray -> 3 neutral turns of decay. NO bugs found, NO 500s, NO regressions, NO React Native or Expo issues to report (backend-only request).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_relationship_calculus.py",
+    "/app/backend/tests/test_relationship_calculus_live.py",
+    "/app/test_reports/pytest/relationships_live_iter5.xml",
+    "/tmp/rel_live_iter5.log",
+    "/tmp/rel_live_iter5c.log"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "relationships.update_relationship_calculus is invoked from BOTH /api/story/new (server.py:2631) and /api/story/action (server.py:2767) AFTER state consolidation, so the engine owns vectors at the same merge stage as the rest of the rolling_state hygiene. Correct integration point.",
+    "Authoritative prior vectors are read from prior_rolling (never from the LLM's merged_rolling), defending against LLM injection of fabricated vector rows. The dedicated unit test test_engine_owns_vectors_ignores_llm_injection explicitly proves a value of 999 in merged_rolling is discarded in favour of prior 20 decayed.",
+    "Event subsumption (_SUBSUMES) and the hypothetical guard (_HYPOTHETICAL_RE) are working correctly: live run produced 'rel:NPC:help+gift' but 'rel:NPC:save_life' alone when save_life fired (help was subsumed). 'consider threatening' did NOT register in unit tests, confirming intent vs act distinction.",
+    "Per-turn state_guard_adjustments is serialized as a single concatenated STRING in the export response (not a list). Live test parses both shapes via regex 'rel:[^;|]+'. Not a bug — just worth noting for any future consumer.",
+    "Decay coefficients (trust 0.04 / loyalty 0.01 / fear 0.08 / resentment 0.04 per turn, identity bonds x0.1) produce smooth drift toward neutral over 3 neglect turns without snapping to zero, exactly as Ch 29.10 prescribes. Verified live: post-betrayal magnitude shrank but stayed strongly non-zero (resentment 88 -> still in betrayal_risk).",
+    "Stance sync (_sync_stance) writes 'hostile' for collapsed/betrayal_risk and 'ally' for trusting/devoted, leaves middle bands untouched, and never overwrites stance='dead'. Sensible and bounded."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_relationship_calculus_live.py",
+    "/app/test_reports/iteration_5.json",
+    "/app/test_reports/pytest/relationships_live_iter5.xml"
+  ],
+  "success_rate": {
+    "backend": "11/11 unit + 2/2 live E2E = 13/13 (100%). Wall time: unit 0.02s, live arc 197s (~3m17s) + regression 110s. Single attempt for both live tests after one test-script fix (placeholder-name picker + adjustments-as-string parsing).",
+    "frontend": "n/a (backend-only request)"
+  },
+  "seed_data_creation": "Ephemeral TEST_rel_arc_<uuid8> and TEST_rel_reg_<uuid8> device_ids; sessions DELETEd in finally blocks. No persistent seed data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Chapter 29 Relationship Calculus is live-verified. Re-running is straightforward: `pytest backend/tests/test_relationship_calculus.py backend/tests/test_relationship_calculus_live.py -v` (unit ~0s, live ~5-6 min total under claude-3-5-haiku). Two practical notes for future agents: (1) The live LLM frequently emits PLACEHOLDER named NPCs like 'Unknown Observer' / 'Unknown Survivor' for the opening scene; the relationship engine handles these correctly because matching is by literal name. The test picker accepts them. (2) per-turn debug.state_guard_adjustments is returned as a CONCATENATED STRING, not a list — scan with regex 'rel:[^;|]+' to find relationship markers. (3) If the LLM kills the NPC during the betrayal turn (e.g. 'you betray Garrett — Raiders cut him down'), the row vanishes from rolling_state.npcs but the vector itself is still tracked via deceased filter; the test skips the decay assertion in that branch rather than fail.",
+  "rca_of_issue": "No issue. First iteration of Ch 29 verification, clean pass."
+}
