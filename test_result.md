@@ -407,3 +407,23 @@ agent_communication:
       e2e 2 passing incl. a 3-turn rename→destroy→revive-blocked pipeline test
       (test_gateway_e2e.py::test_destruction_registry_end_to_end). Re-running live probe
       for object tests 1/2/5 next; model still dolphin-mistral until probe confirms.
+
+  - agent: "main"
+    message: |
+      INCREMENT 1c — remaining Ch 31 sub-increments + model switch.
+      - MODEL: live probe (iteration_4) passed all 5 object/NPC/injury families against the
+        real model, so default model switched dolphin-mistral:free -> anthropic/claude-3-5-haiku
+        (DB admin_settings.ai_settings.model). Turns now ~14-27s, no more 429 round-trips.
+      - SOLE LLM CALLER (Ch 31.11): added gateway.invoke_llm as the single provider entry
+        point; server.py no longer imports chat_completion/chat_completion_with_meta; both
+        turn call sites route through gateway.invoke_llm.
+      - ACTION ASSERTION (Ch 31.5): detect_prose_contradictions now flags prose that claims
+        the player acquired a tracked item whose state was NOT updated to a possession status
+        -> hallucination correction re-prompt.
+      - KNOWLEDGE BOUNDARY (Ch 31.5, partial): flags a dead NPC framed as a future/interactive
+        actor ("X will help", "ask X"); excludes referential "ask about X". FULL per-NPC
+        working-memory knowledge boundary deferred to P2/P3 (needs Ch 28 memory model).
+      - Tests: gateway unit suite 24 passing (added action-assertion + knowledge-boundary +
+        negatives), e2e 2 passing, custom-world live regression 7 passing, server imports OK.
+      Next: awaiting user choice for P2 (Ch 29 Relationship Calculus vs Ch 26 Gravity
+      Governance). Per user, P2 not to start until Ch 31 enforcement confirmed closed.

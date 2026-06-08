@@ -22,6 +22,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import server  # noqa: E402
+import gateway  # noqa: E402
 
 import os  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
@@ -115,8 +116,8 @@ def test_gateway_end_to_end():
             "attempts_per_model": {},
         }
 
-    original = server.chat_completion_with_meta
-    server.chat_completion_with_meta = fake_chat
+    original = gateway.invoke_llm
+    gateway.invoke_llm = fake_chat
 
     device_id = f"e2e-{uuid.uuid4()}"
 
@@ -152,7 +153,7 @@ def test_gateway_end_to_end():
     try:
         sess, t2 = _run(scenario)
     finally:
-        server.chat_completion_with_meta = original
+        gateway.invoke_llm = original
 
     # --- Turn 1: death recorded, no false positives. ---
     assert "Garrett" in (sess["rolling_state"].get("deceased") or []), "death not recorded"
@@ -223,8 +224,8 @@ def test_destruction_registry_end_to_end():
             "telemetry": {"provider": "test"}, "fallback_events": [], "attempts_per_model": {},
         }
 
-    original = server.chat_completion_with_meta
-    server.chat_completion_with_meta = fake_chat
+    original = gateway.invoke_llm
+    gateway.invoke_llm = fake_chat
     device_id = f"e2e-destroy-{uuid.uuid4()}"
 
     async def scenario():
@@ -253,7 +254,7 @@ def test_destruction_registry_end_to_end():
     try:
         sess_t2, t3 = _run(scenario)
     finally:
-        server.chat_completion_with_meta = original
+        gateway.invoke_llm = original
 
     # Turn 2: destruction recorded under the ORIGINAL identity, husk gone.
     t2_locs = sess_t2["rolling_state"].get("object_locations", [])
