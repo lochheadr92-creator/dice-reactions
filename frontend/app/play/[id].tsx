@@ -18,7 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { COLORS, FONTS } from "../../src/theme";
 import { getSession, sendAction, deleteSession, exportSession, resetSession, setSessionMode, Turn, SessionSummary } from "../../src/api";
-import { getSettings as getAppSettings } from "../../src/storage";
+import { getDeviceId, getSettings as getAppSettings } from "../../src/storage";
 import { friendlyError } from "../../src/errors";
 import { sanitizeParagraphs, sanitizeChoices } from "../../src/sanitize";
 import { Share } from "react-native";
@@ -85,6 +85,7 @@ export default function PlayScreen() {
   // turn's y-offset on layout and scroll exactly once when a scroll is pending.
   const pendingScrollRef = useRef<null | boolean>(null); // null = no scroll, boolean = animated?
   const latestTurnYRef = useRef(0);
+  const deviceIdRef = useRef("");
 
   // Read developer unlock state on mount (defaults to false until user has
   // completed the 7-tap unlock in Settings → ABOUT).
@@ -105,7 +106,9 @@ export default function PlayScreen() {
 
   const load = useCallback(async () => {
     try {
-      const res = await getSession(sessionId);
+      const deviceId = await getDeviceId();
+      deviceIdRef.current = deviceId;
+      const res = await getSession(sessionId, deviceId);
       setSession(res.session);
       setTurns(res.turns);
       // On initial load, land at the start of the most recent turn (no animation).
@@ -127,8 +130,11 @@ export default function PlayScreen() {
     if (!text.trim() || submitting) return;
     setSubmitting(true);
     try {
+      const deviceId = deviceIdRef.current || (await getDeviceId());
+      deviceIdRef.current = deviceId;
       const res = await sendAction({
         session_id: sessionId,
+        device_id: deviceId,
         action_text: text.trim(),
         debug_mode: debugMode,
       });
@@ -148,7 +154,8 @@ export default function PlayScreen() {
   const handleDelete = () => {
     const doIt = async () => {
       try {
-        await deleteSession(sessionId);
+        const deviceId = deviceIdRef.current || (await getDeviceId());
+        await deleteSession(sessionId, deviceId);
         router.replace("/");
       } catch (e) {
         console.log(e);
@@ -312,51 +319,6 @@ export default function PlayScreen() {
                 </Animated.Text>
               ))}
 
-              {devUnlocked && debugMode && turn.debug && (
-                <View style={styles.debugBlock} testID={`debug-block-${turn.turn_number}`}>
-                  <Text style={styles.debugHeader}>· DEBUG · TURN {turn.turn_number} ·</Text>
-                  {Object.entries(turn.debug).map(([k, v]) => (
-                    <View key={k} style={styles.debugLine}>
-                      <Text style={styles.debugKey}>{k.toUpperCase()}</Text>
-                      <Text style={styles.debugVal}>{v}</Text>
-                    </View>
-                  ))}
-                </View>
-              )}
-
-              {devUnlocked && debugMode && turn.rolling_state && (
-                <View style={styles.debugBlock} testID={`rolling-state-${turn.turn_number}`}>
-                  <Text style={styles.debugHeader}>· ROLLING · STATE ·</Text>
-                  {Object.entries(turn.rolling_state).map(([k, v]) => {
-                    let display: string;
-                    if (typeof v === "string") display = v;
-                    else if (Array.isArray(v)) {
-                      display = v
-                        .map((x) =>
-                          typeof x === "string"
-                            ? x
-                            : x?.name
-                            ? `${x.name}${x.stance ? ` (${x.stance})` : ""}${x.note ? ` — ${x.note}` : ""}`
-                            : JSON.stringify(x)
-                        )
-                        .join(" · ");
-                    } else if (v && typeof v === "object") {
-                      display = Object.entries(v as any)
-                        .map(([kk, vv]) => `${kk}: ${vv}`)
-                        .join(" · ");
-                    } else {
-                      display = String(v);
-                    }
-                    return (
-                      <View key={k} style={styles.debugLine}>
-                        <Text style={styles.debugKey}>{k.toUpperCase()}</Text>
-                        <Text style={styles.debugVal}>{display}</Text>
-                      </View>
-                    );
-                  })}
-                </View>
-              )}
-
               {i < turns.length - 1 && <View style={styles.turnDivider} />}
             </View>
             );
@@ -493,7 +455,8 @@ export default function PlayScreen() {
               onPress={async () => {
                 const next = mode === "basic" ? "advanced" : "basic";
                 try {
-                  await setSessionMode(sessionId, next);
+                  const deviceId = deviceIdRef.current || (await getDeviceId());
+                  await setSessionMode(sessionId, deviceId, next);
                   setMode(next);
                 } catch (e: any) {
                   const { title, message } = friendlyError(e);
@@ -511,7 +474,8 @@ export default function PlayScreen() {
               style={styles.menuRow}
               onPress={async () => {
                 try {
-                  const data = await exportSession(sessionId);
+                  const deviceId = deviceIdRef.current || (await getDeviceId());
+                  const data = await exportSession(sessionId, deviceId);
                   const json = JSON.stringify(data, null, 2);
                   if (Platform.OS === "web") {
                     try {
@@ -543,7 +507,8 @@ export default function PlayScreen() {
               onPress={() => {
                 const confirmAndRun = async () => {
                   try {
-                    await resetSession(sessionId);
+                    const deviceId = deviceIdRef.current || (await getDeviceId());
+                    await resetSession(sessionId, deviceId);
                     setShowMenu(false);
                     router.replace(`/new-story?from=reset&sessionTitle=${encodeURIComponent(session.title)}`);
                   } catch (e: any) {

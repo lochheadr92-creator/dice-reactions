@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import Depends, FastAPI, APIRouter, HTTPException, Request
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -48,6 +48,21 @@ from memory import (  # noqa: E402
 import gateway  # noqa: E402  — Anti-Hallucination Gateway (Ch 31)
 import relationships  # noqa: E402  — Relationship Calculus (Ch 29)
 import hud  # noqa: E402  — player-facing HUD shaping (status chips + Pressure)
+from security import fetch_owned_session, require_admin, require_device_id  # noqa: E402
+from rate_limit import (  # noqa: E402
+    _rollback_bucket_reservations,
+    acquire_story_creation_slot,
+    check_story_creation_limits,
+    ensure_rate_limit_indexes,
+    release_story_creation_slot,
+    resolve_client_ip,
+)
+from player_api import (  # noqa: E402
+    build_new_story_session_payload,
+    build_player_session,
+    build_player_state,
+    build_player_turn,
+)
 
 import json as _json  # noqa: E402
 
@@ -728,35 +743,7 @@ def _strip_internal_state_keys(state: Optional[Dict[str, str]]) -> Dict[str, str
     return clean
 
 
-def _sanitise_turn_for_player(turn: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a copy of the turn with all developer-facing data removed."""
-    out = dict(turn)
-    out.pop("rolling_state", None)
-    out.pop("debug", None)
-    out.pop("raw", None)
-    out["state"] = _strip_internal_state_keys(out.get("state"))
-    return out
-
-
-def _sanitise_session_for_player(session: Dict[str, Any]) -> Dict[str, Any]:
-    out = dict(session)
-    out.pop("rolling_state", None)
-    out["last_state"] = _strip_internal_state_keys(out.get("last_state"))
-    return out
-
-
-async def _maybe_sanitise_turn(turn: Dict[str, Any]) -> Dict[str, Any]:
-    settings = await get_ai_settings()
-    if settings.get("developer_mode"):
-        return turn
-    return _sanitise_turn_for_player(turn)
-
-
-async def _maybe_sanitise_session(session: Dict[str, Any]) -> Dict[str, Any]:
-    settings = await get_ai_settings()
-    if settings.get("developer_mode"):
-        return session
-    return _sanitise_session_for_player(session)
+_STORY_ENGINE_UNAVAILABLE = "Story engine unavailable"
 
 
 async def set_ai_settings(patch: Dict[str, Any]) -> Dict[str, Any]:
@@ -2245,7 +2232,7 @@ def _meta_into_debug(
     """Merge engine telemetry from chat_completion_with_meta into the turn.debug dict.
 
     This dict is only surfaced behind the Developer Mode unlock — never shown to
-    standard players (see _maybe_sanitise_turn).
+    standard players (see player_api.build_player_turn).
     """
     debug: Dict[str, str] = dict(base) if base else {}
     if meta.get("model_used"):
@@ -2337,27 +2324,14 @@ async def root():
 
 @api_router.get("/health")
 async def health():
-    settings = await get_ai_settings()
     return {
         "status": "ok",
         "llm_configured": ai_is_configured(),
-        "provider": "openrouter",
-        "model": settings.get("model"),
-        "temperature": settings.get("temperature"),
-        "max_tokens": settings.get("max_tokens"),
-        "history_window": settings.get("history_window"),
-        "default_mode": settings.get("default_mode"),
-        "compression_level": settings.get("compression_level"),
-        "memory_depth": settings.get("memory_depth"),
-        "developer_mode": settings.get("developer_mode", False),
-        "fallback_models": settings.get("fallback_models") or list(FALLBACK_MODELS),
-        "cost_mode": settings.get("cost_mode") or DEFAULT_COST_MODE,
-        "runtime_config": get_runtime_config(),
     }
 
 
 @api_router.get("/admin/runtime")
-async def admin_runtime():
+async def admin_runtime(_: None = Depends(require_admin)):
     """Snapshot of the AI routing runtime config (env + DB-resolved settings)."""
     if not ENABLE_DEBUG_PANEL:
         raise HTTPException(status_code=404, detail="Debug panel disabled")
@@ -2377,7 +2351,9 @@ async def admin_runtime():
 
 
 @api_router.get("/admin/session/{session_id}/diagnostics")
-async def admin_session_diagnostics(session_id: str):
+async def admin_session_diagnostics(
+    session_id: str, _: None = Depends(require_admin)
+):
     """Per-session runtime diagnostics: active model, switch history, cost mode."""
     if not ENABLE_DEBUG_PANEL:
         raise HTTPException(status_code=404, detail="Debug panel disabled")
@@ -2432,7 +2408,7 @@ async def list_scenarios():
 
 # -------- Admin: AI settings ------------------------------------------------
 @api_router.get("/admin/settings")
-async def admin_get_settings():
+async def admin_get_settings(_: None = Depends(require_admin)):
     settings = await get_ai_settings()
     return {
         "settings": settings,
@@ -2456,7 +2432,9 @@ async def admin_get_settings():
 
 
 @api_router.post("/admin/settings")
-async def admin_post_settings(req: AdminSettingsRequest):
+async def admin_post_settings(
+    req: AdminSettingsRequest, _: None = Depends(require_admin)
+):
     # Validate model is in supported list (if provided)
     if req.model is not None:
         supported_ids = {m["id"] for m in get_supported_models()}
@@ -2473,13 +2451,36 @@ async def admin_post_settings(req: AdminSettingsRequest):
 
 
 @api_router.get("/admin/models")
-async def admin_list_models():
+async def admin_list_models(_: None = Depends(require_admin)):
     return {"models": get_supported_models()}
 
 
 # -------- Story flow --------------------------------------------------------
 @api_router.post("/story/new")
-async def new_story(req: NewStoryRequest):
+async def new_story(req: NewStoryRequest, request: Request):
+    client_ip = resolve_client_ip(request)
+    consumed_buckets = await check_story_creation_limits(db, client_ip, req.device_id)
+    acquired_slot = False
+    try:
+        try:
+            await acquire_story_creation_slot(db)
+            acquired_slot = True
+        except HTTPException:
+            await _rollback_bucket_reservations(db, consumed_buckets)
+            raise
+        return await _create_new_story(req)
+    finally:
+        if acquired_slot:
+            await release_story_creation_slot(db)
+
+
+async def _cleanup_provisional_story(session_id: str) -> None:
+    """Remove session and any turns created during a failed story creation."""
+    await db.turns.delete_many({"session_id": session_id})
+    await db.sessions.delete_one({"id": session_id})
+
+
+async def _create_new_story(req: NewStoryRequest):
     settings = await get_ai_settings()
     scenario = get_scenario(req.scenario_id) if req.scenario_id else None
     custom_setup = req.custom_world_setup if not scenario else None
@@ -2585,14 +2586,14 @@ async def new_story(req: NewStoryRequest):
         parsed, raw, meta = await _generate_validated_turn(
             session.model_dump(), opening_prompt
         )
-    except AIServiceError as e:
-        logger.exception("AI service failed")
-        await db.sessions.delete_one({"id": session.id})
-        raise HTTPException(status_code=502, detail=f"Story engine error: {e}")
-    except Exception as e:
-        logger.exception("LLM call failed")
-        await db.sessions.delete_one({"id": session.id})
-        raise HTTPException(status_code=502, detail=f"Story engine error: {e}")
+    except AIServiceError:
+        logger.exception("AI service failed during new_story")
+        await _cleanup_provisional_story(session.id)
+        raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
+    except Exception:
+        logger.exception("LLM call failed during new_story")
+        await _cleanup_provisional_story(session.id)
+        raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
 
     guard_adjustments = _apply_object_permanence(parsed)
     enriched_debug = _meta_into_debug(parsed.debug, meta)
@@ -2662,46 +2663,40 @@ async def new_story(req: NewStoryRequest):
         debug=enriched_debug,
         raw=raw,
     )
-    await db.turns.insert_one(turn.model_dump())
+    try:
+        await db.turns.insert_one(turn.model_dump())
 
-    snippet = (parsed.paragraphs[0][:180] + "…") if parsed.paragraphs else ""
-    await db.sessions.update_one(
-        {"id": session.id},
-        {"$set": {
-            "turn_count": 1,
-            "last_narrative_snippet": snippet,
-            "last_state": parsed.state,
-            "rolling_state": merged_rolling or parsed.rolling_state,
-            "rolling_state_updated_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
-        }},
-    )
+        snippet = (parsed.paragraphs[0][:180] + "…") if parsed.paragraphs else ""
+        await db.sessions.update_one(
+            {"id": session.id},
+            {"$set": {
+                "turn_count": 1,
+                "last_narrative_snippet": snippet,
+                "last_state": parsed.state,
+                "rolling_state": merged_rolling or parsed.rolling_state,
+                "rolling_state_updated_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }},
+        )
 
-    # Persist session-level model lock + any fallback switch ledger.
-    await _persist_model_lock(session.id, meta, at_turn=1)
+        # Persist session-level model lock + any fallback switch ledger.
+        await _persist_model_lock(session.id, meta, at_turn=1)
+    except Exception:
+        logger.exception("story persistence failed during new_story")
+        await _cleanup_provisional_story(session.id)
+        raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
 
+    session_doc = session.model_dump(mode="json")
     return {
         "session_id": session.id,
-        "turn": await _maybe_sanitise_turn(turn.model_dump(mode="json")),
-        "session": {
-            "id": session.id,
-            "genre": session.genre,
-            "role": session.role,
-            "difficulty": session.difficulty,
-            "debug_mode": req.debug_mode,
-            "title": session.title,
-            "turn_count": 1,
-            "mode": session.mode,
-            "scenario_id": session.scenario_id,
-        },
+        "turn": build_player_turn(turn.model_dump(mode="json")),
+        "session": build_new_story_session_payload(session_doc),
     }
 
 
 @api_router.post("/story/action")
-async def story_action(req: ActionRequest):
-    session = await db.sessions.find_one({"id": req.session_id}, {"_id": 0})
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+async def story_action(req: ActionRequest, device_id: str = Depends(require_device_id)):
+    session = await fetch_owned_session(db, req.session_id, device_id)
 
     debug_marker = "[DEV_MODE: ON]" if (await get_ai_settings()).get("developer_mode") and req.debug_mode else "[DEV_MODE: OFF]"
     difficulty_marker = f"[DIFFICULTY: {session.get('difficulty', 'standard')}]"
@@ -2710,12 +2705,12 @@ async def story_action(req: ActionRequest):
 
     try:
         parsed, raw, meta = await _generate_validated_turn(session, user_text, player_action=req.action_text)
-    except AIServiceError as e:
-        logger.exception("AI service failed")
-        raise HTTPException(status_code=502, detail=f"Story engine error: {e}")
-    except Exception as e:
-        logger.exception("LLM call failed")
-        raise HTTPException(status_code=502, detail=f"Story engine error: {e}")
+    except AIServiceError:
+        logger.exception("AI service failed during story_action")
+        raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
+    except Exception:
+        logger.exception("LLM call failed during story_action")
+        raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
 
     next_turn_number = session.get("turn_count", 0) + 1
     guard_adjustments = _apply_state_supremacy(session, parsed, req.action_text)
@@ -2838,11 +2833,16 @@ async def story_action(req: ActionRequest):
     # Persist any model switch from this turn.
     await _persist_model_lock(req.session_id, meta, at_turn=next_turn_number)
 
-    return {"turn": await _maybe_sanitise_turn(turn.model_dump(mode="json"))}
+    return {"turn": build_player_turn(turn.model_dump(mode="json"))}
 
 
 @api_router.post("/story/session/{session_id}/mode")
-async def set_session_mode(session_id: str, req: SessionModeRequest):
+async def set_session_mode(
+    session_id: str,
+    req: SessionModeRequest,
+    device_id: str = Depends(require_device_id),
+):
+    await fetch_owned_session(db, session_id, device_id)
     if req.mode not in ("basic", "advanced"):
         raise HTTPException(status_code=400, detail="mode must be 'basic' or 'advanced'")
     result = await db.sessions.update_one(
@@ -2855,8 +2855,29 @@ async def set_session_mode(session_id: str, req: SessionModeRequest):
 
 
 @api_router.get("/story/session/{session_id}/export")
-async def export_session(session_id: str):
-    """Return full session state JSON: session + all turns + rolling state."""
+async def export_session(session_id: str, device_id: str = Depends(require_device_id)):
+    """Player-safe export: verified ownership + always-sanitised chronicle payload."""
+    session = await fetch_owned_session(db, session_id, device_id)
+    turns = await db.turns.find({"session_id": session_id}, {"_id": 0}).sort("turn_number", 1).to_list(length=500)
+    safe_session = build_player_session(session)
+    safe_turns = [build_player_turn(t) for t in turns]
+    return {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "session": safe_session,
+        "turns": safe_turns,
+        "summary": {
+            "turn_count": len(turns),
+            "last_state": build_player_state(session.get("last_state")),
+        },
+    }
+
+
+@api_router.get("/story/session/{session_id}/export/raw")
+async def export_session_raw(
+    session_id: str,
+    _: None = Depends(require_admin),
+):
+    """Administrative export: full unsanitised session + turns (admin key only)."""
     session = await db.sessions.find_one({"id": session_id}, {"_id": 0})
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -2874,13 +2895,11 @@ async def export_session(session_id: str):
 
 
 @api_router.post("/story/session/{session_id}/reset")
-async def reset_session(session_id: str):
+async def reset_session(session_id: str, device_id: str = Depends(require_device_id)):
     """Delete all turns and rolling state but keep the session shell (genre/role/difficulty/mode).
     The client should then re-call /story/action with a meaningful first action, or the next call
     to /story/new with the same scenario."""
-    session = await db.sessions.find_one({"id": session_id}, {"_id": 0})
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    await fetch_owned_session(db, session_id, device_id)
     await db.turns.delete_many({"session_id": session_id})
     await db.sessions.update_one(
         {"id": session_id},
@@ -2896,36 +2915,34 @@ async def reset_session(session_id: str):
 
 
 @api_router.get("/story/sessions")
-async def list_sessions(device_id: str):
+async def list_sessions(device_id: str = Depends(require_device_id)):
     cursor = db.sessions.find({"device_id": device_id}, {"_id": 0}).sort("updated_at", -1)
     sessions = await cursor.to_list(length=200)
-    sessions = [await _maybe_sanitise_session(s) for s in sessions]
+    sessions = [build_player_session(s) for s in sessions]
     return {"sessions": sessions}
 
 
 @api_router.get("/story/session/{session_id}")
-async def get_session(session_id: str):
-    session = await db.sessions.find_one({"id": session_id}, {"_id": 0})
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+async def get_session(session_id: str, device_id: str = Depends(require_device_id)):
+    session = await fetch_owned_session(db, session_id, device_id)
     turns = await db.turns.find({"session_id": session_id}, {"_id": 0}).sort("turn_number", 1).to_list(length=500)
-    settings = await get_ai_settings()
-    if not settings.get("developer_mode"):
-        session = _sanitise_session_for_player(session)
-        turns = [_sanitise_turn_for_player(t) for t in turns]
+    session = build_player_session(session)
+    turns = [build_player_turn(t) for t in turns]
     return {"session": session, "turns": turns}
 
 
 @api_router.get("/story/session/{session_id}/latest")
-async def get_latest_turn(session_id: str):
+async def get_latest_turn(session_id: str, device_id: str = Depends(require_device_id)):
+    await fetch_owned_session(db, session_id, device_id)
     turn = await db.turns.find_one({"session_id": session_id}, {"_id": 0}, sort=[("turn_number", -1)])
     if not turn:
         raise HTTPException(status_code=404, detail="No turns found")
-    return {"turn": await _maybe_sanitise_turn(turn)}
+    return {"turn": build_player_turn(turn)}
 
 
 @api_router.delete("/story/session/{session_id}")
-async def delete_session(session_id: str):
+async def delete_session(session_id: str, device_id: str = Depends(require_device_id)):
+    await fetch_owned_session(db, session_id, device_id)
     await db.turns.delete_many({"session_id": session_id})
     result = await db.sessions.delete_one({"id": session_id})
     if result.deleted_count == 0:
@@ -2937,13 +2954,19 @@ app.include_router(api_router)
 
 _cors_origins_raw = os.environ.get("CORS_ORIGINS", "*")
 _cors_origins = ["*"] if _cors_origins_raw.strip() == "*" else [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
+_cors_allow_headers = [
+    "Content-Type",
+    "X-Device-Id",
+    "X-Admin-Api-Key",
+    "Authorization",
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
+    allow_credentials=_cors_origins != ["*"],
     allow_origins=_cors_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=_cors_allow_headers if _cors_origins != ["*"] else ["*"],
 )
 
 logging.basicConfig(
@@ -2951,6 +2974,11 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+@app.on_event("startup")
+async def startup_rate_limit_indexes():
+    await ensure_rate_limit_indexes(db)
 
 
 @app.on_event("shutdown")

@@ -73,7 +73,8 @@ export default function HomeScreen() {
   const handleDelete = (id: string) => {
     const doIt = async () => {
       try {
-        await deleteSession(id);
+        const deviceId = await getDeviceId();
+        await deleteSession(id, deviceId);
         load();
       } catch (e) {
         console.log(e);

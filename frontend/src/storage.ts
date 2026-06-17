@@ -3,19 +3,27 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 const DEVICE_ID_KEY = "dice_device_id";
 const SETTINGS_KEY = "dice_settings";
 
-function uuid(): string {
-  // RFC4122-ish v4
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === "x" ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
+function generateDeviceId(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  if (typeof globalThis.crypto?.getRandomValues !== "function") {
+    throw new Error(
+      "Secure random number generation is unavailable; cannot create a device identity."
+    );
+  }
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 export async function getDeviceId(): Promise<string> {
   let id = await AsyncStorage.getItem(DEVICE_ID_KEY);
   if (!id) {
-    id = uuid();
+    id = generateDeviceId();
     await AsyncStorage.setItem(DEVICE_ID_KEY, id);
   }
   return id;
@@ -33,25 +41,13 @@ const DEFAULT_SETTINGS: AppSettings = {
   developerUnlocked: false,
 };
 
-// The only font scales the UI can render. Anything else is corrupt/legacy and
-// must be repaired so it can never feed an out-of-range index into the picker.
 const ALLOWED_FONT_SCALES = [0.9, 1, 1.1, 1.25];
 
-/**
- * Startup sanitiser for persisted settings.
- *
- * Coerces every field to a known-good value and strips any unknown/legacy keys
- * (e.g. stale array indexes saved by older builds). If anything had to be
- * repaired the cleaned object is written back to disk and the repair is logged.
- * This guarantees no malformed persisted value can ever reach a native indexed
- * component on launch.
- */
 function sanitizeSettings(raw: any): { settings: AppSettings; repaired: boolean } {
   let repaired = false;
   const source = raw && typeof raw === "object" ? raw : {};
   if (!raw || typeof raw !== "object") repaired = true;
 
-  // fontScale must be one of the allowed values.
   let fontScale = Number(source.fontScale);
   if (!ALLOWED_FONT_SCALES.includes(fontScale)) {
     repaired = true;
@@ -66,8 +62,6 @@ function sanitizeSettings(raw: any): { settings: AppSettings; repaired: boolean 
 
   const cleaned: AppSettings = { debugDefault, fontScale, developerUnlocked };
 
-  // Detect legacy / unexpected keys (older builds may have stored array
-  // indexes such as a selected-model index). Dropping them is a repair.
   const allowedKeys = new Set(["debugDefault", "fontScale", "developerUnlocked"]);
   for (const k of Object.keys(source)) {
     if (!allowedKeys.has(k)) {
@@ -86,7 +80,6 @@ export async function getSettings(): Promise<AppSettings> {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    console.log("[storage] corrupt settings JSON — resetting to defaults");
     const fresh = { ...DEFAULT_SETTINGS };
     try {
       await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(fresh));
@@ -95,7 +88,6 @@ export async function getSettings(): Promise<AppSettings> {
   }
   const { settings, repaired } = sanitizeSettings(parsed);
   if (repaired) {
-    console.log("[storage] repaired invalid persisted settings", { from: parsed, to: settings });
     try {
       await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
     } catch {}
