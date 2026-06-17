@@ -1,6 +1,18 @@
 # Next Work
 
-Practical backlog from confirmed repo gaps and Unknown items from the first documentation pass. No speculative product features.
+Practical backlog from confirmed repo gaps on the **`emergent`** branch. No speculative product features. Scoring-equivalence and NaN-ranking items are **excluded** — those symbols never existed in this repository.
+
+---
+
+## Completed (documentation)
+
+### NW-DOC-01: Reconcile docs with `emergent` runtime ✅
+
+| Field | Detail |
+|-------|--------|
+| **Problem** | Pass 1–2 docs described `main` (no gateway/relationship/HUD); cherry-picked to `emergent` without re-audit. |
+| **Evidence** | Git diff `main` vs `emergent`; 47-test bundle passed 2026-06-17 |
+| **Resolution** | This reconciliation pass — see `change-history.md` 2026-06-17 pass 3 |
 
 ---
 
@@ -11,7 +23,7 @@ Practical backlog from confirmed repo gaps and Unknown items from the first docu
 | Field | Detail |
 |-------|--------|
 | **Problem** | `/api/admin/*` and `/api/story/session/{id}/export` lack authentication; any caller with network access can read full simulation state or change global AI settings. |
-| **Evidence** | `server.py` admin routes; `export_session` returns unsanitized `session` + `turns` |
+| **Evidence** | `server.py` admin routes ~2359–2477; `export_session` ~2857–2873 — **Not present** (auth) |
 | **Impact** | Credential-less abuse, data leak, cost injection via model changes |
 | **Recommended action** | Add API key, session auth, or network-level restriction; sanitize export or require dev auth |
 | **Acceptance criteria** | Unauthenticated client receives 401 on admin POST and optionally on export; documented in `api.md` |
@@ -22,8 +34,8 @@ Practical backlog from confirmed repo gaps and Unknown items from the first docu
 
 | Field | Detail |
 |-------|--------|
-| **Problem** | `get_session`, `export_session`, `story_action` use `session_id` only; knowing UUID grants access. |
-| **Evidence** | `server.py` routes — no `device_id` verification on get/export/action |
+| **Problem** | `get_session`, `export_session`, `story_action`, `reset_session`, `delete_session`, `set_session_mode` use `session_id` only; knowing UUID grants access. |
+| **Evidence** | `server.py` routes — **Partial** `device_id` (enforced on `list_sessions` + stored at `new_story` only) |
 | **Impact** | Cross-device chronicle access if ID leaks |
 | **Recommended action** | Require `device_id` query/body param and match `session.device_id` |
 | **Acceptance criteria** | Mismatched device returns 403; integration test added |
@@ -34,15 +46,15 @@ Practical backlog from confirmed repo gaps and Unknown items from the first docu
 
 ## P1: Correctness and verification
 
-### NW-P1-01: Integration tests not runnable in default dev setup
+### NW-P1-01: Live-server integration tests
 
 | Field | Detail |
 |-------|--------|
-| **Problem** | `test_custom_world_system.py` failed with connection refused when backend not running (2026-06-17). |
-| **Evidence** | Pytest run output: `localhost:8000` connection refused |
-| **Impact** | Regression suite gives false negatives; PRD "30 passed" status stale |
-| **Recommended action** | Document server prerequisite in `development.md`; add pytest marker `live` or docker-compose for CI |
-| **Acceptance criteria** | `pytest tests/test_custom_world_system.py` passes with documented one-command stack |
+| **Problem** | Live tests unverified; `test_custom_world_system.py` needs running backend. |
+| **Evidence** | Unverified list in `verification.md` |
+| **Impact** | Integration regressions unknown |
+| **Recommended action** | Document server prerequisite; add pytest marker `live` or docker-compose for CI |
+| **Acceptance criteria** | Live bundle passes with documented one-command stack |
 | **Files** | `backend/tests/conftest.py`, `docs/development.md`, `docs/release-checklist.md` |
 | **Dependencies** | MongoDB + OpenRouter key |
 
@@ -50,8 +62,8 @@ Practical backlog from confirmed repo gaps and Unknown items from the first docu
 
 | Field | Detail |
 |-------|--------|
-| **Problem** | `AGENTS.md` and PRD state assertions are outdated vs Haiku/OpenRouter runtime. |
-| **Evidence** | `AGENTS.md` line 59; `memory/PRD.md` observations |
+| **Problem** | `AGENTS.md` and PRD state assertions are outdated vs Haiku/OpenRouter + gateway runtime. |
+| **Evidence** | `AGENTS.md`; Docs-claimed |
 | **Impact** | False regressions or missed regressions |
 | **Recommended action** | Update assertions or split into live vs contract tests; fix E741 |
 | **Acceptance criteria** | File passes on current stack or is skipped with documented reason |
@@ -62,8 +74,8 @@ Practical backlog from confirmed repo gaps and Unknown items from the first docu
 
 | Field | Detail |
 |-------|--------|
-| **Problem** | `qa_live_20turn_hostile.py` and PRD P1 items (20+ turn, 15+ turn compression) not run in doc passes. |
-| **Evidence** | Script exists; not executed 2026-06-17 |
+| **Problem** | `qa_live_20turn_hostile.py` and PRD P1 items (20+ turn, 15+ turn compression) not run. |
+| **Evidence** | Scripts exist; **Unverified** 2026-06-17 |
 | **Impact** | Long-run guard failures unknown |
 | **Recommended action** | Run script; record results in `change-history.md` and `feature-status.md` |
 | **Acceptance criteria** | Script completes; failures triaged or filed as P0/P1 |
@@ -74,7 +86,7 @@ Practical backlog from confirmed repo gaps and Unknown items from the first docu
 
 | Field | Detail |
 |-------|--------|
-| **Problem** | Fallback chain coded but deliberate failure test not recorded. |
+| **Problem** | Fallback chain coded via `gateway.invoke_llm` but deliberate failure test not recorded. |
 | **Evidence** | PRD P1 backlog; `ai_service.py` fallback_events |
 | **Impact** | Production outage if primary model disabled |
 | **Recommended action** | Temporarily set invalid primary in test env; confirm Sonnet/Mythomax rescue |
@@ -93,6 +105,18 @@ Practical backlog from confirmed repo gaps and Unknown items from the first docu
 | **Acceptance criteria** | Clean venv install + import works |
 | **Files** | `backend/requirements.txt` |
 | **Dependencies** | None |
+
+### NW-P1-06: Live gateway and relationship probes
+
+| Field | Detail |
+|-------|--------|
+| **Problem** | `test_gateway_live_probe.py` and `test_relationship_calculus_live.py` not run. |
+| **Evidence** | Offline unit/e2e tests pass; live probes **Unverified** |
+| **Impact** | Provider behaviour vs gateway/relationship guards unknown under real LLM |
+| **Recommended action** | Run both against live stack; record in `change-history.md` |
+| **Acceptance criteria** | Both pass or failures documented with triage |
+| **Files** | `backend/tests/test_gateway_live_probe.py`, `test_relationship_calculus_live.py` |
+| **Dependencies** | NW-P1-01 |
 
 ---
 
@@ -114,35 +138,23 @@ Practical backlog from confirmed repo gaps and Unknown items from the first docu
 
 | Field | Detail |
 |-------|--------|
-| **Problem** | `api.md` previously marked export/reset Unknown; no automated contract tests. |
-| **Evidence** | `failure-modes.md` FM-17 |
+| **Problem** | No automated contract tests for export JSON keys and reset `turn_count=0`. |
+| **Evidence** | `failure-modes.md` FM-18 |
 | **Impact** | Frontend share/reset breakage undetected |
 | **Recommended action** | Add pytest for export JSON keys and reset turn_count=0 |
 | **Acceptance criteria** | Tests pass against live server |
 | **Files** | `backend/tests/`, `docs/api.md` |
 | **Dependencies** | NW-P1-01 |
 
-### NW-P2-03: Configuration source-of-truth documentation
+### NW-P2-03: CI pipeline for deterministic bundle
 
 | Field | Detail |
 |-------|--------|
-| **Problem** | Code defaults, env, DB overrides, and PRD deployment values disagree in docs. |
-| **Evidence** | `overview.md` vs PRD (`history_window`, `max_tokens`, `developer_mode`) |
-| **Impact** | Ops/debug confusion |
-| **Recommended action** | `/api/health` is canonical for effective runtime; PRD numbers tagged Docs-claimed only |
-| **Acceptance criteria** | `current-state.md` updated after each release with health snapshot |
-| **Files** | `docs/current-state.md`, `memory/PRD.md` (reference only) |
-| **Dependencies** | None |
-
-### NW-P2-04: CI pipeline missing
-
-| Field | Detail |
-|-------|--------|
-| **Problem** | No GitHub Actions / CI config in repo. |
-| **Evidence** | Code search |
-| **Impact** | Verification scripts not run on every PR |
-| **Recommended action** | CI job: P0/P1/P1.5 scripts + `yarn tsc` |
-| **Acceptance criteria** | CI config runs deterministic tests without API key |
+| **Problem** | No GitHub Actions / CI config; 47-test bundle run manually only. |
+| **Evidence** | 47 passed 2026-06-17; no `.github/workflows` |
+| **Impact** | Regressions on gateway/relationship/HUD undetected on PR |
+| **Recommended action** | CI job: 47-test pytest bundle + `yarn tsc` |
+| **Acceptance criteria** | CI runs deterministic tests without API key |
 | **Files** | `.github/workflows/` (future) |
 | **Dependencies** | None |
 
@@ -163,9 +175,11 @@ From PRD P2 — only if P0/P1 clear:
 
 Do not schedule without implementation evidence:
 
-- Utility AI
-- Actor resolution / caps
+- Utility AI (PRD Ch 27)
+- Actor resolution / caps (PRD Ch 25)
 - Formal event sourcing rebuild
 - Gravity retention beyond context budget
-- Historical scoring equivalence / NaN guards
+- NPC↔NPC relationship edges
 - Vector retrieval RAG
+
+**Not applicable to this repo (never existed):** historical scoring equivalence, NaN/infinity ranking guards.

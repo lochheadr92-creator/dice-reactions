@@ -1,6 +1,8 @@
 # Decision Log
 
-Architecture Decision Records (ADRs) supported by evidence in this repository. Dates reflect when the decision is documented here, not necessarily original authorship.
+Architecture Decision Records (ADRs) supported by evidence in this repository on the **`emergent`** branch. Dates reflect when the decision is documented here; implementation commits noted where known.
+
+**`memory/PRD.md`** is the planning and conformance tracker — not evidence for accepted ADR status.
 
 ---
 
@@ -45,7 +47,7 @@ Architecture Decision Records (ADRs) supported by evidence in this repository. D
 | **Date** | Documented 2026-06-17 |
 | **Status** | Accepted |
 | **Context** | Chronicles need history; long sessions need compressed state. |
-| **Decision** | Append turns via `insert_one`. Maintain latest `rolling_state` on session document. Rebuild prompts from recent turn replay + `<prior_state>`. `reset_session` deletes turns and clears rolling state. |
+| **Decision** | Append turns via `insert_one`. Maintain latest `rolling_state` on session document. Rebuild prompts from recent turn replay + `<prior_state>`. `reset_session` deletes turns and clears rolling state. No aggregate rebuild from event log. |
 | **Alternatives considered** | Full event sourcing with aggregate rebuild (not implemented); overwrite turns in place (reject — loses audit trail). |
 | **Consequences** | Reset is destructive; no immutable event store. |
 | **Risks** | `rolling_state` overwrite can lose history not captured in turn log fields. |
@@ -99,7 +101,7 @@ Architecture Decision Records (ADRs) supported by evidence in this repository. D
 | **Decision** | `_apply_npc_memory_bounds` caps remembers list, decays stale minors, caps NPC count. `_apply_faction_consequence_tick` counts theme repeats in memory and bumps existing `faction_pressure` entries after threshold. |
 | **Alternatives considered** | Global faction simulation graph (not implemented); unbounded LLM lists (reject). |
 | **Consequences** | Regex theme matching; no actor graph resolution. |
-| **Risks** | Missed or false faction ticks; relationship direction not enforced. |
+| **Risks** | Missed or false faction ticks. |
 | **Files affected** | `backend/server.py` |
 | **Tests required** | `verify_p1_immersion_integrity.py` P1-D ✅ |
 | **Evidence** | P1-D scenarios passed 2026-06-17 |
@@ -113,7 +115,7 @@ Architecture Decision Records (ADRs) supported by evidence in this repository. D
 | **Date** | Documented 2026-06-17 |
 | **Status** | Accepted |
 | **Context** | Admin UI exposes many models; invalid IDs cause provider errors. |
-| **Decision** | `admin_post_settings` rejects `model` not in `SUPPORTED_MODELS` catalog. Runtime uses session-locked `active_model` + `chat_completion_with_meta` fallback chain. |
+| **Decision** | `admin_post_settings` rejects `model` not in `SUPPORTED_MODELS` catalog. Runtime uses session-locked `active_model` + `chat_completion_with_meta` (via `gateway.invoke_llm`) fallback chain. |
 | **Alternatives considered** | Free-form model string (reject — poor UX/errors). |
 | **Consequences** | Catalog must be updated manually in `ai_service.py`. |
 | **Risks** | Catalog drift vs OpenRouter availability; free-tier rate limits. |
@@ -132,7 +134,7 @@ Architecture Decision Records (ADRs) supported by evidence in this repository. D
 | **Context** | Debug payloads needed for tuning; must not appear for normal players. |
 | **Decision** | Server `developer_mode` in admin settings controls `_maybe_sanitise_*`. Client 7-tap unlock sets local `developerUnlocked` and sets server `developer_mode`. `[DEV_MODE: ON]` only when both server `developer_mode` and request `debug_mode` true. |
 | **Alternatives considered** | Per-session only (partially used via `debug_mode`); always-on debug (reject). |
-| **Consequences** | Two flags to coordinate; export endpoint ignores sanitization. |
+| **Consequences** | Two flags to coordinate; export endpoint ignores sanitization; admin POST unauthenticated. |
 | **Risks** | Unauthenticated `developer_mode` toggle; export leak. |
 | **Files affected** | `backend/server.py`, `frontend/app/settings.tsx`, `frontend/app/play/[id].tsx` |
 | **Tests required** | Integration with `debug_mode: false` (not run this pass) |
@@ -140,18 +142,69 @@ Architecture Decision Records (ADRs) supported by evidence in this repository. D
 
 ---
 
+## ADR-009: Anti-Hallucination Gateway (Ch 31 incremental)
+
+| Field | Detail |
+|-------|--------|
+| **Date** | Implemented `b4a2891`; documented 2026-06-17 |
+| **Status** | Accepted |
+| **Context** | LLM can contradict established object, injury, and death facts across turns. |
+| **Decision** | Introduce `gateway.py` with: `invoke_llm` as sole LLM entry; `build_immutable_truth_block` (PREVENT); `strip_illegal_state_changes` (STRIP); `detect_prose_contradictions` (DETECT + retry); `update_death_registry` / `update_destruction_registry`. Wire into `_build_messages`, `_generate_turn`, `_full_validate`, and post-parse guard pipeline. |
+| **Alternatives considered** | Prompt-only truth (reject — demonstrated drift); direct `ai_service` calls (reject — bypass risk). |
+| **Consequences** | All new LLM paths must use `gateway.invoke_llm`; contradiction retry adds latency on failure. |
+| **Risks** | Heuristic death/object detection; not full Ch 31 conformance. |
+| **Files affected** | `backend/gateway.py`, `backend/server.py` |
+| **Tests required** | `test_anti_hallucination_gateway.py` ✅, `test_gateway_e2e.py` ✅ |
+| **Evidence** | Commit `b4a2891`; 47-test bundle passed 2026-06-17 |
+
+---
+
+## ADR-010: Relationship calculus — engine-owned NPC→player vectors (Ch 29)
+
+| Field | Detail |
+|-------|--------|
+| **Date** | Implemented `a52b66d`; documented 2026-06-17 |
+| **Status** | Accepted |
+| **Context** | Social state drifted when LLM authored relationship feelings each turn. |
+| **Decision** | `relationships.py` maintains `rolling_state['relationship_vectors']` (protected key). Prior vectors are authoritative; LLM injection ignored. Each turn: neglect decay, regex-detected event deltas (Ch 29.8 table + extensions), derived behavioural state, coarse stance sync on `npcs`, `build_relationship_block` for prompt. **Directionality: NPC→player only.** |
+| **Alternatives considered** | LLM-authored `relationship_threads` only (reject — no determinism); full NPC graph (not implemented). |
+| **Consequences** | `relationship_threads` remains for seeding/narrative but not for vector mechanics; no NPC↔NPC edges. |
+| **Risks** | Regex false positives/negatives; identity bonds decay slower only. |
+| **Files affected** | `backend/relationships.py`, `backend/memory.py`, `backend/server.py` |
+| **Tests required** | `test_relationship_calculus.py` ✅ (`test_engine_owns_vectors_ignores_llm_injection`) |
+| **Evidence** | Commit `a52b66d`; `test_gateway_e2e.py` relationship turn assertion |
+
+---
+
+## ADR-011: HUD shaping — DNG / MOM / PRS (non-prescriptive)
+
+| Field | Detail |
+|-------|--------|
+| **Date** | Implemented `ff1858d`; documented 2026-06-17 |
+| **Status** | Accepted |
+| **Context** | Objective/quest chips steered player behaviour; product requires condition + pressure without solutions. |
+| **Decision** | `hud.shape_hud` strips Objective/Goal keys; ensures Danger (`none`–`critical`) and Momentum (`surging`–`lost`) chips; sets single Pressure line via `derive_pressure` rejecting prescriptive language. Frontend renders DNG, MOM, PRS labels in `play/[id].tsx`. |
+| **Alternatives considered** | LLM-only HUD (reject — prescriptive leaks); Objective bar (reject — quest-marker UX). |
+| **Consequences** | HUD is engine-shaped every turn after guards; LLM pressure used only if non-prescriptive. |
+| **Risks** | Fallback pressure phrases may feel generic. |
+| **Files affected** | `backend/hud.py`, `backend/server.py`, `frontend/app/play/[id].tsx` |
+| **Tests required** | `test_hud.py` ✅ |
+| **Evidence** | Commit `ff1858d`; `test_hud.py` assertions on chip vocabularies |
+
+---
+
 ## Candidate decisions requiring confirmation
 
-These topics appear in design briefs or related engine vocabulary but **lack sufficient code evidence** for accepted ADR status:
+These topics appear in `memory/PRD.md` or design briefs but **lack sufficient code evidence** for accepted ADR status:
 
 | Topic | Finding |
 |-------|---------|
-| Actor caps / actor resolution | No resolver module; NPCs are LLM-authored lists |
-| Relationship directionality | `relationship_threads` schema in prompt only; no edge-direction guard |
-| Deterministic utility AI | Not present |
+| Actor caps / actor resolution | No resolver module; NPCs are LLM-authored lists (PRD Ch 25 ❌) |
+| NPC↔NPC relationship edges | Only NPC→player vectors implemented |
+| Deterministic utility AI | Not present (PRD Ch 27) |
 | Gravity-based memory retention | Only context budget + rolling merge |
-| Historical score equivalence | No scoring subsystem |
-| Non-finite scoring inputs (NaN/∞) | No scoring subsystem |
 | Formal event sourcing | Turn log only (see ADR-003) |
 
 Promote to ADR when implementation and tests exist.
+
+**Explicitly N/A:** historical score equivalence, NaN/infinity ranking guards — symbols never existed in this repository's git history.
