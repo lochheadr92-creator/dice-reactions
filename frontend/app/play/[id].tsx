@@ -12,7 +12,7 @@ import {
   Modal,
   Alert,
 } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
@@ -78,6 +78,7 @@ export default function PlayScreen() {
   const [debugMode, setDebugMode] = useState(false);
   const [mode, setMode] = useState<"basic" | "advanced">("advanced");
   const [devUnlocked, setDevUnlocked] = useState(false);
+  const [fontScale, setFontScale] = useState(1);
   const scrollRef = useRef<ScrollView>(null);
   // Scroll orchestration. After a turn is appended (or on initial load) we want
   // to land at the TOP of the newest turn — the start of the narration — not at
@@ -87,22 +88,30 @@ export default function PlayScreen() {
   const latestTurnYRef = useRef(0);
   const deviceIdRef = useRef("");
 
-  // Read developer unlock state on mount (defaults to false until user has
-  // completed the 7-tap unlock in Settings → ABOUT).
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const s = await getAppSettings();
-        if (!cancelled) setDevUnlocked(!!s.developerUnlocked);
-      } catch {
-        if (!cancelled) setDevUnlocked(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // Refresh local display preferences (developer unlock + text size) whenever
+  // this screen regains focus, so changes made in Settings apply immediately.
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      (async () => {
+        try {
+          const s = await getAppSettings();
+          if (!cancelled) {
+            setDevUnlocked(!!s.developerUnlocked);
+            setFontScale(s.fontScale || 1);
+          }
+        } catch {
+          if (!cancelled) {
+            setDevUnlocked(false);
+            setFontScale(1);
+          }
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [])
+  );
 
   const load = useCallback(async () => {
     try {
@@ -312,7 +321,7 @@ export default function PlayScreen() {
                 <Animated.Text
                   key={idx}
                   entering={i === turns.length - 1 ? FadeInDown.duration(420).delay(idx * 90) : FadeIn}
-                  style={styles.proseParagraph}
+                  style={[styles.proseParagraph, { fontSize: Math.round(18 * fontScale), lineHeight: Math.round(28 * fontScale) }]}
                   testID={`paragraph-${turn.turn_number}-${idx}`}
                 >
                   {p}

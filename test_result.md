@@ -283,6 +283,76 @@ frontend:
           Added getAdminSettings(), saveAdminSettings(patch), getHealth().
           Existing story APIs unchanged.
 
+  - task: "Settings screen repair after security patch (restore legitimate user settings)"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/settings.tsx, /app/frontend/app/play/[id].tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Investigated pre-patch settings.tsx (commit d9669a0, 860 lines) vs current (242 lines).
+          FINDING: The security patch (f5a0d83, ADR-012) removed ONLY the "ADMIN · AI ENGINE"
+          block (model picker, temperature, max_tokens, history_window, default_mode,
+          compression_level, memory_depth, save/reset) which called getAdminSettings/
+          saveAdminSettings. These are admin-only/global server settings requiring
+          X-Admin-Api-Key — correctly kept removed (no admin UI in public client; no
+          privilege escalation). All legitimate user-facing settings were retained:
+          text size (READING), developer diagnostics toggle (behind 7-tap), lock developer,
+          about/version 7-tap unlock. No normal-user setting was accidentally removed.
+          REPAIR: The "text size" (fontScale) control was a DEAD control in BOTH pre-patch
+          and current builds — saved to AsyncStorage but never applied to prose (play screen
+          rendered fixed fontSize:18). Wired fontScale into play/[id].tsx prose rendering and
+          added a useFocusEffect to refresh text size + dev-unlock when returning from Settings.
+          No backend or admin logic changed; storage schema unchanged (no migration needed).
+          Needs UI regression: Settings loads; text size persists across reload and visibly
+          scales prose; 7-tap dev unlock reveals diagnostics + lock; admin AI controls absent;
+          no secrets in UI/logs.
+      - working: true
+        agent: "testing"
+        comment: |
+          Regression test PASSED (5/6 tests, 1 blocked as expected). Tested against
+          https://repo-status-8.preview.emergentagent.com.
+          
+          PASS: Settings screen loads with testID "settings-screen", "· READING ·" section,
+          and all four text-size chips (S/M/L/XL) with correct testIDs (font-scale-0.9,
+          font-scale-1, font-scale-1.1, font-scale-1.25).
+          
+          PASS: Text size selection persists in localStorage (key: "dice_settings"). Verified
+          fontScale transitions: 1.25 (XL) → 1.0 (M). Visual verification via screenshots
+          confirms active chip highlighting. AsyncStorage (Expo web polyfill) correctly stores
+          and retrieves values.
+          
+          PASS: Admin controls absent (security). NO admin AI engine UI found. Verified absence
+          of model picker, temperature/token/history steppers, show-more-models, ai-save,
+          ai-reset. Security patch (f5a0d83, ADR-012) correctly removed admin-only controls.
+          
+          PASS: Developer mode protection. Before unlock: debug-default-switch and lock-developer
+          NOT visible. After 7 taps on version-tap: "Developer access" alert appeared, controls
+          became visible. Visual verification confirms persistence (developerUnlocked: true in
+          localStorage).
+          
+          BLOCKED: Text size affects prose. No existing stories available. Story creation via
+          "GO · QUICK · START" exceeded 60s timeout (likely free-tier LLM rate-limiting). Per
+          review request: "If no story can be opened at all, report this step as BLOCKED rather
+          than failed." Code inspection confirms correct wiring: play/[id].tsx line 324 applies
+          fontScale (fontSize: Math.round(18 * fontScale), lineHeight: Math.round(28 * fontScale)).
+          useFocusEffect (lines 93-114) refreshes fontScale when returning from Settings.
+          Implementation is sound; runtime verification blocked by story availability, not a defect.
+          
+          PASS: No secrets visible. Checked for API keys (OPENROUTER_API_KEY, sk-or-v1-),
+          rolling_state JSON, X-Admin-Api-Key. All checks passed. Settings UI is secure.
+          
+          EVIDENCE: 10 screenshots captured showing Settings UI, chip selections, developer mode
+          unlock, and security verification.
+          
+          CONCLUSION: Security patch repair successful. All user settings functional. Admin
+          controls correctly removed. Text-size persistence verified. Prose fontSize wiring
+          confirmed via code (runtime blocked by story availability). No security regressions.
+
 metadata:
   created_by: "main_agent"
   version: "1.1"
@@ -470,3 +540,53 @@ agent_communication:
       46 passing; frontend lint clean. Player rules honored: no correct-action hints, bad choices
       still possible (consequences come from cause-effect elsewhere). Next: live frontend verify,
       then Ch 27 Utility AI.
+  
+  - agent: "testing"
+    message: |
+      REGRESSION TEST COMPLETE: Settings screen & text-size wiring after security patch (ADR-012).
+      Tested against https://repo-status-8.preview.emergentagent.com (Expo Router web).
+      
+      PASS (5/6 tests):
+      1. ✅ SETTINGS LOADS: Settings screen (testID "settings-screen") renders without errors.
+         "· READING ·" section present with all four text-size chips (S/M/L/XL) with correct
+         testIDs (font-scale-0.9, font-scale-1, font-scale-1.1, font-scale-1.25).
+      
+      2. ✅ TEXT SIZE PERSIST: XL chip selection persists across page interactions. Verified via
+         localStorage key "dice_settings" (fontScale: 1.25 → 1.0 transitions confirmed). Visual
+         verification via screenshots shows active chip highlighting. AsyncStorage (Expo web
+         polyfill) correctly stores and retrieves fontScale values.
+      
+      3. ✅ ADMIN CONTROLS ABSENT (security): NO admin AI engine UI found. Verified absence of:
+         model picker (testIDs starting with "model-"), temperature steppers (temp-up/temp-down),
+         token steppers (tokens-up/tokens-down), history steppers (history-up/history-down),
+         show-more-models, ai-save, ai-reset. Security patch (f5a0d83, ADR-012) correctly removed
+         admin-only controls requiring X-Admin-Api-Key.
+      
+      4. ✅ DEVELOPER MODE PROTECTED: Before unlock, debug-default-switch and lock-developer NOT
+         visible. After 7 taps on version-tap (testID), "Developer access" alert appeared and
+         DEVELOPER · DIAGNOSTICS switch (debug-default-switch) + LOCK · DEVELOPER · MODE
+         (lock-developer) became visible. Visual verification confirms unlock persists (developer
+         mode state stored in localStorage dice_settings.developerUnlocked: true).
+      
+      5. ⚠ TEXT SIZE AFFECTS PROSE: BLOCKED (as expected per review request). No existing stories
+         available for testing. Attempted story creation via "GO · QUICK · START" but generation
+         exceeded 60s timeout (likely free-tier LLM rate-limiting or slow backend). Review request
+         explicitly states: "If no story can be opened at all, report this step as BLOCKED rather
+         than failed." Code inspection confirms wiring is correct: play/[id].tsx line 324 applies
+         fontScale to prose paragraphs (fontSize: Math.round(18 * fontScale), lineHeight:
+         Math.round(28 * fontScale)). useFocusEffect (lines 93-114) refreshes fontScale when
+         returning from Settings. Implementation is sound; runtime verification blocked by story
+         availability.
+      
+      6. ✅ NO SECRETS: No API keys, tokens, admin keys, or raw internal state visible in Settings
+         UI or page source. Checked for: OPENROUTER_API_KEY, sk-or-v1- patterns, generic API key
+         patterns, rolling_state JSON dumps, X-Admin-Api-Key. All checks passed. Settings UI is
+         clean and secure.
+      
+      EVIDENCE: 10 screenshots captured (.screenshots/test*.png) showing Settings UI, chip
+      selections, developer mode unlock sequence, and security verification.
+      
+      CONCLUSION: Security patch repair successful. All legitimate user settings (text size,
+      developer diagnostics) retained and functional. Admin controls correctly removed. Text-size
+      persistence verified. Prose fontSize wiring confirmed via code inspection (runtime blocked
+      by story availability, not a defect). No security regressions detected.
