@@ -1,6 +1,8 @@
 # Story Engine
 
-The story engine lives primarily in `backend/server.py` with supporting modules `memory.py`, `ai_service.py`, `ai_config.py`, and `scenarios.py`.
+The story engine lives primarily in `backend/server.py` with supporting modules `gateway.py`, `relationships.py`, `hud.py`, `memory.py`, `ai_service.py`, `ai_config.py`, and `scenarios.py`.
+
+**Branch:** `emergent` — gateway, relationship calculus, and HUD modules are runtime truth here; absent on `main`.
 
 ## Turn output format
 
@@ -10,12 +12,21 @@ Each LLM response must contain tagged blocks:
 |-----|----------|---------|
 | `<narrative>` | yes | 2–4 short paragraphs (~1200 chars total) |
 | `<choices>` | yes | 4–6 lines labelled A.–F. |
-| `<state>` | yes | Key-value player-visible state chips |
+| `<state>` | yes | Key-value player-visible state chips (shaped to DNG/MOM/PRS by `hud.py`) |
 | `<ledger>` | yes | Consequence / delayed-trigger ledger |
 | `<rolling_state>` | yes | Full simulation state JSON |
 | `<debug>` | only when `[DEV_MODE: ON]` | Internal roll/mechanic readouts |
 
 `parse_turn()` in `server.py` extracts these blocks into a `ParsedTurn` model.
+
+## LLM invocation (approved path)
+
+All provider calls route through **`gateway.invoke_llm`** — the sole chokepoint (Ch 31.11). `_generate_turn` and validation retries must not call `ai_service` directly.
+
+Before each call, `_build_messages` may prepend:
+- `gateway.build_immutable_truth_block(rolling)` — established object/injury/death facts
+- `relationships.build_relationship_block(rolling)` — engine-owned NPC→player feelings (for prompt only)
+- `<prior_state>` JSON block
 
 ## Simulation modes
 
@@ -43,19 +54,44 @@ Player messages include `[DIFFICULTY: <level>]` markers. Levels: `soft`, `standa
 
 ## Validation and retry
 
-`_validate_parsed()` checks:
+`_full_validate()` runs:
 
-- Paragraph count (2–4) and total narrative length (≤1200 chars)
-- Choice count within mode profile bounds
-- Required choice labels A–D present
-- No mechanic leak patterns in narrative (`_LEAK_LABEL_RE`)
-- Direct inspection violations (player asked to see hidden state)
+1. `_validate_parsed()` — paragraph count (2–4), narrative length (≤1200 chars), choice bounds, required labels A–D, mechanic leak patterns (`_LEAK_LABEL_RE`), direct inspection violations
+2. `gateway.detect_prose_contradictions()` — prose vs immutable truth (destroyed objects, deceased NPCs, etc.)
 
-On failure, `_generate_validated_turn()` retries once with a correction hint. Persistent failure raises HTTP error.
+On failure, `_generate_validated_turn()` retries once with a format or hallucination correction hint. Persistent failure raises HTTP error.
+
+## Anti-Hallucination Gateway (post-parse, `gateway.py`)
+
+| Step | Function | When |
+|------|----------|------|
+| STRIP | `strip_illegal_state_changes` | After state supremacy + object permanence, before consolidation (action turns) |
+| REGISTRY | `update_death_registry` | After rolling hygiene, before persist |
+| REGISTRY | `update_destruction_registry` | After rolling hygiene, before persist |
+| DETECT | `detect_prose_contradictions` | During `_full_validate` before accept |
+
+`build_immutable_truth_block` runs at prompt build (PREVENT).
 
 ## Deterministic guards (post-parse)
 
-These run after parsing and before persistence. They correct LLM drift without exposing mechanics to the player.
+These run after parsing and before persistence. Order on **`story_action`** matters:
+
+1. `_apply_state_supremacy` — Health/Fatigue cannot improve without cause
+2. `_apply_object_permanence` — inventory vs locations
+3. `gateway.strip_illegal_state_changes` — revert illegal mutations vs prior truth
+4. `consolidate_rolling_state` — protected-key union merge
+5. `_apply_ledger_object_permanence` — cross-category dedup
+6. `_apply_room_audit` — known_rooms reconciliation
+7. `_apply_npc_memory_bounds` — cap NPC memory
+8. `_apply_faction_consequence_tick` — local faction pressure
+9. `_apply_delayed_consequence_tick` / `_apply_rumour_propagation_tick`
+10. `_apply_rolling_state_hygiene` — meta scrub
+11. `gateway.update_death_registry`
+12. `gateway.update_destruction_registry`
+13. `relationships.update_relationship_calculus` — NPC→player vectors
+14. `hud.shape_hud` — DNG/MOM/PRS; strip Objective
+
+Turn 1 (`new_story`) skips state supremacy and gateway STRIP (no prior rolling state) but runs the remainder.
 
 ### State supremacy (`_apply_state_supremacy`)
 
@@ -81,13 +117,57 @@ Advances faction pressure based on ledger events.
 
 Scrubs meta-language from rolling state text fields.
 
+## Relationship calculus (`relationships.py`)
+
+**Directionality:** NPC → player only. Each NPC has a vector toward the player:
+
+| Dimension | Range | Meaning |
+|-----------|-------|---------|
+| trust | −100..+100 | Predictability / non-harm |
+| loyalty | 0..100 | Commitment / sacrifice |
+| fear | 0..100 | Yielding to avoid harm |
+| resentment | 0..100 | Desire to hurt player |
+
+**Storage:** `rolling_state['relationship_vectors']` — protected list key in `memory.py`.
+
+**Authority:** Prior turn vectors are authoritative; LLM-injected vector values are ignored on merge (`test_engine_owns_vectors_ignores_llm_injection`).
+
+**Per turn:** neglect decay toward neutral; regex-detected events apply `EVENT_DELTAS`; derived `state` (`neutral`, `trusting`, `hostile`, etc.); optional stance sync on `npcs` rows.
+
+**Limits (current):**
+- No NPC↔NPC relationship edges
+- No actor resolution — candidate names from `npcs`, `npc_memory`, `relationship_threads`
+- Event detection is regex + co-occurrence window, not semantic parsing
+- `relationship_threads` still seeded in Custom World but not used for vector mechanics
+- Deceased NPCs (in `deceased` registry) excluded from vector updates
+
+**Prompt:** `build_relationship_block` — up to 12 NPC summaries with behavioural guidance; numbers visible to model only, not player UI.
+
+## HUD shaping (`hud.py`)
+
+Player-facing status after guards:
+
+| Presentation | State key | Values |
+|--------------|-----------|--------|
+| **DNG** (Danger) | `Danger` | `none`, `low`, `elevated`, `high`, `critical` |
+| **MOM** (Momentum) | `Momentum` | `surging`, `steady`, `stalling`, `declining`, `lost` |
+| **PRS** (Pressure) | `Pressure` | Single phrase ≤64 chars; non-prescriptive |
+
+`shape_hud`:
+- Removes `Objective`, `objective`, `Goal`, `Goals`
+- Derives Danger from health/stress/threats if LLM value invalid
+- Defaults Momentum to `steady` if invalid
+- `derive_pressure`: survival flags win; then LLM phrase if non-prescriptive; then engine fallbacks
+
+Frontend `play/[id].tsx` renders chips labelled DNG, MOM, PRS.
+
 ## Rolling memory (`memory.py`)
 
 ### Protected list keys (never silently dropped)
 
 Union-merged from prior turn if the model omits unresolved entries:
 
-`active_consequences`, `delayed_consequences`, `latent_triggers`, `unresolved_threats`, `active_threats`, `unresolved`, `injuries`, `inventory_objects`, `object_locations`, `route_continuity`, `npc_memory`, `relationship_threads`, `faction_pressure`, `world_instability`, `simulation_hooks`, `promises`, `clues`, `known_rooms`
+`active_consequences`, `delayed_consequences`, `latent_triggers`, `unresolved_threats`, `active_threats`, `unresolved`, `injuries`, `inventory_objects`, `object_locations`, `route_continuity`, `npc_memory`, `relationship_threads`, `relationship_vectors`, `faction_pressure`, `world_instability`, `simulation_hooks`, `promises`, `clues`, `known_rooms`
 
 ### Authoritative list keys (model prunes intentionally)
 
@@ -119,6 +199,8 @@ Budget resolved by `resolve_context_budget(cost_mode, mode)`:
 | `mode=advanced` | 16000 |
 | otherwise | 12000 |
 
+**Not present:** gravity-based retention governance beyond this budget trim.
+
 ## Custom World seeding
 
 When `custom_world_setup` is provided (no `scenario_id`), `_seed_custom_setup_into_rolling()` injects answers into:
@@ -130,7 +212,7 @@ When `custom_world_setup` is provided (no `scenario_id`), `_seed_custom_setup_in
 - `inventory_objects`
 - `object_locations`
 
-Setup block is also embedded in the opening prompt via `_build_custom_world_setup_block()`.
+Setup block is also embedded in the opening prompt via `_build_custom_world_setup_block()`. Relationship **vectors** are initialized on turn 1 by `update_relationship_calculus`, not from setup answers directly.
 
 ## Curated scenarios
 
@@ -144,7 +226,7 @@ At `POST /story/new`, the session snapshots:
 - `fallback_chain` from settings or env defaults
 - `cost_mode`
 
-Model switches during fallback are recorded in `model_switches` and trigger `[FALLBACK_ACTIVE: ...]` hints on subsequent turns.
+Model switches during fallback are recorded in `model_switches` and trigger `[FALLBACK_ACTIVE: ...]` hints on subsequent turns. All calls go through `gateway.invoke_llm`.
 
 ## Player vs developer payloads
 
@@ -155,3 +237,12 @@ When `developer_mode` is false (default in code):
 - Session `rolling_state` omitted
 
 Frontend `sanitize.ts` adds a presentation-only filter on paragraphs and choices regardless of API sanitization.
+
+## Planned / not present
+
+| System | Status |
+|--------|--------|
+| Utility AI | Planned (PRD Ch 27) — not in repo |
+| Actor resolution | Planned (PRD Ch 25) — not in repo |
+| Formal event sourcing | Partial — turn log only; no rebuild |
+| Scoring / NaN ranking guards | N/A — never existed in this repo |

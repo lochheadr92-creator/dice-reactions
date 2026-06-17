@@ -1,6 +1,6 @@
 # Failure Modes
 
-For each mode: detection, prevention, recovery, and **current protection status** based on code/tests in this repo.
+For each mode: detection, prevention, recovery, and **current protection status** based on code/tests on the **`emergent`** branch.
 
 **Protection status:** Protected / Partial / Unprotected / N/A
 
@@ -12,12 +12,12 @@ For each mode: detection, prevention, recovery, and **current protection status*
 |-------|--------|
 | **Trigger** | Model emits new `rolling_state` fields, objects, or consequences not grounded in play. |
 | **Effect** | Simulation drift; contradictions across turns. |
-| **Detection** | Guard adjustment logs; player reports; compare `rolling_state` across turns in dev panel. |
-| **Prevention** | `consolidate_rolling_state` restores protected unresolved keys; object canonicalization; ledger guards. |
-| **Recovery** | Guards rewrite parsed turn before persist; manual session reset. |
-| **Files** | `memory.py`, `server.py` |
-| **Tests** | `verify_p0_object_permanence.py` |
-| **Status** | **Partial** — protected lists merged; many fields still LLM-authored |
+| **Detection** | Guard adjustment logs; gateway strip messages; player reports; dev panel compare. |
+| **Prevention** | `build_immutable_truth_block` in prompt; `strip_illegal_state_changes`; `consolidate_rolling_state` protected keys; object canonicalization; ledger guards. |
+| **Recovery** | Guards rewrite parsed turn before persist; contradiction retry; manual session reset. |
+| **Files** | `gateway.py`, `memory.py`, `server.py` |
+| **Tests** | `verify_p0_object_permanence.py` ✅, `test_anti_hallucination_gateway.py` ✅, `test_gateway_e2e.py` ✅ |
+| **Status** | **Partial** — gateway + protected lists merged; many fields still LLM-authored |
 
 ---
 
@@ -27,11 +27,11 @@ For each mode: detection, prevention, recovery, and **current protection status*
 |-------|--------|
 | **Trigger** | Model puts `Roll:`, modifiers, or meta language inside `<narrative>`. |
 | **Effect** | Immersion break; players see machinery. |
-| **Detection** | `_validate_parsed` regexes; frontend `MECHANIC_LINE_RE`; manual chronicle review. |
+| **Detection** | `_validate_parsed` regexes; `detect_prose_contradictions`; frontend `MECHANIC_LINE_RE`; manual chronicle review. |
 | **Prevention** | System prompt concealment rules; validation retry; `sanitizeParagraphs`. |
-| **Recovery** | Retry once; strip on render; dev fix prompt. |
-| **Files** | `server.py`, `frontend/src/sanitize.ts` |
-| **Tests** | `verify_p1_immersion_integrity.py` (P1-A), `verify_p15_microfixes.py` |
+| **Recovery** | Retry once (format or hallucination); strip on render; dev fix prompt. |
+| **Files** | `server.py`, `gateway.py`, `frontend/src/sanitize.ts` |
+| **Tests** | `verify_p1_immersion_integrity.py` (P1-A) ✅, `verify_p15_microfixes.py` ✅ |
 | **Status** | **Partial** — validator blocks many cases; not all live LLM outputs tested |
 
 ---
@@ -42,11 +42,11 @@ For each mode: detection, prevention, recovery, and **current protection status*
 |-------|--------|
 | **Trigger** | Model adds items to `ledger` or `inventory_objects` without prior presence. |
 | **Effect** | Player gains unearned items. |
-| **Detection** | Ledger vs `object_locations` mismatch; room audit drift flags. |
-| **Prevention** | Object permanence guards; canonical registry. |
-| **Recovery** | `_apply_object_permanence`, `_apply_ledger_object_permanence`; manual edit **Unknown** (no admin edit route). |
-| **Files** | `server.py`, `memory.py` |
-| **Tests** | `verify_p0_object_permanence.py` |
+| **Detection** | Ledger vs `object_locations` mismatch; room audit drift flags; destruction registry. |
+| **Prevention** | Object permanence guards; `update_destruction_registry`; canonical registry. |
+| **Recovery** | `_apply_object_permanence`, `_apply_ledger_object_permanence`, gateway strip; manual edit **Unknown** (no admin edit route). |
+| **Files** | `server.py`, `memory.py`, `gateway.py` |
+| **Tests** | `verify_p0_object_permanence.py` ✅, `test_gateway_e2e.py` ✅ |
 | **Status** | **Partial** — dedup/contradiction focus; novel item injection not fully blocked |
 
 ---
@@ -57,12 +57,12 @@ For each mode: detection, prevention, recovery, and **current protection status*
 |-------|--------|
 | **Trigger** | Model re-lists destroyed/consumed items as carried. |
 | **Effect** | Object permanence violation. |
-| **Detection** | P0 scenarios; ledger cross-category check. |
-| **Prevention** | Status priority in canonicalization; ledger dedup against `object_locations`. |
+| **Detection** | P0 scenarios; gateway strip; ledger cross-category check. |
+| **Prevention** | Status priority in canonicalization; `strip_illegal_state_changes`; ledger dedup against `object_locations`. |
 | **Recovery** | Guards remove duplicate carried rows. |
-| **Files** | `server.py`, `memory.py` |
-| **Tests** | `verify_p0_object_permanence.py` ✅ |
-| **Status** | **Protected** (deterministic scenarios) |
+| **Files** | `server.py`, `memory.py`, `gateway.py` |
+| **Tests** | `verify_p0_object_permanence.py` ✅, `test_gateway_e2e.py` ✅ |
+| **Status** | **Protected** (deterministic scenarios + gateway e2e) |
 
 ---
 
@@ -88,7 +88,7 @@ For each mode: detection, prevention, recovery, and **current protection status*
 | **Trigger** | NPC name variants treated as different actors. |
 | **Effect** | Split memory, inconsistent relationships. |
 | **Detection** | Manual review of `npc_memory` keys. |
-| **Prevention** | **None dedicated** — no actor resolver in code. |
+| **Prevention** | **None dedicated** — no actor resolver in code (PRD Ch 25 planned). |
 | **Recovery** | **Unknown** |
 | **Files** | — |
 | **Tests** | — |
@@ -96,18 +96,18 @@ For each mode: detection, prevention, recovery, and **current protection status*
 
 ---
 
-## FM-07: Relationship direction reversal
+## FM-07: Relationship drift or LLM vector injection
 
 | Field | Detail |
 |-------|--------|
-| **Trigger** | Model flips trust/debt dynamic without cause. |
-| **Effect** | Social state incoherence. |
-| **Detection** | Dev panel `relationship_threads` review. |
-| **Prevention** | Protected merge keeps threads; no directionality guard. |
-| **Recovery** | LLM-only; no deterministic revert. |
-| **Files** | `memory.py` (protected key), prompt schema in `server.py` |
-| **Tests** | None |
-| **Status** | **Unprotected** |
+| **Trigger** | Model injects `relationship_vectors` or flips social dynamic without detected events. |
+| **Effect** | Social state incoherence; wrong NPC behaviour. |
+| **Detection** | `test_engine_owns_vectors_ignores_llm_injection`; dev panel `relationship_vectors` review. |
+| **Prevention** | Engine reads prior `relationship_vectors` as authority; `update_relationship_calculus` recomputes from events + decay; protected merge key in `memory.py`. |
+| **Recovery** | Deterministic revert on each turn; no NPC↔NPC edge repair. |
+| **Files** | `relationships.py`, `memory.py`, `server.py` |
+| **Tests** | `test_relationship_calculus.py` ✅ |
+| **Status** | **Partial** — NPC→player only; regex event detection; `relationship_threads` not guarded |
 
 ---
 
@@ -141,30 +141,33 @@ For each mode: detection, prevention, recovery, and **current protection status*
 
 ---
 
-## FM-10: Exact scoring boundary drift
+## FM-10: Prose contradicting immutable truth
 
 | Field | Detail |
 |-------|--------|
-| **Trigger** | N/A — no code scoring subsystem. |
-| **Effect** | N/A |
-| **Detection** | N/A |
-| **Prevention** | N/A |
-| **Recovery** | N/A |
-| **Files** | — |
-| **Tests** | — |
-| **Status** | **N/A** |
+| **Trigger** | Model narrates using destroyed objects, deceased NPCs, or illegal state despite truth block. |
+| **Effect** | Player sees impossible actions; immersion break. |
+| **Detection** | `detect_prose_contradictions` in `_full_validate`. |
+| **Prevention** | `build_immutable_truth_block` in prompt; single retry with hallucination hint. |
+| **Recovery** | Retry turn; if still failing, HTTP 502. |
+| **Files** | `gateway.py`, `server.py` |
+| **Tests** | `test_anti_hallucination_gateway.py` ✅ |
+| **Status** | **Partial** — retry once; regex/heuristic detection only |
 
 ---
 
-## FM-11: NaN or infinity corrupting rankings
+## FM-11: HUD steering player toward objectives
 
 | Field | Detail |
 |-------|--------|
-| **Trigger** | N/A — no ranking subsystem. |
-| **Effect** | N/A |
-| **Files** | — |
-| **Tests** | — |
-| **Status** | **N/A** |
+| **Trigger** | Model emits Objective/Goal chips or prescriptive Pressure text. |
+| **Effect** | Quest-marker UX; reduces emergent play. |
+| **Detection** | `hud._PRESCRIPTIVE_RE`; frontend chip inspection. |
+| **Prevention** | `shape_hud` strips Objective/Goal; `derive_pressure` rejects prescriptive phrases. |
+| **Recovery** | Engine overwrites DNG/MOM; replaces or drops PRS. |
+| **Files** | `hud.py`, `frontend/app/play/[id].tsx` |
+| **Tests** | `test_hud.py` ✅ |
+| **Status** | **Protected** (deterministic unit tests) |
 
 ---
 
@@ -190,9 +193,9 @@ For each mode: detection, prevention, recovery, and **current protection status*
 | **Trigger** | Primary model 404/429/402; all fallbacks fail. |
 | **Effect** | 502 to client; turn not created. |
 | **Detection** | `AIServiceError`; `fallback_events` in meta; `friendlyError` on client. |
-| **Prevention** | Fallback chain; retries with backoff. |
+| **Prevention** | Fallback chain via `gateway.invoke_llm`; retries with backoff. |
 | **Recovery** | User switches model in Settings; add credits. |
-| **Files** | `ai_service.py`, `frontend/src/errors.ts` |
+| **Files** | `ai_service.py`, `gateway.py`, `frontend/src/errors.ts` |
 | **Tests** | PRD P1 deliberate fallback drill (not run) |
 | **Status** | **Partial** |
 
@@ -203,13 +206,13 @@ For each mode: detection, prevention, recovery, and **current protection status*
 | Field | Detail |
 |-------|--------|
 | **Trigger** | `developer_mode` true; export endpoint; unauthenticated admin access. |
-| **Effect** | Full `rolling_state`, `debug`, `raw` exposed. |
+| **Effect** | Full `rolling_state`, `debug`, `raw`, relationship numbers exposed. |
 | **Detection** | API response inspection. |
-| **Prevention** | `_maybe_sanitise_*` when `developer_mode` false. |
+| **Prevention** | `_maybe_sanitise_*` when `developer_mode` false on player routes. |
 | **Recovery** | Set `developer_mode` false; restrict network. |
 | **Files** | `server.py`, `export_session` |
 | **Tests** | None for export |
-| **Status** | **Partial** — player routes protected; export/admin weak |
+| **Status** | **Partial** — player routes protected when `developer_mode` false; export/admin weak |
 
 ---
 
@@ -228,7 +231,22 @@ For each mode: detection, prevention, recovery, and **current protection status*
 
 ---
 
-## FM-16: Configuration values differing (code vs DB vs env)
+## FM-16: Session hijack via leaked `session_id`
+
+| Field | Detail |
+|-------|--------|
+| **Trigger** | Attacker obtains UUID; calls get/export/action without matching `device_id`. |
+| **Effect** | Read or mutate another device's chronicle. |
+| **Detection** | Code review of route handlers. |
+| **Prevention** | **Partial** — only `list_sessions` scopes by `device_id`. |
+| **Recovery** | Rotate session IDs **Unknown** (not implemented). |
+| **Files** | `server.py` |
+| **Tests** | None |
+| **Status** | **Unprotected** on get/export/action/reset/delete |
+
+---
+
+## FM-17: Configuration values differing (code vs DB vs env)
 
 | Field | Detail |
 |-------|--------|
@@ -243,7 +261,7 @@ For each mode: detection, prevention, recovery, and **current protection status*
 
 ---
 
-## FM-17: Export/reset schema mismatch
+## FM-18: Export/reset schema mismatch
 
 | Field | Detail |
 |-------|--------|
@@ -258,15 +276,21 @@ For each mode: detection, prevention, recovery, and **current protection status*
 
 ---
 
-## FM-18: Stale documentation treated as runtime truth
+## FM-19: Stale documentation treated as runtime truth
 
 | Field | Detail |
 |-------|--------|
-| **Trigger** | PRD verification dates pass; code changes; tests not re-run. |
-| **Effect** | False confidence in release readiness. |
-| **Detection** | `current-state.md` evidence tags; this doc set. |
-| **Prevention** | Separate Docs-claimed vs Code/Tests tags; `change-history.md`. |
-| **Recovery** | Re-run verification scripts and update docs. |
+| **Trigger** | Docs authored against `main` cherry-picked to `emergent` without re-audit; PRD dates pass. |
+| **Effect** | False confidence; missing gateway/relationship/HUD in operational docs. |
+| **Detection** | `current-state.md` evidence tags; branch note in `change-history.md`. |
+| **Prevention** | Treat `memory/PRD.md` as planning only; re-run 47-test bundle on `emergent`. |
+| **Recovery** | This reconciliation pass (2026-06-17). |
 | **Files** | `memory/PRD.md`, `/docs/*` |
 | **Tests** | `release-checklist.md` |
-| **Status** | **Partial** — addressed by this documentation spine |
+| **Status** | **Partial** — addressed by emergent reconciliation pass |
+
+---
+
+## Removed from catalogue (N/A)
+
+FM entries for **exact scoring boundary drift** and **NaN/infinity corrupting rankings** are **N/A** — no scoring/ranking subsystem ever existed in this repository. Do not track as Dice Reactions failure modes.
