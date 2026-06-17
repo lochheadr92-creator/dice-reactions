@@ -2,11 +2,14 @@
 Custom World System + Runtime Guard regression tests.
 """
 
+import os
 import re
 import uuid
 import pytest
 import sys
 from pathlib import Path
+
+from security import ADMIN_API_KEY_HEADER, DEVICE_ID_HEADER
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -79,8 +82,17 @@ def custom_story(api_client, base_url):
     res = api_client.post(f"{base_url}/api/story/new", json=payload, timeout=180)
     assert res.status_code == 200, res.text
     data = res.json()
-    yield {"data": data, "base_url": base_url, "api_client": api_client}
-    api_client.delete(f"{base_url}/api/story/session/{data['session_id']}", timeout=30)
+    yield {
+        "data": data,
+        "device_id": device_id,
+        "base_url": base_url,
+        "api_client": api_client,
+    }
+    api_client.delete(
+        f"{base_url}/api/story/session/{data['session_id']}",
+        headers={DEVICE_ID_HEADER: device_id},
+        timeout=30,
+    )
 
 
 def test_custom_story_new_shape(custom_story):
@@ -94,10 +106,16 @@ def test_custom_story_new_shape(custom_story):
 def test_custom_setup_persisted_to_protected_rolling_fields(custom_story):
     data = custom_story["data"]
     sid = data["session_id"]
+    device_id = custom_story["device_id"]
     api_client = custom_story["api_client"]
     base_url = custom_story["base_url"]
+    admin_key = os.environ["ADMIN_API_KEY"]
 
-    exported = api_client.get(f"{base_url}/api/story/session/{sid}/export", timeout=30)
+    exported = api_client.get(
+        f"{base_url}/api/story/session/{sid}/export/raw",
+        headers={ADMIN_API_KEY_HEADER: admin_key},
+        timeout=30,
+    )
     assert exported.status_code == 200, exported.text
     rolling = (exported.json().get("summary") or {}).get("rolling_state") or {}
 
@@ -128,7 +146,12 @@ def test_mechanic_probe_action_no_term_leak(custom_story):
     )
     res = api_client.post(
         f"{base_url}/api/story/action",
-        json={"session_id": sid, "action_text": probe_action, "debug_mode": False},
+        headers={DEVICE_ID_HEADER: custom_story["device_id"]},
+        json={
+            "session_id": sid,
+            "action_text": probe_action,
+            "debug_mode": False,
+        },
         timeout=180,
     )
     assert res.status_code == 200, res.text
@@ -153,12 +176,22 @@ def test_preset_flow_still_works(api_client, base_url):
     assert 4 <= len((data["turn"].get("choices") or [])) <= 6
 
     sid = data["session_id"]
-    exported = api_client.get(f"{base_url}/api/story/session/{sid}/export", timeout=30)
+    device_id = payload["device_id"]
+    exported = api_client.get(
+        f"{base_url}/api/story/session/{sid}/export",
+        headers={DEVICE_ID_HEADER: device_id},
+        timeout=30,
+    )
     assert exported.status_code == 200, exported.text
     session = (exported.json() or {}).get("session") or {}
     assert session.get("custom_world_setup") in (None, {}, [])
+    assert "rolling_state" not in session
 
-    api_client.delete(f"{base_url}/api/story/session/{sid}", timeout=30)
+    api_client.delete(
+        f"{base_url}/api/story/session/{sid}",
+        headers={DEVICE_ID_HEADER: device_id},
+        timeout=30,
+    )
 
 
 # --- Module-level deterministic guard checks: state supremacy + object permanence ---

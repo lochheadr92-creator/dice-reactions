@@ -124,7 +124,7 @@ def test_gateway_end_to_end():
     async def scenario():
         session_id = None
         try:
-            new_res = await server.new_story(
+            new_res = await server._create_new_story(
                 server.NewStoryRequest(
                     device_id=device_id, genre="post-apocalyptic", role="scavenger",
                     difficulty="standard", debug_mode=True, mode="advanced",
@@ -138,8 +138,11 @@ def test_gateway_end_to_end():
             # Turn 2 action.
             await server.story_action(
                 server.ActionRequest(
-                    session_id=session_id, action_text="search the room for tools", debug_mode=True
-                )
+                    session_id=session_id,
+                    action_text="search the room for tools",
+                    debug_mode=True,
+                ),
+                device_id=device_id,
             )
             t2 = await server.db.turns.find_one(
                 {"session_id": session_id, "turn_number": 2}, {"_id": 0}
@@ -231,7 +234,7 @@ def test_destruction_registry_end_to_end():
     async def scenario():
         session_id = None
         try:
-            new_res = await server.new_story(
+            new_res = await server._create_new_story(
                 server.NewStoryRequest(
                     device_id=device_id, genre="post-apocalyptic", role="scavenger",
                     difficulty="standard", debug_mode=True, mode="advanced",
@@ -239,10 +242,14 @@ def test_destruction_registry_end_to_end():
             )
             session_id = new_res["session_id"]
             await server.story_action(server.ActionRequest(
-                session_id=session_id, action_text="smash the lantern against the wall", debug_mode=True))
+                session_id=session_id,
+                action_text="smash the lantern against the wall", debug_mode=True),
+                device_id=device_id)
             sess_after_t2 = await server.db.sessions.find_one({"id": session_id}, {"_id": 0})
             await server.story_action(server.ActionRequest(
-                session_id=session_id, action_text="pick up the iron lantern and light it", debug_mode=True))
+                session_id=session_id,
+                action_text="pick up the iron lantern and light it", debug_mode=True),
+                device_id=device_id)
             t3 = await server.db.turns.find_one(
                 {"session_id": session_id, "turn_number": 3}, {"_id": 0})
             return sess_after_t2, t3
@@ -302,12 +309,14 @@ def test_relationship_calculus_end_to_end():
     async def scenario():
         session_id = None
         try:
-            new_res = await server.new_story(server.NewStoryRequest(
+            new_res = await server._create_new_story(server.NewStoryRequest(
                 device_id=device_id, genre="post-apocalyptic", role="scavenger",
                 difficulty="standard", debug_mode=True, mode="advanced"))
             session_id = new_res["session_id"]
             await server.story_action(server.ActionRequest(
-                session_id=session_id, action_text="help Mira to her feet and shield her", debug_mode=True))
+                session_id=session_id,
+                action_text="help Mira to her feet and shield her", debug_mode=True),
+                device_id=device_id)
             t2 = await server.db.turns.find_one(
                 {"session_id": session_id, "turn_number": 2}, {"_id": 0})
             return t2

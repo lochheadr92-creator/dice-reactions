@@ -5,15 +5,21 @@ Tests health, story creation, action, listing, retrieval, deletion, and 404 hand
 import uuid
 import pytest
 
+from security import DEVICE_ID_HEADER
+
+
+def _device_headers(device_id: str) -> dict:
+    return {DEVICE_ID_HEADER: device_id}
+
 
 # ---------- Health ----------
-def test_health_llm_configured(api_client, base_url):
+def test_health_minimal_contract(api_client, base_url):
     r = api_client.get(f"{base_url}/api/health", timeout=15)
     assert r.status_code == 200, r.text
     data = r.json()
     assert data.get("status") == "ok"
-    assert data.get("llm_configured") is True
-    assert isinstance(data.get("model"), str) and data.get("model").strip()
+    assert isinstance(data.get("llm_configured"), bool)
+    assert set(data.keys()) == {"status", "llm_configured"}
 
 
 # ---------- Shared session helpers ----------
@@ -37,9 +43,12 @@ def created_session(api_client, base_url, device_id):
     assert r.status_code == 200, r.text
     data = r.json()
     yield data
-    # Teardown — delete session
     sid = data["session_id"]
-    api_client.delete(f"{base_url}/api/story/session/{sid}", timeout=30)
+    api_client.delete(
+        f"{base_url}/api/story/session/{sid}",
+        headers=_device_headers(device_id),
+        timeout=30,
+    )
 
 
 # ---------- POST /api/story/new ----------
@@ -64,23 +73,23 @@ class TestNewStory:
     def test_turn_state_keys(self, created_session):
         turn = created_session["turn"]
         state = turn["state"]
-        for key in ["Health", "Stress", "Fatigue", "Position", "Objective", "Inventory Summary"]:
+        for key in ["Health", "Stress", "Fatigue", "Position", "Inventory Summary"]:
             assert key in state, f"missing state key: {key}; got {list(state.keys())}"
+        assert "Objective" not in state, "HUD strips Objective from player-visible state"
+        assert state.get("Pressure"), "Pressure line should be present after HUD shaping"
         assert ("Conditions" in state) or ("Notable Conditions" in state)
 
     def test_turn_ledger_keys(self, created_session):
         ledger = created_session["turn"]["ledger"]
-        # Engine should populate at least core keys; require a meaningful subset
         required_any = ["Carried", "Worn", "Stored", "Weapons", "Supplies", "Uncertain", "Load"]
         present = [k for k in required_any if k in ledger]
         assert len(present) >= 4, f"ledger missing keys, got {list(ledger.keys())}"
         assert "Load" in ledger
 
-    def test_debug_block_present_when_on(self, created_session):
-        debug = created_session["turn"].get("debug")
-        assert debug, "debug block should be present when debug_mode=True"
-        # Expect at least Roll & Final
-        assert "Roll" in debug or "roll" in {k.lower() for k in debug.keys()}
+    def test_debug_block_stripped_from_player_response(self, created_session):
+        turn = created_session["turn"]
+        assert "debug" not in turn or turn.get("debug") is None
+        assert "rolling_state" not in turn or turn.get("rolling_state") is None
 
     def test_no_mongo_id_leak(self, created_session):
         assert "_id" not in created_session
@@ -94,13 +103,17 @@ class TestNewStory:
 # ---------- POST /api/story/action ----------
 class TestStoryAction:
     @pytest.fixture(scope="class")
-    def action_turn(self, api_client, base_url, created_session):
+    def action_turn(self, api_client, base_url, created_session, device_id):
         sid = created_session["session_id"]
-        # pick first choice
         first_choice = created_session["turn"]["choices"][0]["text"]
         r = api_client.post(
             f"{base_url}/api/story/action",
-            json={"session_id": sid, "action_text": first_choice, "debug_mode": False},
+            headers=_device_headers(device_id),
+            json={
+                "session_id": sid,
+                "action_text": first_choice,
+                "debug_mode": False,
+            },
             timeout=120,
         )
         assert r.status_code == 200, r.text
@@ -118,18 +131,12 @@ class TestStoryAction:
         assert action_turn["state"].get("Health")
         assert action_turn["ledger"].get("Load")
 
-    def test_debug_omitted_when_off(self, action_turn):
-        # In developer_mode=false, debug should be absent. In developer_mode=true,
-        # telemetry debug may still be returned for developer diagnostics.
-        debug = action_turn.get("debug")
-        if debug:
-            assert "model_used" in debug or "latency_ms" in debug
-        else:
-            assert not debug
+    def test_debug_omitted_from_player_response(self, action_turn):
+        assert "debug" not in action_turn or action_turn.get("debug") is None
+        assert "rolling_state" not in action_turn or action_turn.get("rolling_state") is None
 
     def test_no_dice_leak_in_narrative(self, action_turn):
         narrative = action_turn["narrative"].lower()
-        # rolls/modifiers must NEVER appear in narrative when debug is OFF
         assert "d20" not in narrative
         assert "roll:" not in narrative
         assert "modifier" not in narrative
@@ -138,67 +145,101 @@ class TestStoryAction:
 # ---------- GET /api/story/sessions ----------
 class TestListSessions:
     def test_list_for_device(self, api_client, base_url, device_id, created_session):
-        r = api_client.get(f"{base_url}/api/story/sessions", params={"device_id": device_id}, timeout=15)
+        r = api_client.get(
+            f"{base_url}/api/story/sessions",
+            headers=_device_headers(device_id),
+            timeout=15,
+        )
         assert r.status_code == 200
         data = r.json()
         assert "sessions" in data
         assert any(s["id"] == created_session["session_id"] for s in data["sessions"])
-        # Verify no _id leak
         for s in data["sessions"]:
             assert "_id" not in s
+            assert "rolling_state" not in s
 
     def test_isolation_by_device(self, api_client, base_url):
-        r = api_client.get(f"{base_url}/api/story/sessions",
-                           params={"device_id": f"TEST_unknown_{uuid.uuid4()}"}, timeout=15)
+        r = api_client.get(
+            f"{base_url}/api/story/sessions",
+            headers=_device_headers(f"TEST_unknown_{uuid.uuid4()}"),
+            timeout=15,
+        )
         assert r.status_code == 200
         assert r.json()["sessions"] == []
 
 
 # ---------- GET /api/story/session/{id} & latest ----------
 class TestGetSession:
-    def test_get_full_session(self, api_client, base_url, created_session):
+    def test_get_full_session(self, api_client, base_url, created_session, device_id):
         sid = created_session["session_id"]
-        r = api_client.get(f"{base_url}/api/story/session/{sid}", timeout=15)
+        r = api_client.get(
+            f"{base_url}/api/story/session/{sid}",
+            headers=_device_headers(device_id),
+            timeout=15,
+        )
         assert r.status_code == 200
         data = r.json()
         assert data["session"]["id"] == sid
         assert "_id" not in data["session"]
+        assert "rolling_state" not in data["session"]
         assert len(data["turns"]) >= 1
-        # ordered by turn_number ascending
         nums = [t["turn_number"] for t in data["turns"]]
         assert nums == sorted(nums)
         for t in data["turns"]:
             assert "_id" not in t
+            assert "debug" not in t or t.get("debug") is None
 
-    def test_latest_turn(self, api_client, base_url, created_session):
+    def test_latest_turn(self, api_client, base_url, created_session, device_id):
         sid = created_session["session_id"]
-        r = api_client.get(f"{base_url}/api/story/session/{sid}/latest", timeout=15)
+        r = api_client.get(
+            f"{base_url}/api/story/session/{sid}/latest",
+            headers=_device_headers(device_id),
+            timeout=15,
+        )
         assert r.status_code == 200
         turn = r.json()["turn"]
         assert "_id" not in turn
         assert turn["turn_number"] >= 1
+        assert "debug" not in turn or turn.get("debug") is None
 
 
 # ---------- 404 handling ----------
 class TestNotFound:
     def test_get_session_404(self, api_client, base_url):
-        r = api_client.get(f"{base_url}/api/story/session/nonexistent-{uuid.uuid4()}", timeout=15)
+        r = api_client.get(
+            f"{base_url}/api/story/session/nonexistent-{uuid.uuid4()}",
+            headers=_device_headers(f"TEST_{uuid.uuid4()}"),
+            timeout=15,
+        )
         assert r.status_code == 404
 
     def test_latest_404(self, api_client, base_url):
-        r = api_client.get(f"{base_url}/api/story/session/nonexistent-{uuid.uuid4()}/latest", timeout=15)
+        r = api_client.get(
+            f"{base_url}/api/story/session/nonexistent-{uuid.uuid4()}/latest",
+            headers=_device_headers(f"TEST_{uuid.uuid4()}"),
+            timeout=15,
+        )
         assert r.status_code == 404
 
     def test_action_unknown_session_404(self, api_client, base_url):
         r = api_client.post(
             f"{base_url}/api/story/action",
-            json={"session_id": f"missing-{uuid.uuid4()}", "action_text": "look around", "debug_mode": False},
+            headers=_device_headers(f"TEST_{uuid.uuid4()}"),
+            json={
+                "session_id": f"missing-{uuid.uuid4()}",
+                "action_text": "look around",
+                "debug_mode": False,
+            },
             timeout=15,
         )
         assert r.status_code == 404
 
     def test_delete_404(self, api_client, base_url):
-        r = api_client.delete(f"{base_url}/api/story/session/missing-{uuid.uuid4()}", timeout=15)
+        r = api_client.delete(
+            f"{base_url}/api/story/session/missing-{uuid.uuid4()}",
+            headers=_device_headers(f"TEST_{uuid.uuid4()}"),
+            timeout=15,
+        )
         assert r.status_code == 404
 
 
@@ -213,9 +254,16 @@ class TestDeleteFlow:
         )
         assert r.status_code == 200
         sid = r.json()["session_id"]
-        d = api_client.delete(f"{base_url}/api/story/session/{sid}", timeout=15)
+        d = api_client.delete(
+            f"{base_url}/api/story/session/{sid}",
+            headers=_device_headers(device),
+            timeout=15,
+        )
         assert d.status_code == 200
         assert d.json().get("deleted") is True
-        # Now GET should 404
-        g = api_client.get(f"{base_url}/api/story/session/{sid}", timeout=15)
+        g = api_client.get(
+            f"{base_url}/api/story/session/{sid}",
+            headers=_device_headers(device),
+            timeout=15,
+        )
         assert g.status_code == 404

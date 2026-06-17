@@ -6,6 +6,9 @@ from pathlib import Path
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
+# Explicit admin key for live/raw-export tests — do not rely on import order.
+os.environ.setdefault("ADMIN_API_KEY", "test-admin-key-for-live-suite")
+
 # Frontend env has the public URL
 ROOT = Path(__file__).resolve().parents[2]
 fe_env = ROOT / "frontend" / ".env"
