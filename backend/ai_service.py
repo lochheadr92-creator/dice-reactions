@@ -42,6 +42,12 @@ OPENROUTER_BASE_URL = os.environ.get(
     "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
 ).rstrip("/")
 
+# Optional direct OpenAI provider key (backend-only secret). Read here so the
+# variable is a recognised configuration value, but it is NOT wired into any
+# LLM call path — OpenRouter remains the sole active provider. The value is
+# never returned in API responses, logged, or exposed to the Expo client.
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+
 DEFAULT_TEMPERATURE = float(os.environ.get("DEFAULT_TEMPERATURE", "0.85"))
 DEFAULT_MAX_TOKENS = int(os.environ.get("DEFAULT_MAX_TOKENS", "2048"))
 DEFAULT_HISTORY_WINDOW = int(os.environ.get("DEFAULT_HISTORY_WINDOW", "40"))
@@ -216,6 +222,13 @@ def get_default_settings() -> Dict[str, Any]:
 
 def is_configured() -> bool:
     return bool(OPENROUTER_API_KEY)
+
+
+def openai_is_configured() -> bool:
+    """Report whether a direct OpenAI key is present (boolean only — never returns
+    or logs the value). Provider switching is NOT implemented; OpenRouter remains
+    the sole active provider until an optional OpenAI provider is approved."""
+    return bool(OPENAI_API_KEY)
 
 
 # ---------------------------------------------------------------------------
