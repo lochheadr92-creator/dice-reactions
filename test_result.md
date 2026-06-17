@@ -138,7 +138,7 @@ backend:
       - working: true
         agent: "testing"
         comment: |
-          Verified via /app/backend_test.py + /app/_retry_story.py (public URL https://dice-story-engine.preview.emergentagent.com/api).
+          Verified via /app/backend_test.py + /app/_retry_story.py (public URL https://repo-status-8.preview.emergentagent.com/api).
           - chat_completion exercised end-to-end through /api/story/new and /api/story/action against
             openai/gpt-oss-120b:free. Both calls returned 200 OK with valid <narrative>/<choices>/
             <state>/<ledger>/<debug> blocks (paragraphs=4 and 3, choices=6/6, debug present).
@@ -317,7 +317,7 @@ agent_communication:
   - agent: "testing"
     message: |
       Backend OpenRouter migration validated end-to-end against the public ingress
-      (https://dice-story-engine.preview.emergentagent.com/api). Tests live in
+      (https://repo-status-8.preview.emergentagent.com/api). Tests live in
       /app/backend_test.py and /app/_retry_story.py. Summary:
 
       PASS — GET /api/health (provider=openrouter, llm_configured=true, all fields present)

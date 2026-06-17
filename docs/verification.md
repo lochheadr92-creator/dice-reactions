@@ -88,7 +88,7 @@ Security coverage: `test_security.py` — ownership (10), admin auth (5), export
 - `/api/health` returned `status=ok`, `llm_configured=true`, `provider=openrouter`
 - `/api/admin/settings` and `/api/admin/runtime` returned expected model, fallback, memory, and context budget data
 - 3-turn live OpenRouter verification with Haiku
-- Browser preview health at `https://chronicle-runtime.preview.emergentagent.com`
+- Browser preview health at `https://repo-status-8.preview.emergentagent.com`
 - Play screen mechanic-concealment browser automation
 - Test sessions deleted after verification
 
