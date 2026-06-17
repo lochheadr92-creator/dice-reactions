@@ -9,10 +9,11 @@
 | LLM chokepoint (`invoke_llm`) | Verified complete | `gateway.py` | Indirect via gateway tests ✅ | `architecture.md` | Bypass if new code calls `ai_service` directly | Lint/import guard |
 | Relationship calculus (NPC→player) | Verified complete (scoped) | `relationships.py`, `memory.py` (`relationship_vectors` protected) | `test_relationship_calculus.py` ✅ | `story-engine.md` | NPC↔NPC not supported; regex events only; `relationship_threads` legacy | Live probe (`test_relationship_calculus_live.py`) |
 | HUD (DNG / MOM / PRS) | Verified complete (deterministic) | `hud.py`, `frontend/app/play/[id].tsx` | `test_hud.py` ✅ | `story-engine.md`, `frontend.md` | Prescriptive LLM pressure stripped at shape time | Optional UI snapshot tests |
-| Story session lifecycle | Implemented but unverified | `server.py` | `test_story_engine.py` (not run; outdated) | `api.md`, `story-engine.md` | No `device_id` check on `get_session` | Run integration tests with live server |
+| Story session lifecycle | Verified complete (ownership) | `server.py`, `security.py` | `test_security.py` ✅ | `api.md` | Device isolation only — not user accounts | Run live `test_story_engine.py` |
 | Narrative generation | Implemented but unverified | `server.py` (`_generate_turn`, `_generate_validated_turn`) | `test_story_engine.py`, `qa_live_20turn_hostile.py` | `story-engine.md` | LLM latency/cost; provider outages | Live turn test + 20-turn script |
 | Anti-hallucination / narrative guards (validator) | Partial | `server.py` (`_validate_parsed`, `_full_validate`) | `verify_p1_immersion_integrity.py` ✅, `verify_p15_microfixes.py` ✅ | `story-engine.md` | Validator cannot catch all leaks post-hoc | Add live leakage probe to CI |
-| Backend player sanitization | Implemented but unverified | `server.py` (`_maybe_sanitise_*`) | Indirect via integration tests | `architecture.md` | Bypass via `export_session`, `developer_mode` | Auth on export; integration test |
+| Backend player sanitization | Verified complete | `player_api.py` allowlist serializers | `test_security.py`, `test_player_api.py` ✅ | `architecture.md` | — | — |
+| Story creation rate limits | Verified complete (deterministic) | `rate_limit.py` | `test_rate_limit.py` ✅ | `api.md` | IP trust requires `TRUSTED_PROXY_COUNT` | Tune limits per deployment |
 | Frontend sanitization | Verified complete (unit) | `frontend/src/sanitize.ts`, `play/[id].tsx` | None dedicated | `frontend.md` | Presentation-only; state still holds leaks | Optional snapshot tests |
 | Object permanence | Verified complete (deterministic) | `server.py`, `memory.py` | `verify_p0_object_permanence.py` ✅ | `story-engine.md` | Heuristic ledger matching | Run inside CI |
 | Inventory and item state | Partial | `server.py`, `memory.py`, `gateway.py` (destruction registry) | P0 ✅, `test_gateway_e2e.py` ✅ | `story-engine.md` | LLM can invent items before guards | Live hostile inventory probe |
@@ -26,9 +27,10 @@
 | Telemetry | Implemented but unverified | `ai_service.py`, turn `debug` field | Live tests only | `architecture.md` | Telemetry in dev payloads only | Verify diagnostics endpoint |
 | Model selection | Implemented but unverified | `ai_service.py`, `ai_config.py`, admin routes | `test_story_engine.py` (health only) | `api.md`, `development.md` | Unsupported model rejected on admin POST only | Fallback failure drill (PRD P1) |
 | Developer mode | Partial | `server.py`, `settings.tsx`, `play/[id].tsx` | Integration (not run) | `frontend.md`, `development.md` | Server flag toggled without auth | Protect admin POST |
-| Admin settings | Implemented but unverified | `server.py`, `frontend/app/settings.tsx` | None | `api.md` | No authentication | Add auth or network restriction |
-| Export endpoint | Implemented but unverified | `server.py` `export_session` | Used by live relationship tests (unverified) | `api.md` | Returns unsanitized full state; no auth | Sanitize or require dev auth |
-| Reset endpoint | Implemented but unverified | `server.py` `reset_session` | None | `api.md` | Deletes all turns irreversibly; no device check | Contract test + UI warning audit |
+| Admin settings | Verified complete (server auth) | `security.py`, `server.py` | `test_security.py` ✅ | `api.md` | Client UI cannot call without `ADMIN_API_KEY` proxy | Operator deployment docs |
+| Player export | Verified complete | `server.py` `export_session` | `test_security.py` ✅ | `api.md` | Always sanitised | — |
+| Raw admin export | Verified complete | `server.py` `export_session_raw` | `test_security.py` ✅ | `api.md` | Requires admin key + ownership | Not in player UI |
+| Reset endpoint | Verified complete (ownership) | `server.py` `reset_session` | `test_security.py` ✅ | `api.md` | Destructive; ownership enforced | Contract test optional |
 | Frontend error handling | Verified complete (unit) | `frontend/src/errors.ts` | None | `frontend.md` | Pattern-based; may miss new errors | Add cases as discovered |
 | Custom World creation | Implemented but unverified | `server.py`, `new-story.tsx` | `test_custom_world_system.py` (unverified) | `frontend.md`, PRD Docs-claimed | Depends on live LLM | Run pytest with server |
 | State supremacy | Verified complete (deterministic) | `server.py` `_apply_state_supremacy` | `test_custom_world_system.py` (unit), P0 adjacent | `story-engine.md` | Health/Fatigue only | Extend if more chips added |

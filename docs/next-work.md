@@ -16,31 +16,32 @@ Practical backlog from confirmed repo gaps on the **`emergent`** branch. No spec
 
 ---
 
-## P0: Release blockers or data/security risks
+## Completed (P0 security)
 
-### NW-P0-01: Unauthenticated admin and export endpoints
-
-| Field | Detail |
-|-------|--------|
-| **Problem** | `/api/admin/*` and `/api/story/session/{id}/export` lack authentication; any caller with network access can read full simulation state or change global AI settings. |
-| **Evidence** | `server.py` admin routes ~2359–2477; `export_session` ~2857–2873 — **Not present** (auth) |
-| **Impact** | Credential-less abuse, data leak, cost injection via model changes |
-| **Recommended action** | Add API key, session auth, or network-level restriction; sanitize export or require dev auth |
-| **Acceptance criteria** | Unauthenticated client receives 401 on admin POST and optionally on export; documented in `api.md` |
-| **Files** | `backend/server.py`, `docs/api.md`, `docs/failure-modes.md` |
-| **Dependencies** | Deployment auth strategy decision (ADR) |
-
-### NW-P0-02: Session access without device ownership check
+### NW-P0-01: Admin authentication + safe export ✅
 
 | Field | Detail |
 |-------|--------|
-| **Problem** | `get_session`, `export_session`, `story_action`, `reset_session`, `delete_session`, `set_session_mode` use `session_id` only; knowing UUID grants access. |
-| **Evidence** | `server.py` routes — **Partial** `device_id` (enforced on `list_sessions` + stored at `new_story` only) |
-| **Impact** | Cross-device chronicle access if ID leaks |
-| **Recommended action** | Require `device_id` query/body param and match `session.device_id` |
-| **Acceptance criteria** | Mismatched device returns 403; integration test added |
-| **Files** | `backend/server.py`, `frontend/src/api.ts` |
-| **Dependencies** | NW-P0-01 auth strategy optional but related |
+| **Resolution** | `security.require_admin`; player `/export` always sanitised; `/export/raw` for admin + ownership |
+| **Tests** | `test_security.py` cases 11–20 ✅ |
+| **ADR** | ADR-012 |
+
+### NW-P0-02: Session ownership enforcement ✅
+
+| Field | Detail |
+|-------|--------|
+| **Resolution** | `security.fetch_owned_session` on all protected routes; frontend sends `device_id` |
+| **Tests** | `test_security.py` cases 1–10 ✅ |
+| **ADR** | ADR-012 |
+
+### NW-P0-03: Deployment operator workflow
+
+| Field | Detail |
+|-------|--------|
+| **Problem** | Expo Settings admin UI cannot call `/api/admin/*` without embedding credentials (forbidden). |
+| **Recommended action** | Document curl/operator proxy pattern; set `ADMIN_API_KEY` in deployment |
+| **Acceptance criteria** | `development.md` or ops runbook describes admin access |
+| **Files** | `docs/development.md` (future), deployment env |
 
 ---
 

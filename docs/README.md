@@ -106,12 +106,13 @@ Deterministic verification (no server, `emergent` branch):
 
 ```bash
 cd backend
-pytest tests/test_anti_hallucination_gateway.py \
+pytest tests/test_security.py \
+       tests/test_anti_hallucination_gateway.py \
        tests/test_relationship_calculus.py \
        tests/test_hud.py \
        tests/test_gateway_e2e.py \
        tests/verify_p0_object_permanence.py \
        tests/verify_p1_immersion_integrity.py \
        tests/verify_p15_microfixes.py -q
-# Expected: 47 passed
+# Expected: 67 passed (set ADMIN_API_KEY in env)
 ```

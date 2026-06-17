@@ -4,6 +4,32 @@ Lightweight log of documentation and operational changes. One entry per meaningf
 
 ---
 
+## 2026-06-17 — P0/P1 security hardening (rate limits + allowlists + minimal health)
+
+| Field | Detail |
+|-------|--------|
+| **Change** | Added `rate_limit.py` (MongoDB quotas before LLM on `/story/new`); `player_api.py` allowlist serializers; minimal `/health`; generic 502 errors; operator raw export without device credential; removed public admin client code; crypto UUID generation; `test_rate_limit.py`, `test_player_api.py`. |
+| **Reason** | Release-gate blockers: paid-endpoint abuse, denylist leak risk, health oversharing, operator access model alignment. |
+| **Tests run** | Deterministic bundle **83 passed**; live `test_story_engine` / `test_custom_world_system` **blocked** (invalid `OPENROUTER_API_KEY` placeholder) |
+| **Documentation updated** | `api.md`, `architecture.md` (pending), `current-state.md`, `failure-modes.md`, `feature-status.md`, `system-doctrine.md`, `verification.md`, `release-checklist.md`, `decision-log.md` (ADR-013) |
+| **Decision-log entry** | ADR-013 |
+
+---
+
+## 2026-06-17 — P0 security increment (ownership + admin auth + safe export)
+
+| Field | Detail |
+|-------|--------|
+| **Change** | Added `backend/security.py`; enforced `device_id` ownership on protected routes; admin routes require `ADMIN_API_KEY`; split player `/export` (sanitised) from `/export/raw` (admin + ownership); updated frontend API calls; added `test_security.py` (20 cases). |
+| **Reason** | Close confirmed access-control defects without changing story-engine/gateway/relationship/HUD behaviour. |
+| **Files affected** | `backend/security.py`, `backend/server.py`, `backend/tests/test_security.py`, `frontend/src/api.ts`, `frontend/app/play/[id].tsx`, `frontend/app/index.tsx`, test updates, `docs/*` |
+| **Tests run** | `pytest tests/test_security.py` + 47-test deterministic bundle → **67 passed**; `npx tsc --noEmit` ✅ |
+| **Documentation updated** | `api.md`, `architecture.md`, `current-state.md`, `failure-modes.md`, `feature-status.md`, `system-doctrine.md`, `verification.md`, `release-checklist.md`, `next-work.md`, `decision-log.md` (ADR-012) |
+| **Decision-log entry** | ADR-012 |
+| **Remaining risks** | Device UUID leak still grants access; Settings admin UI needs operator proxy; CORS `*`; no rate limiting |
+
+---
+
 ## 2026-06-17 — Reconcile documentation with `emergent` runtime (pass 3)
 
 | Field | Detail |

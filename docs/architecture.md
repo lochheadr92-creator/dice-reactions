@@ -54,8 +54,8 @@ flowchart TB
 
 ## Request lifecycle (story action)
 
-1. **Client** sends `POST /api/story/action` with `session_id`, `action_text`, `debug_mode`.
-2. **Server** loads session + prior turns from MongoDB (no `device_id` check).
+1. **Client** sends `POST /api/story/action` with `session_id`, `device_id`, `action_text`, `debug_mode`.
+2. **Server** verifies ownership via `fetch_owned_session`, then loads session + prior turns from MongoDB.
 3. **Message build** (`_build_messages`): system prompt, replay of recent turns (bounded by `memory_depth` / `history_window`), gateway truth block + relationship block + `<prior_state>`, final user message with difficulty/mode/debug markers.
 4. **Context budget** (`enforce_context_budget`): trim low-priority context if estimated prompt tokens exceed budget for active `cost_mode` + `mode`.
 5. **LLM call** (`gateway.invoke_llm` → `chat_completion_with_meta`): OpenRouter with per-session model lock and fallback chain; retries per model before stepping to next fallback.
@@ -76,7 +76,7 @@ flowchart TB
    - Relationship calculus (`update_relationship_calculus` — NPC→player)
    - HUD shaping (`shape_hud` — DNG/MOM/PRS, strip Objective)
 9. **Persist** turn + update session (`turn_count`, `rolling_state`, `last_state`, model telemetry).
-10. **Sanitize response** for player if `developer_mode` is off (`_maybe_sanitise_turn`).
+10. **Build player response** via `player_api` allowlist serializers (always sanitised).
 11. **Client** renders sanitized paragraphs/choices; DNG/MOM/PRS chips; optional debug panel if unlocked.
 
 Turn 1 (`new_story`) follows the same guard tail (steps 8–9) after object permanence, without state supremacy or gateway STRIP on prior state (no prior rolling state).
@@ -177,15 +177,25 @@ All runtime LLM calls resolve settings in `_generate_turn` then invoke via `gate
 
 `CORS_ORIGINS` env var (default `*`) controls allowed origins on the FastAPI app.
 
-## Security surface (code-reviewed)
+## Security primitives (`security.py`)
+
+| Function | Role |
+|----------|------|
+| `fetch_owned_session` | Load session; verify `device_id`; generic 403/404 errors |
+| `require_admin` | FastAPI dependency — `ADMIN_API_KEY` env + `X-Admin-Api-Key` header |
+
+## Security surface
 
 | Route class | Auth | Sanitization |
 |-------------|------|--------------|
-| Player story routes | None (session UUID) | `_maybe_sanitise_*` when `developer_mode` false |
-| Export | None | Always full payload |
-| Admin | None | N/A — returns settings/diagnostics |
+| Protected story routes | `X-Device-Id` ownership | `player_api` allowlists (all routes) |
+| `POST /story/new` | body `device_id` + rate limits | `rate_limit.py` before LLM/insert |
+| Player `/export` | `X-Device-Id` ownership | `player_api` allowlists |
+| Operator `/export/raw` | `X-Admin-Api-Key` | Full dump (no device credential) |
+| Raw `/export/raw` | Admin key + `device_id` ownership | None — full payload |
+| Admin `/api/admin/*` | `X-Admin-Api-Key` | N/A |
 
-See [current-state.md](./current-state.md) security audit table.
+Device-scoped isolation — not full user accounts. See [api.md](./api.md) and ADR-012.
 
 ## Unknown / not documented in code
 

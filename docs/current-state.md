@@ -50,6 +50,7 @@ This document is the canonical operational snapshot of the repository **as it ex
 | `PROVIDER_TIMEOUT` | `180` s | `backend/ai_config.py` |
 | `ENABLE_DEBUG_PANEL` | `true` | `backend/ai_config.py` |
 | `developer_mode` (admin settings) | `false` | `backend/server.py` (`get_ai_settings`) |
+| `ADMIN_API_KEY` | unset unless configured in deployment | `backend/security.py` — required for admin routes |
 | `CORS_ORIGINS` | `*` | `backend/server.py` |
 | `EXPO_PUBLIC_BACKEND_URL` | `http://localhost:8000` | `frontend/.env` |
 
@@ -88,7 +89,10 @@ This document is the canonical operational snapshot of the repository **as it ex
 | Admin AI settings (MongoDB-backed) | Implemented | Code |
 | Model fallback chain + telemetry | Implemented | Code (`ai_service.py`, called via `gateway.invoke_llm`) |
 | Developer unlock (7-tap) + diagnostics UI | Implemented | Code |
-| Export session endpoint | Implemented | Code — returns full unsanitized session + turns |
+| Session ownership enforcement | Implemented | Code (`security.fetch_owned_session`) + Tests (`test_security.py` ✅) |
+| Admin API key authentication | Implemented | Code (`security.require_admin`) + Tests (`test_security.py` ✅) |
+| Player-safe export | Implemented | Code — sanitised export; Tests (`test_security.py` ✅) |
+| Raw administrative export | Implemented | Code — `/export/raw` + admin key + ownership; Tests ✅ |
 | Reset session endpoint | Implemented | Code — deletes turns, clears rolling state |
 | Frontend error mapping | Implemented | Code (`frontend/src/errors.ts`) |
 
@@ -107,7 +111,7 @@ This document is the canonical operational snapshot of the repository **as it ex
 | Long-run compression stress | `compute_compression_metrics`, context trim | No automated 15+ turn test run in this pass | Code; Docs-claimed backlog |
 | Provider fallback verification | Fallback chain in code | Deliberate fallback failure test not run in this pass | Docs-claimed backlog |
 | Export UX | Backend export + frontend Share hook | No dedicated share-friendly summary view | Code (backend); Docs-claimed P2 |
-| Session ownership | `device_id` stored at `new_story`; `list_sessions` filters by `device_id` | `get_session`, `export`, `story_action`, `reset`, `delete`, `mode` do not verify `device_id` | Code — no ownership tests |
+| Device-scoped isolation | Not full user accounts | UUID `device_id` only; no login, password reset, or cross-device recovery | By design (P0 increment scope) |
 
 ---
 
@@ -133,14 +137,15 @@ These appear in `memory/PRD.md` or design vocabulary but **have no implementing 
 
 ```bash
 cd backend
-pytest tests/test_anti_hallucination_gateway.py \
+pytest tests/test_security.py \
+       tests/test_anti_hallucination_gateway.py \
        tests/test_relationship_calculus.py \
        tests/test_hud.py \
        tests/test_gateway_e2e.py \
        tests/verify_p0_object_permanence.py \
        tests/verify_p1_immersion_integrity.py \
        tests/verify_p15_microfixes.py -q
-# Result: 47 passed
+# Result: 67 passed (2026-06-17, includes 20 security tests)
 ```
 
 ### Requires running backend + OpenRouter key (Unverified in this pass)
@@ -182,18 +187,22 @@ pytest tests/test_anti_hallucination_gateway.py \
 
 ---
 
-## Security audit (`emergent` branch)
-
-Re-audited from code review. No dedicated security test suite exists; statuses reflect code evidence unless a test is cited.
+## Security audit (`emergent` branch — post P0 increment)
 
 | Finding | Status | Evidence |
 |---------|--------|----------|
-| Admin route authentication | **Not present** | `/api/admin/*` routes (`admin_get_settings`, `admin_post_settings`, `admin_runtime`, `admin_session_diagnostics`, `admin_list_models`) — no auth middleware or API key check (`server.py` ~2359–2477) |
-| Export authentication | **Not present** | `export_session` — no auth, no sanitization (`server.py` ~2857–2873) |
-| Session ownership (`device_id`) | **Partial** | Enforced: `list_sessions(device_id)`, stored at `new_story`. **Not enforced:** `get_session`, `export_session`, `story_action`, `reset_session`, `delete_session`, `set_session_mode` — `session_id` alone grants access |
-| `device_id` enforcement on mutations | **Partial** | Same as ownership — write routes accept `session_id` without matching `device_id` |
-| Raw / debug / `rolling_state` exposure | **Partial** | `_maybe_sanitise_turn` / `_sanitise_session_for_player` when `developer_mode` false on `get_session`, `story_action`, `get_latest_turn`, `list_sessions`. **Bypass:** `export_session` always returns full `rolling_state`, `debug`, `raw`; `get_session` returns unsanitized data when `developer_mode` true |
-| Developer-mode enforcement | **Partial** | `[DEV_MODE: ON]` requires server `developer_mode` **and** request `debug_mode` (`story_action` ~2706). Toggle via unauthenticated `POST /admin/settings` (`admin_post_settings` ~2458). No test proves auth cannot flip `developer_mode` |
+| Admin route authentication | **Confirmed** | `security.require_admin` on all `/api/admin/*`; `test_security.py` cases 11–15 ✅ |
+| Player export safety | **Confirmed** | `export_session` always sanitised; `test_security.py` cases 16–17 ✅ |
+| Raw export gate | **Confirmed** | `/export/raw` requires `X-Admin-Api-Key` + ownership; cases 18–20 ✅ |
+| Session ownership (`device_id`) | **Confirmed** on protected routes | `fetch_owned_session` on get/action/export/reset/delete/mode/latest; cases 1–10 ✅ |
+| Raw / debug exposure via player export | **Mitigated** | Player export strips `rolling_state`/`debug`/`raw` always |
+| Raw / debug via `get_session` when `developer_mode` true | **Partial** | Still possible for session owner with server dev mode on — not raw export |
+| Developer-mode toggle | **Confirmed** admin-gated | `POST /admin/settings` requires `X-Admin-Api-Key`; case 14 ✅ |
+| Full user authentication | **Not present** | Device UUID isolation only — by design |
+| `CORS_ORIGINS=*` default | **Unchanged** | Network-level risk remains |
+| Story creation rate limits | **Confirmed** | `rate_limit.py` on `POST /story/new`; `test_rate_limit.py` ✅ |
+| Player response allowlists | **Confirmed** | `player_api.py`; `test_player_api.py` ✅ |
+| Minimal `/health` | **Confirmed** | Returns `status` + `llm_configured` only |
 
 ---
 
@@ -203,8 +212,7 @@ Derived from confirmed gaps (not speculative features):
 
 | Priority | Work | Evidence |
 |----------|------|----------|
-| P0 | Add real auth or access control for admin + export endpoints | Security audit above |
-| P0 | Enforce `device_id` ownership on get/export/action/reset/delete/mode | Security audit above |
+| P1 | Configure `ADMIN_API_KEY` in deployment; document operator admin workflow (client Settings UI cannot call admin routes without proxy) | P0 increment shipped |
 | P1 | Run live-server test bundle; update or quarantine outdated tests | Unverified list above |
 | P1 | Execute `qa_live_20turn_hostile.py` and PRD P1 stress items | Not run; Docs-claimed backlog |
 | P1 | Pin `httpx` in `requirements.txt` | Dependency gap |

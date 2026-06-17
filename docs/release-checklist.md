@@ -19,14 +19,22 @@ Distinguishes **runnable today** (commands exist in repo) from **recommended** (
 ### Runtime tests (runnable)
 
 ```bash
-# Backend deterministic verification (no server, no API key)
+# Backend deterministic verification (no live server; needs MongoDB + ADMIN_API_KEY)
 cd backend
-python tests/verify_p0_object_permanence.py
-python tests/verify_p1_immersion_integrity.py
-python tests/verify_p15_microfixes.py
+export ADMIN_API_KEY=your-secret-key   # or set in backend/.env
+pytest tests/test_security.py \
+       tests/test_rate_limit.py \
+       tests/test_player_api.py \
+       tests/test_anti_hallucination_gateway.py \
+       tests/test_relationship_calculus.py \
+       tests/test_hud.py \
+       tests/test_gateway_e2e.py \
+       tests/verify_p0_object_permanence.py \
+       tests/verify_p1_immersion_integrity.py \
+       tests/verify_p15_microfixes.py -q
 ```
 
-- [ ] All three verification scripts pass
+- [ ] Security + deterministic bundle passes (83 tests)
 
 ### Runtime tests (require live backend + OpenRouter key)
 
@@ -77,8 +85,11 @@ yarn lint
 
 ### Authentication / security review
 
-- [ ] Acknowledge admin routes are unauthenticated (see `failure-modes.md` FM-15)
-- [ ] Export endpoint exposure reviewed
+- [ ] `ADMIN_API_KEY` set in production `backend/.env` (not committed)
+- [ ] Admin routes return 401 without `X-Admin-Api-Key` (see `test_security.py`)
+- [ ] Player `/export` returns sanitised payload only
+- [ ] Raw `/export/raw` not exposed to public clients
+- [ ] `X-Device-Id` header sent on all protected frontend API calls
 - [ ] `developer_mode` default appropriate for production
 - [ ] No secrets committed
 
@@ -102,9 +113,9 @@ yarn lint
 
 ### Developer-only feature checks
 
-- [ ] With `developer_mode` false: `get_session` omits `rolling_state`, `debug`, `raw` on turns
-- [ ] With `developer_mode` true + debug: diagnostics visible in play UI
-- [ ] 7-tap unlock still sets server flag as expected
+- [ ] Player routes omit `rolling_state`, `debug`, `raw` even when `developer_mode` true
+- [ ] Wrong-device and unknown-session return identical 404 bodies
+- [ ] Public Settings has no server-admin controls (operator curl documented in `api.md`)
 
 ---
 

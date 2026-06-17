@@ -107,11 +107,11 @@ Rules governing Dice Reaction implementation on the **`emergent`** branch. Each 
 |-------|--------|
 | **Meaning** | `rolling_state`, `debug`, `raw`, internal state keys, relationship vector numbers, and admin diagnostics are dev-only. |
 | **Why** | Protect immersion and prevent mechanic gaming. |
-| **Allowed** | Full payloads when `developer_mode` true (server) and UI unlock + `debug_mode` on actions (client). |
-| **Forbidden** | Default sessions exposing dev fields; `[DEV_MODE: ON]` without both server and request gates. |
-| **Files** | `server.py` (`_maybe_sanitise_*`, debug marker in `story_action`), `frontend/app/settings.tsx`, `frontend/app/play/[id].tsx` |
-| **Tests** | `test_story_engine.py` checks `debug_mode: false` stories omit leaks (integration — **unverified**, needs server) |
-| **Status** | **Partial** — API sanitization works when `developer_mode` false; admin/export endpoints expose full data without player auth; `developer_mode` toggled without authentication |
+| **Allowed** | Raw payloads via admin-authenticated `/export/raw` or `/admin/session/{id}/diagnostics`; `[DEV_MODE: ON]` prompt marker when server `developer_mode` and request `debug_mode` both true. |
+| **Forbidden** | Player routes returning `rolling_state`/`debug`/`raw` when `developer_mode` true; client Settings calling admin API; `device_id` in protected-route URLs. |
+| **Files** | `server.py` (`_sanitise_*`, debug marker in `story_action`), `security.py`, `frontend/app/settings.tsx`, `frontend/app/play/[id].tsx` |
+| **Tests** | `test_security.py` cases 16–25 ✅; `test_story_engine.py` (live — **not run**) |
+| **Status** | **Enforced** on player routes; admin raw export gated; public client has no admin credentials |
 
 ---
 
@@ -126,7 +126,9 @@ May evolve only through an explicit recorded decision in `decision-log.md`.
 | AC3 | `rolling_state` is the compression packet for long-horizon continuity; prompt carries `<prior_state>` plus bounded replay. |
 | AC4 | Session-locked `active_model` and `fallback_chain` at story creation. |
 | AC5 | Single system prompt document (`STORY_ENGINE_SYSTEM_PROMPT`) defines output tag contract. |
-| AC6 | Device `device_id` (client UUID) scopes session listing — not user accounts; ownership not enforced on all routes. |
+| AC6 | Device `device_id` (client UUID) scopes session listing and ownership on protected routes — not user accounts. |
+| AC10 | Admin mutations require `ADMIN_API_KEY` + `X-Admin-Api-Key` header; player `/export` is always sanitised. |
+| AC11 | `POST /story/new` rate-limited before LLM; player responses use `player_api` allowlists. |
 | AC7 | Admin settings stored in `admin_settings` collection, merged over env defaults. |
 | AC8 | `relationship_vectors` in `rolling_state` are engine-owned (protected key); LLM-injected vectors are ignored. |
 | AC9 | HUD exposes DNG/MOM/PRS only — no Objective/quest steering (`hud.shape_hud`). |
