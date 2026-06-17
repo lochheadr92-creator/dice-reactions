@@ -83,3 +83,9 @@ android-sdk/
 credentials.json
 *.key
 .credentials
+
+# Environment files (keep secrets out of git; commit only sanitized examples)
+.env
+.env.*
+*.env
+!.env.example
