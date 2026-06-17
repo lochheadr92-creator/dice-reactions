@@ -6,18 +6,24 @@ Test coverage and verification status for the **`emergent`** branch.
 
 ## Deterministic test bundle (no live server)
 
-**Passed 2026-06-17 on `emergent`:** 47 tests
+**Passed 2026-06-17 on `emergent`:** 83 tests (security, rate-limit, player allowlist, gateway, P0/P1/P1.5)
 
 ```bash
 cd backend
-pytest tests/test_anti_hallucination_gateway.py \
+# Set ADMIN_API_KEY for security + raw-export integration tests
+export ADMIN_API_KEY=your-secret-key   # PowerShell: $env:ADMIN_API_KEY="..."
+
+pytest tests/test_security.py \
+       tests/test_rate_limit.py \
+       tests/test_player_api.py \
+       tests/test_anti_hallucination_gateway.py \
        tests/test_relationship_calculus.py \
        tests/test_hud.py \
        tests/test_gateway_e2e.py \
        tests/verify_p0_object_permanence.py \
        tests/verify_p1_immersion_integrity.py \
        tests/verify_p15_microfixes.py -q
-# 47 passed
+# 83 passed
 ```
 
 | File | What it covers |
@@ -48,6 +54,7 @@ yarn lint
 | `test_anti_hallucination_gateway.py` | pytest | ✅ Passed 2026-06-17 (offline) |
 | `test_relationship_calculus.py` | pytest | ✅ Passed 2026-06-17 (offline) |
 | `test_hud.py` | pytest | ✅ Passed 2026-06-17 (offline) |
+| `test_security.py` | pytest | ✅ Passed 2026-06-17 (20 cases, offline, needs `ADMIN_API_KEY` + MongoDB) |
 | `test_gateway_e2e.py` | pytest | ✅ Passed 2026-06-17 (offline) |
 | `verify_p0_object_permanence.py` | script | ✅ Passed 2026-06-17 |
 | `verify_p1_immersion_integrity.py` | script | ✅ Passed 2026-06-17 |
@@ -74,7 +81,7 @@ These require MongoDB, Uvicorn on `localhost:8000` (or `EXPO_PUBLIC_BACKEND_URL`
 - `qa_live_20turn_*.py` — long-run stress scripts
 - `verify_p2_consequences_rumours.py` — P2 rumour propagation (path may not match local tree)
 
-No security-specific automated tests exist for admin auth, export auth, or `device_id` ownership.
+Security coverage: `test_security.py` — ownership (10), admin auth (5), export safety (5). Requires `ADMIN_API_KEY` in test environment.
 
 ## Verification completed — 2026-05-27 (Docs-claimed, from PRD)
 
@@ -104,7 +111,7 @@ No security-specific automated tests exist for admin auth, export auth, or `devi
 
 | Priority | Item |
 |----------|------|
-| P0 | Admin + export authentication; `device_id` ownership on all session routes |
+| P0 | Configure `ADMIN_API_KEY` in deployment; operator admin workflow |
 | P1 | Run live-server test bundle; update/quarantine `test_story_engine.py` |
 | P1 | Fresh 20+ turn hostile stress test |
 | P1 | 15+ turn stress chronicle (compression + context budget) |

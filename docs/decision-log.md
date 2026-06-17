@@ -132,10 +132,10 @@ Architecture Decision Records (ADRs) supported by evidence in this repository on
 | **Date** | Documented 2026-06-17 |
 | **Status** | Accepted |
 | **Context** | Debug payloads needed for tuning; must not appear for normal players. |
-| **Decision** | Server `developer_mode` in admin settings controls `_maybe_sanitise_*`. Client 7-tap unlock sets local `developerUnlocked` and sets server `developer_mode`. `[DEV_MODE: ON]` only when both server `developer_mode` and request `debug_mode` true. |
-| **Alternatives considered** | Per-session only (partially used via `debug_mode`); always-on debug (reject). |
-| **Consequences** | Two flags to coordinate; export endpoint ignores sanitization; admin POST unauthenticated. |
-| **Risks** | Unauthenticated `developer_mode` toggle; export leak. |
+| **Decision** | Server `developer_mode` (admin-only) controls `[DEV_MODE: ON]` prompt marker when request `debug_mode` is also true. Player routes always use `_sanitise_*` regardless of `developer_mode`. Client 7-tap unlock sets local `developerUnlocked` only (display preferences). |
+| **Alternatives considered** | Per-session only (partially used via `debug_mode`); always-on debug (reject); `developer_mode` bypassing player sanitisation (reject — ADR-012 correction). |
+| **Consequences** | Two flags for prompt behaviour; player API never returns raw state; admin changes require operator credentials. |
+| **Risks** | Device UUID leak still grants session access; no rate limiting. |
 | **Files affected** | `backend/server.py`, `frontend/app/settings.tsx`, `frontend/app/play/[id].tsx` |
 | **Tests required** | Integration with `debug_mode: false` (not run this pass) |
 | **Evidence** | `bumpVersionTap` in `settings.tsx`; `debug_marker` logic in `story_action` |
@@ -208,3 +208,36 @@ These topics appear in `memory/PRD.md` or design briefs but **lack sufficient co
 Promote to ADR when implementation and tests exist.
 
 **Explicitly N/A:** historical score equivalence, NaN/infinity ranking guards — symbols never existed in this repository's git history.
+
+---
+
+## ADR-012: Device-scoped ownership and admin API key (P0 security)
+
+| Field | Detail |
+|-------|--------|
+| **Date** | Documented 2026-06-17 |
+| **Status** | Accepted |
+| **Context** | Admin routes, export, and session mutations were reachable without server-side authentication. `device_id` was stored but not verified on most routes. |
+| **Decision** | (1) Centralise ownership in `security.fetch_owned_session`. (2) Transport device credential via `X-Device-Id` header on all protected story routes; `POST /story/new` binds owner via body `device_id`. (3) Protect `/api/admin/*` with `ADMIN_API_KEY` env + `X-Admin-Api-Key` header (constant-time compare, fail closed). (4) Split export: player `/export` and all player session responses always sanitised; administrative `/export/raw` requires admin key + ownership. (5) Wrong-owner and unknown-session failures are indistinguishable (404). (6) Do not embed admin credentials in the Expo client; remove server-admin UI from public Settings. |
+| **Alternatives considered** | Full user accounts (reject — out of P0 scope); `developer_mode` as auth (reject); `device_id` in query strings (reject — credential in URLs); 403 on wrong owner (reject — enables enumeration). |
+| **Consequences** | Operators use curl/out-of-band tooling for admin; live integration tests using `/export/raw` need `ADMIN_API_KEY`. |
+| **Risks** | Device UUID leak still grants access; no rate limiting; CORS still `*` by default. |
+| **Files affected** | `backend/security.py`, `backend/server.py`, `frontend/src/api.ts`, `frontend/app/settings.tsx`, `frontend/app/play/[id].tsx`, `frontend/app/index.tsx`, `backend/tests/test_security.py`, `docs/api.md` |
+| **Tests required** | `test_security.py` (25 cases) |
+| **Evidence** | Release-gate correction pass 2026-06-17 |
+
+---
+
+## ADR-013: Paid-endpoint abuse controls and player allowlist serializers (P0/P1 hardening)
+
+| Field | Detail |
+|-------|--------|
+| **Date** | 2026-06-17 |
+| **Status** | Accepted |
+| **Context** | `POST /story/new` invokes a paid LLM call with no rate limits. Player responses used denylist `pop()` sanitisation. Health endpoint leaked runtime config. Raw export required device credential alongside admin key. |
+| **Decision** | (1) MongoDB-backed rate limits on story creation: per-IP, per-device, global concurrent; fail before LLM/insert; 429 generic body; fail closed on limiter errors. (2) `player_api.py` explicit allowlist serializers for all player routes; state/ledger values scrubbed via existing `_scrub_meta_from_text`. (3) `/health` returns only `status` + `llm_configured`. (4) Operator `/export/raw` and diagnostics require admin key only. (5) Generic 502 client errors; explicit CORS headers when origins are not `*`. |
+| **Alternatives considered** | In-memory-only rate limiter (reject — unbounded keys); full user accounts (reject — out of scope); keeping denylist sanitisation (reject — unknown fields leak). |
+| **Consequences** | Deployments behind proxies must set `TRUSTED_PROXY_COUNT`; live tests need valid `OPENROUTER_API_KEY`. |
+| **Files affected** | `rate_limit.py`, `player_api.py`, `server.py`, `security.py`, `frontend/src/api.ts`, `frontend/src/storage.ts`, tests |
+| **Tests required** | `test_rate_limit.py`, `test_player_api.py`, extended `test_security.py` |
+| **Evidence** | 83-test deterministic bundle passed 2026-06-17 |

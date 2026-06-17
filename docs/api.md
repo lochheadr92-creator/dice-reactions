@@ -20,26 +20,16 @@ Returns engine identification message.
 
 ### `GET /health`
 
-Runtime health and resolved AI settings snapshot.
+Minimal uptime probe. Does not expose model names, runtime configuration, or admin flags.
 
-**Response fields (representative):**
+**Response:**
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `status` | string | `"ok"` when reachable |
 | `llm_configured` | boolean | Whether `OPENROUTER_API_KEY` is set |
-| `provider` | string | `"openrouter"` |
-| `model` | string | Active default model |
-| `temperature` | number | Sampling temperature |
-| `max_tokens` | number | Max completion tokens |
-| `history_window` | number | Max turns considered for replay |
-| `default_mode` | string | `basic` or `advanced` |
-| `compression_level` | string | `light`, `standard`, or `aggressive` |
-| `memory_depth` | number | Recent turns replayed verbatim |
-| `developer_mode` | boolean | Whether dev payloads are returned |
-| `fallback_models` | string[] | Ordered fallback chain |
-| `cost_mode` | string | `normal` or `low` |
-| `runtime_config` | object | Snapshot from `ai_config.get_runtime_config()` |
+
+Full AI settings: `GET /api/admin/settings` (requires `X-Admin-Api-Key`).
 
 ## Scenarios
 
@@ -77,7 +67,24 @@ Start a new chronicle.
 | `scenario_id` | no | string | Curated scenario override |
 | `custom_world_setup` | no | object | Custom World 6-part setup (see frontend types) |
 
-**Response:** `{ session_id, turn, session }`
+**Response:** `{ session_id, turn, session }` — player allowlist serializers only (`player_api.py`). No `device_id`, `rolling_state`, `debug`, or engine metadata in responses.
+
+**Rate limits (enforced before LLM call or session insert):**
+
+| Env variable | Default | Meaning |
+|--------------|---------|---------|
+| `RATE_LIMIT_IP_MAX` | 10 | Max creations per client IP per window |
+| `RATE_LIMIT_IP_WINDOW_SEC` | 3600 | IP window (seconds) |
+| `RATE_LIMIT_DEVICE_MAX` | 5 | Max creations per `device_id` per window |
+| `RATE_LIMIT_DEVICE_WINDOW_SEC` | 3600 | Device window (seconds) |
+| `RATE_LIMIT_GLOBAL_MAX` | 50 | Max total story creations globally per fixed window |
+| `RATE_LIMIT_GLOBAL_WINDOW_SEC` | 3600 | Global fixed window (seconds) |
+| `RATE_LIMIT_GLOBAL_CONCURRENT` | 3 | Max in-flight story creations |
+| `TRUSTED_PROXY_COUNT` | 0 | When >0, client IP from `X-Forwarded-For` at `parts[-N]` (requires chain length > N). **Do not trust `X-Forwarded-For` unless this matches your deployment proxy depth.** |
+
+Exceeded limits → **429** `{ "detail": "Too many requests" }` (generic; no admin/model details). Limiter backend failure → **503** `{ "detail": "Service unavailable" }` (fail closed).
+
+`device_id` in the body is **not** abuse-proof — clients can regenerate UUIDs. IP limits complement device limits.
 
 Scenario fields override client defaults when `scenario_id` is set.
 
@@ -93,9 +100,11 @@ Submit a player action for the next turn.
 | `action_text` | yes | string |
 | `debug_mode` | no | boolean |
 
+**Header:** `X-Device-Id` (required) — must match the session owner's persisted `device_id`.
+
 **Response:** `{ turn: Turn }`
 
-Turn shape (player view may omit fields when `developer_mode` is off):
+Turn shape (player-facing responses always omit internal fields):
 
 | Field | Type |
 |-------|------|
@@ -108,27 +117,33 @@ Turn shape (player view may omit fields when `developer_mode` is off):
 | `choices` | `{ label, text }[]` |
 | `state` | `Record<string, string>` |
 | `ledger` | object |
-| `rolling_state` | object \| null (dev only by default) |
-| `debug` | object \| null (dev only by default) |
+| `rolling_state` | omitted on player routes |
+| `debug` | omitted on player routes |
 | `created_at` | ISO datetime string |
 
 ### `GET /story/sessions`
 
 List sessions for a device.
 
-**Query:** `device_id` (required)
+**Header:** `X-Device-Id` (required)
 
-**Response:** `{ sessions: SessionSummary[] }`
+**Response:** `{ sessions: SessionSummary[] }` — sessions are always sanitised (no `rolling_state`).
 
 ### `GET /story/session/{session_id}`
 
-Full session with all turns.
+Full session with all turns. Player-facing response is always sanitised.
+
+**Header:** `X-Device-Id` (required) — must match `session.device_id`.
 
 **Response:** `{ session, turns }`
 
+**Errors:** `400` missing `X-Device-Id`; `404` `{ "detail": "Session not found" }` for unknown session or wrong device (indistinguishable).
+
 ### `GET /story/session/{session_id}/latest`
 
-Most recent turn only.
+Most recent turn only. Turn is always sanitised.
+
+**Header:** `X-Device-Id` (required)
 
 **Response:** `{ turn }`
 
@@ -136,11 +151,15 @@ Most recent turn only.
 
 Delete session and its turns.
 
+**Header:** `X-Device-Id` (required)
+
 **Response:** `{ deleted: true }`
 
 ### `POST /story/session/{session_id}/mode`
 
 Switch simulation mode mid-chronicle.
+
+**Header:** `X-Device-Id` (required)
 
 **Request:** `{ mode: "basic" | "advanced" }`
 
@@ -148,7 +167,9 @@ Switch simulation mode mid-chronicle.
 
 ### `GET /story/session/{session_id}/export`
 
-Return full session state JSON (unsanitized — includes `rolling_state`, `debug`, `raw` on turns).
+**Player-safe export.** Requires verified session ownership. Always returns sanitised chronicle data — `rolling_state`, `debug`, and `raw` are stripped regardless of server `developer_mode`.
+
+**Header:** `X-Device-Id` (required)
 
 **Response:**
 
@@ -159,17 +180,28 @@ Return full session state JSON (unsanitized — includes `rolling_state`, `debug
   "turns": [ ],
   "summary": {
     "turn_count": 0,
-    "rolling_state": { },
     "last_state": { }
   }
 }
 ```
 
-Turns are sorted by `turn_number` ascending (max 500). No `device_id` ownership check.
+Turns are sorted by `turn_number` ascending (max 500).
+
+### `GET /story/session/{session_id}/export/raw`
+
+**Administrative raw export.** Requires `X-Admin-Api-Key` only (no player device credential). Returns full unsanitised session + turns including `rolling_state`, `debug`, `raw`.
+
+**Header:** `X-Admin-Api-Key` (required)
+
+**Errors:** `401` missing/invalid admin key; `404` unknown session; `503` if `ADMIN_API_KEY` env not configured on server.
+
+Not exposed in the player UI. Not enabled by `developer_mode` alone.
 
 ### `POST /story/session/{session_id}/reset`
 
 Delete all turns and clear rolling state; keep session shell (genre, role, difficulty, mode).
+
+**Header:** `X-Device-Id` (required)
 
 **Response:** `{ "reset": true }`
 
@@ -177,8 +209,30 @@ Client should start fresh via `POST /story/action` or create a new story.
 
 ## Admin / AI settings
 
-These endpoints power Settings → ADMIN · AI ENGINE. No separate auth layer is implemented; access is UI-gated only.
+All `/api/admin/*` routes require the `X-Admin-Api-Key` request header matching the server `ADMIN_API_KEY` environment variable. Fails closed with **503** when `ADMIN_API_KEY` is unset, **401** when missing or incorrect.
 
+The Expo client does **not** embed admin credentials. Server admin settings are operator-only.
+
+### Operator access (curl examples)
+
+Set `ADMIN_API_KEY` in `backend/.env`. All examples assume `http://localhost:8000/api`.
+
+```bash
+# Read current AI settings
+curl -s -H "X-Admin-Api-Key: $ADMIN_API_KEY" http://localhost:8000/api/admin/settings
+
+# Enable developer_mode (affects LLM prompt markers only — player routes stay sanitised)
+curl -s -X POST -H "X-Admin-Api-Key: $ADMIN_API_KEY" -H "Content-Type: application/json" \
+  -d '{"developer_mode": true}' http://localhost:8000/api/admin/settings
+
+# Raw export for a session (admin only — no device credential)
+curl -s -H "X-Admin-Api-Key: $ADMIN_API_KEY" \
+  http://localhost:8000/api/story/session/SESSION_ID/export/raw
+
+# Per-session diagnostics
+curl -s -H "X-Admin-Api-Key: $ADMIN_API_KEY" \
+  http://localhost:8000/api/admin/session/SESSION_ID/diagnostics
+```
 ### `GET /admin/settings`
 
 **Response:** `AdminSettingsBundle` with `settings`, `models`, `modes`, `compression_levels`, `limits`, `defaults`, `provider_configured`.
@@ -219,9 +273,32 @@ Per-session diagnostics (model switches, compression, context budget). Returns *
 ## Error handling
 
 - Standard FastAPI `HTTPException` with `{ "detail": "..." }`.
-- Story engine wraps provider failures as 502-style errors with OpenRouter status embedded in detail string.
+- Story engine provider failures return **502** `{ "detail": "Story engine unavailable" }` — no raw exception strings to clients. Details are logged server-side only.
+- Rate limit exceeded returns **429** `{ "detail": "Too many requests" }`.
 - Frontend `friendlyError()` maps common patterns (429, 402, 401, 404, network) to user-facing alerts.
 
-## Authentication
+## Authentication and ownership
 
-**Unknown / not implemented:** There is no user login or API key per client. Sessions are scoped by `device_id` only. Admin endpoints are not separately authenticated.
+This increment provides **device-scoped session isolation**, not full user accounts.
+
+| Mechanism | Scope | Transport |
+|-----------|-------|-----------|
+| Session ownership | Protected story routes (reads, writes, deletes, exports, reset, mode) | Header `X-Device-Id` |
+| Session creation | `POST /story/new` only | JSON body field `device_id` (binds owner at creation) |
+| Admin API key | `/api/admin/*` and `/export/raw` | Header `X-Admin-Api-Key` |
+
+**Environment variable:** `ADMIN_API_KEY` — required on the server for admin routes to accept requests.
+
+**Ownership errors:** Wrong `X-Device-Id` and unknown session both return **404** `{ "detail": "Session not found" }` with identical bodies (no enumeration). Missing header → **400** `{ "detail": "device_id is required" }`.
+
+**Player allowlists:** All player-facing session/turn/list/export responses are built by `player_api.py` allowlists — unknown/internal fields never pass through. State/ledger string values are scrubbed for mechanic leaks. Raw state is operator-only via `/export/raw` or `/admin/session/{id}/diagnostics`.
+
+**Operator access model:**
+
+| Endpoint | Auth | Sanitised |
+|----------|------|-----------|
+| Player `/export` | `X-Device-Id` + ownership | Always |
+| `/export/raw` | `X-Admin-Api-Key` | Never (full dump) |
+| `/admin/session/{id}/diagnostics` | `X-Admin-Api-Key` | Never |
+
+**Not authentication:** `developer_mode`, client UI unlock, or CORS — these do not grant admin, raw-export, or unsanitised player-route access.

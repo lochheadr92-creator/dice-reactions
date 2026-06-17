@@ -205,14 +205,14 @@ For each mode: detection, prevention, recovery, and **current protection status*
 
 | Field | Detail |
 |-------|--------|
-| **Trigger** | `developer_mode` true; export endpoint; unauthenticated admin access. |
-| **Effect** | Full `rolling_state`, `debug`, `raw`, relationship numbers exposed. |
-| **Detection** | API response inspection. |
-| **Prevention** | `_maybe_sanitise_*` when `developer_mode` false on player routes. |
-| **Recovery** | Set `developer_mode` false; restrict network. |
-| **Files** | `server.py`, `export_session` |
-| **Tests** | None for export |
-| **Status** | **Partial** — player routes protected when `developer_mode` false; export/admin weak |
+| **Trigger** | Attacker obtains session UUID or guesses IDs; operator misconfigures admin key. |
+| **Effect** | Raw state exposure via admin routes only; player routes remain sanitised. |
+| **Detection** | API response inspection; `test_security.py` player-route cases. |
+| **Prevention** | All player routes use `player_api` allowlists; `/export/raw` and diagnostics require admin key only; admin routes require `X-Admin-Api-Key`. |
+| **Recovery** | Rotate `ADMIN_API_KEY`; restrict network; use operator curl only for diagnostics. |
+| **Files** | `server.py`, `security.py` |
+| **Tests** | `test_security.py` cases 16–25 ✅ |
+| **Status** | **Protected** on player routes; admin raw export gated |
 
 ---
 
@@ -220,14 +220,14 @@ For each mode: detection, prevention, recovery, and **current protection status*
 
 | Field | Detail |
 |-------|--------|
-| **Trigger** | Any client calls `/api/admin/*` or toggles settings. |
-| **Effect** | Model/cost/dev mode changed; potential abuse. |
-| **Detection** | Audit `admin_settings` collection. |
-| **Prevention** | **None in code** — UI gating only. |
-| **Recovery** | Restore settings via MongoDB or Settings UI. |
-| **Files** | `server.py` admin routes |
-| **Tests** | None |
-| **Status** | **Unprotected** |
+| **Trigger** | Client calls `/api/admin/*` without valid `X-Admin-Api-Key`. |
+| **Effect** | Request rejected — no settings change. |
+| **Detection** | HTTP 401/503 responses. |
+| **Prevention** | `security.require_admin` — constant-time key compare; fails closed when `ADMIN_API_KEY` unset. |
+| **Recovery** | Configure `ADMIN_API_KEY`; restore settings via authenticated admin call or MongoDB. |
+| **Files** | `security.py`, `server.py` admin routes |
+| **Tests** | `test_security.py` cases 11–15 ✅ |
+| **Status** | **Protected** (server-side); client UI admin panel non-functional without operator proxy |
 
 ---
 
@@ -235,14 +235,29 @@ For each mode: detection, prevention, recovery, and **current protection status*
 
 | Field | Detail |
 |-------|--------|
-| **Trigger** | Attacker obtains UUID; calls get/export/action without matching `device_id`. |
-| **Effect** | Read or mutate another device's chronicle. |
-| **Detection** | Code review of route handlers. |
-| **Prevention** | **Partial** — only `list_sessions` scopes by `device_id`. |
-| **Recovery** | Rotate session IDs **Unknown** (not implemented). |
-| **Files** | `server.py` |
-| **Tests** | None |
-| **Status** | **Unprotected** on get/export/action/reset/delete |
+| **Trigger** | Attacker obtains session UUID but not owner `device_id`. |
+| **Effect** | **404** identical to unknown session — no chronicle data, no ownership hint. |
+| **Detection** | `test_security.py` enumeration case (wrong device vs missing session). |
+| **Prevention** | `fetch_owned_session` on all protected routes; `X-Device-Id` header (not URL). |
+| **Recovery** | Attacker with both `session_id` and `device_id` still has access — device isolation only. |
+| **Files** | `security.py`, `server.py` |
+| **Tests** | `test_security.py` cases 2–7, 10 ✅ |
+| **Status** | **Protected** (device-scoped, anti-enumeration); not full account security |
+
+---
+
+## FM-20: Paid story-creation abuse
+
+| Field | Detail |
+|-------|--------|
+| **Trigger** | Automated or scripted `POST /story/new` spam; device UUID rotation. |
+| **Effect** | OpenRouter cost exhaustion; MongoDB session bloat. |
+| **Detection** | 429 rate on creation; `rate_limits` collection growth; ops monitoring. |
+| **Prevention** | MongoDB-backed per-IP, per-device, and concurrent limits before LLM/insert; generic 429; fail closed on limiter errors. `TRUSTED_PROXY_COUNT` for accurate IP behind proxy. |
+| **Recovery** | Tune env limits; block abusive IPs at edge; prune old `rate_limits` buckets (auto-pruned on check). |
+| **Files** | `rate_limit.py`, `server.py` |
+| **Tests** | `test_rate_limit.py` ✅ |
+| **Status** | **Protected** (deterministic); not a substitute for full user auth |
 
 ---
 
