@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -10,7 +10,6 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  Alert,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -20,6 +19,11 @@ import { getDeviceId, getSettings } from "../src/storage";
 import { newStory, listScenarios, Scenario, CustomWorldSetup } from "../src/api";
 import { friendlyError } from "../src/errors";
 import { clampIndex } from "../src/sanitize";
+import {
+  QuickStart,
+  buildQuickStartRequest,
+  type QuickStartSelections,
+} from "../src/newstory/QuickStart";
 
 type Genre = {
   key: string;
@@ -133,6 +137,8 @@ const CONTENT_ROWS = [
 
 export default function NewStoryScreen() {
   const router = useRouter();
+  const submitLockRef = useRef(false);
+  const [creationFlow, setCreationFlow] = useState<"quick" | "advanced">("quick");
   const [genre, setGenre] = useState<string>("");
   const [customGenre, setCustomGenre] = useState("");
   const [role, setRole] = useState("");
@@ -141,9 +147,12 @@ export default function NewStoryScreen() {
   const [debugMode, setDebugMode] = useState(false);
   const [premise, setPremise] = useState("");
   const [loading, setLoading] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [fontScale, setFontScale] = useState(1);
   const [mode, setMode] = useState<"basic" | "advanced">("advanced");
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [scenarioId, setScenarioId] = useState<string | null>(null);
+  const [quickSelections, setQuickSelections] = useState<QuickStartSelections>({});
   const [customSetup, setCustomSetup] = useState<CustomWorldSetup>({
     pressures: [],
     storyFocus: [],
@@ -159,7 +168,16 @@ export default function NewStoryScreen() {
   });
 
   useEffect(() => {
-    listScenarios().then((r) => setScenarios(r.scenarios)).catch(() => {});
+    let active = true;
+    listScenarios().then((r) => {
+      if (active) setScenarios(r.scenarios);
+    }).catch(() => {});
+    getSettings().then((settings) => {
+      if (active) setFontScale(settings.fontScale || 1);
+    }).catch(() => {});
+    return () => {
+      active = false;
+    };
   }, []);
 
   const selectScenario = (s: Scenario | null) => {
@@ -205,15 +223,57 @@ export default function NewStoryScreen() {
 
   const testKey = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
+  const clearError = () => setSubmitError(null);
+
+  const setQuickSelection = (patch: Partial<QuickStartSelections>) => {
+    setQuickSelections((prev) => {
+      const next = { ...prev, ...patch };
+      if (patch.world === "random") {
+        const randomWorlds = ["fantasy", "horror", "post-apocalyptic", "modern", "detective", "cyberpunk"];
+        const randomGenre = randomWorlds[Math.floor(Math.random() * randomWorlds.length)] || "modern";
+        next.resolvedWorldGenre = randomGenre;
+      }
+      if (patch.world && patch.world !== "random") {
+        next.resolvedWorldGenre = undefined;
+      }
+      return next;
+    });
+    clearError();
+  };
+
+  const beginSubmit = () => {
+    if (submitLockRef.current || loading) return false;
+    submitLockRef.current = true;
+    setLoading(true);
+    clearError();
+    return true;
+  };
+
+  const releaseSubmit = () => {
+    submitLockRef.current = false;
+    setLoading(false);
+  };
+
+  const creationFailure = (error: unknown) => {
+    const { message } = friendlyError(error);
+    setSubmitError(message);
+    releaseSubmit();
+  };
+
+  const switchFlow = (nextFlow: "quick" | "advanced") => {
+    if (loading) return;
+    setCreationFlow(nextFlow);
+    clearError();
+  };
+
   const resolvedGenre = genre === "custom"
     ? (customGenre.trim() || customSetup.worldConcept?.trim() || "custom world")
     : genre;
   const customReady = genre !== "custom" || !!(customSetup.worldConcept?.trim() || customGenre.trim());
-  const canStart = (!!resolvedGenre || !!scenarioId) && customReady && !loading;
+  const canStartAdvanced = (!!resolvedGenre || !!scenarioId) && customReady && !loading;
 
-  const handleStart = async () => {
-    if (!canStart) return;
-    setLoading(true);
+  const handleAdvancedStart = async () => {
+    if (!canStartAdvanced || !beginSubmit()) return;
     try {
       const device_id = await getDeviceId();
       const settings = await getSettings();
@@ -229,16 +289,45 @@ export default function NewStoryScreen() {
         scenario_id: scenarioId || undefined,
         custom_world_setup: genre === "custom" ? customSetup : undefined,
       });
+      if (!res?.session_id) {
+        creationFailure(new Error("invalid-session"));
+        return;
+      }
       router.replace(`/play/${res.session_id}`);
     } catch (e: any) {
-      console.log("new story failed", e);
-      const { title, message } = friendlyError(e);
-      if (Platform.OS === "web") {
-        alert(`${title}\n\n${message}`);
-      } else {
-        Alert.alert(title, message);
+      creationFailure(e);
+    }
+  };
+
+  const handleQuickStart = async () => {
+    if (!beginSubmit()) return;
+
+    const settings = await getSettings().catch(() => ({ debugDefault: false, fontScale: 1, developerUnlocked: false }));
+    const payload = buildQuickStartRequest(quickSelections);
+    if (!payload) {
+      creationFailure(new Error("incomplete-quick-start"));
+      return;
+    }
+
+    try {
+      const device_id = await getDeviceId();
+      const res = await newStory({
+        device_id,
+        genre: payload.genre,
+        role: payload.role,
+        tone: payload.tone,
+        difficulty: payload.difficulty,
+        debug_mode: settings.debugDefault,
+        mode: payload.mode,
+        custom_world_setup: payload.custom_world_setup,
+      });
+      if (!res?.session_id) {
+        creationFailure(new Error("invalid-session"));
+        return;
       }
-      setLoading(false);
+      router.replace(`/play/${res.session_id}`);
+    } catch (error) {
+      creationFailure(error);
     }
   };
 
@@ -261,99 +350,160 @@ export default function NewStoryScreen() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          <Text style={styles.stepLabel}>00 · QUICK · START</Text>
-          <Text style={styles.stepHelp}>
-            Hand-tuned scenarios with named NPCs, seeded inventory, and a hidden threat already in place. Or scroll past to build your own.
+          <Text style={styles.pageLabel} testID="new-story-page-label">NEW CHRONICLE</Text>
+          <Text style={styles.pageTitle} testID="new-story-page-title">Choose how your story begins.</Text>
+          <Text style={styles.pageHelp} testID="new-story-page-help">
+            Quick Start leads with story choices. Advanced Builder keeps the full world setup exactly where it already lives.
           </Text>
-          <View style={styles.scenarioList}>
-            {scenarios.map((s) => {
-              const active = scenarioId === s.id;
-              return (
-                <TouchableOpacity
-                  key={s.id}
-                  style={[styles.scenarioCard, active && styles.scenarioCardActive]}
-                  onPress={() => selectScenario(active ? null : s)}
-                  activeOpacity={0.85}
-                  testID={`scenario-${s.id}`}
-                >
-                  <View style={styles.scenarioHeader}>
-                    <Text style={[styles.scenarioTitle, active && styles.scenarioTitleActive]}>
-                      {s.title}
-                    </Text>
-                    {active && (
-                      <Ionicons name="checkmark-circle" size={18} color={COLORS.primary} />
-                    )}
-                  </View>
-                  <Text style={styles.scenarioPitch}>{s.pitch}</Text>
-                  <View style={styles.scenarioMetaRow}>
-                    <Text style={styles.scenarioMeta}>{s.difficulty.toUpperCase()}</Text>
-                    <Text style={styles.scenarioMetaDim}>·</Text>
-                    <Text style={styles.scenarioMeta}>{s.mode.toUpperCase()} MODE</Text>
-                    <Text style={styles.scenarioMetaDim}>·</Text>
-                    <Text style={styles.scenarioMeta}>{s.key_npcs.length} NPCs</Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-            {scenarioId && (
-              <TouchableOpacity
-                style={styles.scenarioClear}
-                onPress={() => selectScenario(null)}
-                testID="scenario-clear"
-              >
-                <Text style={styles.scenarioClearText}>CLEAR SCENARIO · build manually</Text>
-              </TouchableOpacity>
-            )}
-          </View>
 
-          <Text style={[styles.stepLabel, { marginTop: 28 }]}>01 · SELECT · WORLD</Text>
-          <Text style={styles.stepHelp}>Each world unlocks its own systems, pressures, and textures.</Text>
-
-          <View style={styles.grid}>
-            {WORLD_THEMES.map((g) => {
-              const active = genre === g.key;
-              return (
-                <TouchableOpacity
-                  key={g.key}
-                  style={[styles.genreCard, active && styles.genreCardActive]}
-                  onPress={() => setGenre(g.key)}
-                  activeOpacity={0.8}
-                  testID={`genre-${g.key}`}
-                >
-                  {g.image ? (
-                    <Image source={{ uri: g.image }} style={styles.genreImage} />
-                  ) : (
-                    <View style={[styles.genreImage, styles.genreImageFallback]}>
-                      <Ionicons name="planet-outline" size={30} color={COLORS.textMuted} />
-                    </View>
-                  )}
-                  <View style={styles.genreOverlay} />
-                  {active && <View style={styles.genreActiveRing} />}
-                  <View style={styles.genreTextWrap}>
-                    <Text style={styles.genreTitle} numberOfLines={1}>{g.label || "Untitled Theme"}</Text>
-                    {g.tagline ? (
-                      <Text style={styles.genreTag} numberOfLines={2}>{g.tagline}</Text>
-                    ) : null}
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
+          <View style={styles.creationFlowRow} testID="creation-flow-switcher">
             <TouchableOpacity
-              style={[styles.genreCard, genre === "custom" && styles.genreCardActive, styles.customCard]}
-              onPress={() => setGenre("custom")}
-              activeOpacity={0.8}
-              testID="genre-custom"
+              style={[styles.creationFlowButton, creationFlow === "quick" && styles.creationFlowButtonActive]}
+              onPress={() => switchFlow("quick")}
+              disabled={loading}
+              accessibilityState={{ selected: creationFlow === "quick", disabled: loading }}
+              testID="creation-flow-quick"
             >
-              <View style={styles.customCardInner}>
-                <Ionicons name="add" size={28} color={COLORS.primary} />
-                <Text style={styles.genreTitle}>Custom</Text>
-                <Text style={styles.genreTag}>Write your own world.</Text>
-              </View>
+              <Text style={[styles.creationFlowText, creationFlow === "quick" && styles.creationFlowTextActive]}>Quick Start</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.creationFlowButton, creationFlow === "advanced" && styles.creationFlowButtonActive]}
+              onPress={() => switchFlow("advanced")}
+              disabled={loading}
+              accessibilityState={{ selected: creationFlow === "advanced", disabled: loading }}
+              testID="creation-flow-advanced"
+            >
+              <Text style={[styles.creationFlowText, creationFlow === "advanced" && styles.creationFlowTextActive]}>Advanced Builder</Text>
             </TouchableOpacity>
           </View>
 
-          {genre === "custom" && (
-            <View style={styles.customSetupBox} testID="custom-world-setup-panel">
+          {submitError ? (
+            <View style={styles.errorBanner} testID="new-story-error-banner">
+              <Ionicons name="alert-circle-outline" size={18} color={COLORS.primary} />
+              <Text style={styles.errorBannerText}>{submitError}</Text>
+            </View>
+          ) : null}
+
+          {creationFlow === "quick" ? (
+            <QuickStart
+              selections={quickSelections}
+              loading={loading}
+              fontScale={fontScale}
+              onChange={setQuickSelection}
+              onStart={handleQuickStart}
+            />
+          ) : (
+            <View testID="advanced-builder-panel">
+              <Text style={styles.stepLabel}>ADVANCED · WORLD · BUILDER</Text>
+              <Text style={styles.stepHelp}>
+                The existing builder is preserved here, including curated scenarios and manual world setup.
+              </Text>
+
+              <Text style={styles.stepLabel}>00 · QUICK · START</Text>
+              <Text style={styles.stepHelp}>
+                Hand-tuned scenarios with named NPCs, seeded inventory, and a hidden threat already in place. Or scroll past to build your own.
+              </Text>
+              <View style={styles.scenarioList}>
+                {scenarios.map((s) => {
+                  const active = scenarioId === s.id;
+                  return (
+                    <TouchableOpacity
+                      key={s.id}
+                      style={[styles.scenarioCard, active && styles.scenarioCardActive]}
+                      onPress={() => {
+                        clearError();
+                        selectScenario(active ? null : s);
+                      }}
+                      activeOpacity={0.85}
+                      testID={`scenario-${s.id}`}
+                    >
+                      <View style={styles.scenarioHeader}>
+                        <Text style={[styles.scenarioTitle, active && styles.scenarioTitleActive]}>
+                          {s.title}
+                        </Text>
+                        {active && (
+                          <Ionicons name="checkmark-circle" size={18} color={COLORS.primary} />
+                        )}
+                      </View>
+                      <Text style={styles.scenarioPitch}>{s.pitch}</Text>
+                      <View style={styles.scenarioMetaRow}>
+                        <Text style={styles.scenarioMeta}>{s.difficulty.toUpperCase()}</Text>
+                        <Text style={styles.scenarioMetaDim}>·</Text>
+                        <Text style={styles.scenarioMeta}>{s.mode.toUpperCase()} MODE</Text>
+                        <Text style={styles.scenarioMetaDim}>·</Text>
+                        <Text style={styles.scenarioMeta}>{s.key_npcs.length} NPCs</Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+                {scenarioId && (
+                  <TouchableOpacity
+                    style={styles.scenarioClear}
+                    onPress={() => {
+                      clearError();
+                      selectScenario(null);
+                    }}
+                    testID="scenario-clear"
+                  >
+                    <Text style={styles.scenarioClearText}>CLEAR SCENARIO · build manually</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              <Text style={[styles.stepLabel, { marginTop: 28 }]}>01 · SELECT · WORLD</Text>
+              <Text style={styles.stepHelp}>Each world unlocks its own systems, pressures, and textures.</Text>
+
+              <View style={styles.grid}>
+                {WORLD_THEMES.map((g) => {
+                  const active = genre === g.key;
+                  return (
+                    <TouchableOpacity
+                      key={g.key}
+                      style={[styles.genreCard, active && styles.genreCardActive]}
+                      onPress={() => {
+                        clearError();
+                        setGenre(g.key);
+                      }}
+                      activeOpacity={0.8}
+                      testID={`genre-${g.key}`}
+                    >
+                      {g.image ? (
+                        <Image source={{ uri: g.image }} style={styles.genreImage} />
+                      ) : (
+                        <View style={[styles.genreImage, styles.genreImageFallback]}>
+                          <Ionicons name="planet-outline" size={30} color={COLORS.textMuted} />
+                        </View>
+                      )}
+                      <View style={styles.genreOverlay} />
+                      {active && <View style={styles.genreActiveRing} />}
+                      <View style={styles.genreTextWrap}>
+                        <Text style={styles.genreTitle} numberOfLines={1}>{g.label || "Untitled Theme"}</Text>
+                        {g.tagline ? (
+                          <Text style={styles.genreTag} numberOfLines={2}>{g.tagline}</Text>
+                        ) : null}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+                <TouchableOpacity
+                  style={[styles.genreCard, genre === "custom" && styles.genreCardActive, styles.customCard]}
+                  onPress={() => {
+                    clearError();
+                    setGenre("custom");
+                  }}
+                  activeOpacity={0.8}
+                  testID="genre-custom"
+                >
+                  <View style={styles.customCardInner}>
+                    <Ionicons name="add" size={28} color={COLORS.primary} />
+                    <Text style={styles.genreTitle}>Custom</Text>
+                    <Text style={styles.genreTag}>Write your own world.</Text>
+                  </View>
+                </TouchableOpacity>
+              </View>
+
+              {genre === "custom" && (
+                <View style={styles.customSetupBox} testID="custom-world-setup-panel">
               <View style={styles.setupIntroRow}>
                 <Ionicons name="sparkles-outline" size={18} color={COLORS.primary} />
                 <View style={{ flex: 1 }}>
@@ -471,46 +621,55 @@ export default function NewStoryScreen() {
                   />
                 ))}
               </View>
-            </View>
-          )}
+                </View>
+              )}
 
-          <Text style={[styles.stepLabel, { marginTop: 28 }]}>02 · CHARACTER</Text>
-          <TextInput
-            value={role}
-            onChangeText={setRole}
-            placeholder="Role or archetype (leave blank to let the engine decide)"
-            placeholderTextColor={COLORS.textMuted}
-            style={styles.input}
-            testID="role-input"
-          />
+              <Text style={[styles.stepLabel, { marginTop: 28 }]}>02 · CHARACTER</Text>
+              <TextInput
+                value={role}
+                onChangeText={(value) => {
+                  clearError();
+                  setRole(value);
+                }}
+                placeholder="Role or archetype (leave blank to let the engine decide)"
+                placeholderTextColor={COLORS.textMuted}
+                style={styles.input}
+                testID="role-input"
+              />
 
-          <Text style={[styles.stepLabel, { marginTop: 28 }]}>03 · TONE</Text>
-          <View style={styles.chipRow}>
-            {TONES.map((t) => (
-              <TouchableOpacity
-                key={t}
-                style={[styles.chip, tone === t && styles.chipActive]}
-                onPress={() => setTone(t)}
-                testID={`tone-${t}`}
-              >
-                <Text style={[styles.chipText, tone === t && styles.chipTextActive]}>{t}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+              <Text style={[styles.stepLabel, { marginTop: 28 }]}>03 · TONE</Text>
+              <View style={styles.chipRow}>
+                {TONES.map((t) => (
+                  <TouchableOpacity
+                    key={t}
+                    style={[styles.chip, tone === t && styles.chipActive]}
+                    onPress={() => {
+                      clearError();
+                      setTone(t);
+                    }}
+                    testID={`tone-${t}`}
+                  >
+                    <Text style={[styles.chipText, tone === t && styles.chipTextActive]}>{t}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
 
-          <Text style={[styles.stepLabel, { marginTop: 28 }]}>04 · DIFFICULTY</Text>
-          <View style={styles.chipRow}>
-            {DIFFICULTIES.map((d) => (
-              <TouchableOpacity
-                key={d}
-                style={[styles.chip, difficulty === d && styles.chipActive]}
-                onPress={() => setDifficulty(d)}
-                testID={`difficulty-${d}`}
-              >
-                <Text style={[styles.chipText, difficulty === d && styles.chipTextActive]}>{d}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+              <Text style={[styles.stepLabel, { marginTop: 28 }]}>04 · DIFFICULTY</Text>
+              <View style={styles.chipRow}>
+                {DIFFICULTIES.map((d) => (
+                  <TouchableOpacity
+                    key={d}
+                    style={[styles.chip, difficulty === d && styles.chipActive]}
+                    onPress={() => {
+                      clearError();
+                      setDifficulty(d);
+                    }}
+                    testID={`difficulty-${d}`}
+                  >
+                    <Text style={[styles.chipText, difficulty === d && styles.chipTextActive]}>{d}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
           <Text style={styles.diffHelp}>
             {difficulty === "soft" && "The world meets you halfway. Wounds heal. People help."}
             {difficulty === "standard" && "Fair, but consequences bite. The world does not wait."}
@@ -518,42 +677,51 @@ export default function NewStoryScreen() {
             {difficulty === "brutal" && "Fragile survival. Mistakes compound. Death is causal and quiet."}
           </Text>
 
-          <Text style={[styles.stepLabel, { marginTop: 28 }]}>05 · ENGINE · MODE</Text>
-          <View style={styles.chipRow}>
-            {(["basic", "advanced"] as const).map((m) => (
-              <TouchableOpacity
-                key={m}
-                style={[styles.chip, mode === m && styles.chipActive]}
-                onPress={() => setMode(m)}
-                testID={`mode-${m}`}
-              >
-                <Text style={[styles.chipText, mode === m && styles.chipTextActive]}>{m}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+              <Text style={[styles.stepLabel, { marginTop: 28 }]}>05 · ENGINE · MODE</Text>
+              <View style={styles.chipRow}>
+                {(["basic", "advanced"] as const).map((m) => (
+                  <TouchableOpacity
+                    key={m}
+                    style={[styles.chip, mode === m && styles.chipActive]}
+                    onPress={() => {
+                      clearError();
+                      setMode(m);
+                    }}
+                    testID={`mode-${m}`}
+                  >
+                    <Text style={[styles.chipText, mode === m && styles.chipTextActive]}>{m}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
           <Text style={styles.diffHelp}>
             {mode === "basic"
               ? "Lighter scenes, fewer choices. Faster, cheaper play."
               : "Deeper memory, richer characters, longer arcs. Consequences carry further."}
           </Text>
 
-          <Text style={[styles.stepLabel, { marginTop: 28 }]}>06 · OPENING · HOOK  (optional)</Text>
-          <TextInput
-            value={premise}
-            onChangeText={setPremise}
-            placeholder="A custom premise, opening situation, or constraint the engine should honour."
-            placeholderTextColor={COLORS.textMuted}
-            style={[styles.input, styles.inputMulti]}
-            multiline
-            testID="premise-input"
-          />
+              <Text style={[styles.stepLabel, { marginTop: 28 }]}>06 · OPENING · HOOK  (optional)</Text>
+              <TextInput
+                value={premise}
+                onChangeText={(value) => {
+                  clearError();
+                  setPremise(value);
+                }}
+                placeholder="A custom premise, opening situation, or constraint the engine should honour."
+                placeholderTextColor={COLORS.textMuted}
+                style={[styles.input, styles.inputMulti]}
+                multiline
+                testID="premise-input"
+              />
 
-          <TouchableOpacity
-            style={styles.debugRow}
-            onPress={() => setDebugMode((v) => !v)}
-            testID="debug-toggle"
-            activeOpacity={0.7}
-          >
+              <TouchableOpacity
+                style={styles.debugRow}
+                onPress={() => {
+                  clearError();
+                  setDebugMode((v) => !v);
+                }}
+                testID="debug-toggle"
+                activeOpacity={0.7}
+              >
             <View style={[styles.checkbox, debugMode && styles.checkboxOn]}>
               {debugMode && <Ionicons name="checkmark" size={14} color={COLORS.background} />}
             </View>
@@ -561,21 +729,23 @@ export default function NewStoryScreen() {
               <Text style={styles.debugTitle}>DEBUG · MODE</Text>
               <Text style={styles.debugHelp}>Surface rolls, modifiers, and active systems each turn.</Text>
             </View>
-          </TouchableOpacity>
+              </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.startBtn, !canStart && styles.startBtnDisabled]}
-            onPress={handleStart}
-            disabled={!canStart}
-            testID="begin-story-btn"
-            activeOpacity={0.8}
-          >
-            {loading ? (
-              <ActivityIndicator color={COLORS.primary} />
-            ) : (
-              <Text style={styles.startBtnText}>[ ROLL · FOR · INITIATIVE ]</Text>
-            )}
-          </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.startBtn, !canStartAdvanced && styles.startBtnDisabled]}
+                onPress={handleAdvancedStart}
+                disabled={!canStartAdvanced}
+                testID="begin-story-btn"
+                activeOpacity={0.8}
+              >
+                {loading ? (
+                  <ActivityIndicator color={COLORS.primary} />
+                ) : (
+                  <Text style={styles.startBtnText}>[ ROLL · FOR · INITIATIVE ]</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          )}
 
           <View style={{ height: 40 }} />
         </ScrollView>
@@ -602,6 +772,73 @@ const styles = StyleSheet.create({
     letterSpacing: 3,
   },
   container: { padding: 20 },
+  pageLabel: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.primary,
+    fontSize: 11,
+    letterSpacing: 3,
+    marginBottom: 8,
+  },
+  pageTitle: {
+    fontFamily: FONTS.headingBold,
+    color: COLORS.textPrimary,
+    fontSize: 30,
+    lineHeight: 34,
+  },
+  pageHelp: {
+    marginTop: 10,
+    marginBottom: 20,
+    fontFamily: FONTS.bodyItalic,
+    color: COLORS.textSecondary,
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  creationFlowRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 18,
+  },
+  creationFlowButton: {
+    flex: 1,
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.surfaceDeep,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  creationFlowButtonActive: {
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.primarySoft,
+  },
+  creationFlowText: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    letterSpacing: 1.5,
+  },
+  creationFlowTextActive: {
+    color: COLORS.primary,
+  },
+  errorBanner: {
+    marginBottom: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.primarySoft,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  errorBannerText: {
+    flex: 1,
+    fontFamily: FONTS.bodyMed,
+    color: COLORS.textPrimary,
+    fontSize: 15,
+    lineHeight: 20,
+  },
   stepLabel: {
     fontFamily: FONTS.monoBold,
     color: COLORS.textSecondary,
