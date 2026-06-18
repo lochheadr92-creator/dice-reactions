@@ -770,6 +770,40 @@ def _short_text(value: Any, limit: int = 900) -> str:
     return text[:limit]
 
 
+# Keys that must NEVER reach LLM-visible context until an explicit reveal
+# trigger exists (Phase 1 Blocker A — secrets). They live in engine-side state
+# only. `_PROMPT_HIDDEN_SETUP_KEYS` are stripped from the turn-1 custom-setup
+# prompt block; `_PROMPT_HIDDEN_ROLLING_KEYS` are stripped from <prior_state>.
+_PROMPT_HIDDEN_SETUP_KEYS = frozenset({"secret"})
+_PROMPT_HIDDEN_ROLLING_KEYS = frozenset({"secret_registry"})
+
+
+def _humanize_hook(value: Any) -> str:
+    """Turn a catalog slug (e.g. 'losing-control') into prose ('losing control')."""
+    return str(value or "").replace("-", " ").strip()
+
+
+def _effective_relationships_level(setup: Optional[Dict[str, Any]]) -> str:
+    """Option A: if 'whoMatters' is chosen (and not 'nobody'), raise the
+    relationship content floor to at least 'low' so the bond is actually
+    simulated. Pure — never mutates the input."""
+    content = setup.get("contentSettings") if isinstance(setup, dict) else None
+    current = str((content or {}).get("relationships") or "none").strip().lower()
+    who = str((setup or {}).get("whoMatters") or "").strip().lower()
+    if who and who != "nobody" and current in ("", "none"):
+        return "low"
+    return current or "none"
+
+
+def _prompt_safe_rolling(rolling: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Shallow copy of rolling_state with engine-only hidden keys removed, for
+    safe inclusion in the LLM <prior_state> block. Does not mutate input or
+    persisted state."""
+    if not isinstance(rolling, dict):
+        return {}
+    return {k: v for k, v in rolling.items() if k not in _PROMPT_HIDDEN_ROLLING_KEYS}
+
+
 def _clean_setup(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(k)[:60]: _clean_setup(v) for k, v in value.items()}
@@ -783,7 +817,16 @@ def _clean_setup(value: Any) -> Any:
 def _build_custom_world_setup_block(setup: Optional[Dict[str, Any]]) -> str:
     if not setup:
         return ""
-    clean = _clean_setup(setup)
+    # Never expose engine-only hidden keys (e.g. the player's Secret) to the model.
+    visible = {k: v for k, v in setup.items() if k not in _PROMPT_HIDDEN_SETUP_KEYS}
+    # Option A: surface the raised relationship floor so the model treats the
+    # "who matters most" bond as an active social system, not none.
+    rel_level = _effective_relationships_level(setup)
+    if rel_level != "none":
+        content = dict(visible.get("contentSettings") or {})
+        content["relationships"] = rel_level
+        visible["contentSettings"] = content
+    clean = _clean_setup(visible)
     return (
         "\nCUSTOM WORLD SETUP — CANONICAL SIMULATION SEED:\n"
         "Treat every answer below as persistent world truth. Convert it into rolling_state fields: "
@@ -808,7 +851,6 @@ def _seed_custom_setup_into_rolling(
     pressures = setup.get("pressures") if isinstance(setup.get("pressures"), list) else []
     focus = setup.get("storyFocus") if isinstance(setup.get("storyFocus"), list) else []
     seeds = setup.get("seedAnswers") if isinstance(setup.get("seedAnswers"), list) else []
-    content = setup.get("contentSettings") if isinstance(setup.get("contentSettings"), dict) else {}
     hooks = list(out.get("simulation_hooks") or [])
     for label, value in (
         ("world danger", setup.get("danger")),
@@ -820,7 +862,23 @@ def _seed_custom_setup_into_rolling(
     for idx, answer in enumerate(seeds[:3], start=1):
         if answer:
             hooks.append(f"seed question {idx}: {_short_text(answer, 220)}")
-    out["simulation_hooks"] = list(dict.fromkeys(hooks))[:12]
+    # Onboarding story hooks (Quick Start + Advanced hook pool). These ARE
+    # intentionally prompt-visible: they shape NPC creation, pressure, and arcs.
+    # NOTE: `secret` is deliberately excluded here — it is engine-only (below).
+    for label, value in (
+        ("core desire", setup.get("want")),
+        ("core fear", setup.get("fear")),
+        ("buried past (the ghost)", setup.get("ghost")),
+        ("signature talent", setup.get("talent")),
+        ("fatal flaw", setup.get("flaw")),
+        ("moral line never to cross", setup.get("line")),
+    ):
+        if value:
+            hooks.append(f"{label}: {_humanize_hook(value)}")
+    who = _humanize_hook(setup.get("whoMatters"))
+    if who and who != "nobody":
+        hooks.append(f"person who matters most: {who}")
+    out["simulation_hooks"] = list(dict.fromkeys(hooks))[:16]
 
     instability = list(out.get("world_instability") or [])
     for p in pressures:
@@ -832,7 +890,7 @@ def _seed_custom_setup_into_rolling(
     if focus and not out.get("story_focus"):
         out["story_focus"] = focus[:8]
 
-    rel = str(content.get("relationships") or "none")
+    rel = _effective_relationships_level(setup)
     if rel and rel != "none":
         threads = list(out.get("relationship_threads") or [])
         threads.append({
@@ -841,6 +899,13 @@ def _seed_custom_setup_into_rolling(
             "intensity": "medium",
             "leverage": "affects NPC memory, faction reactions, trust, stress, delayed consequences, and material choices",
         })
+        if who and who != "nobody":
+            threads.append({
+                "name": f"the {who} who matters most",
+                "dynamic": "attachment",
+                "intensity": "medium",
+                "leverage": "their safety and regard are primary emotional stakes; can be threatened, leveraged, or lost",
+            })
         out["relationship_threads"] = threads[:8]
 
     carried = setup.get("carried")
@@ -870,6 +935,21 @@ def _seed_custom_setup_into_rolling(
                     "turn_changed": 1,
                 })
         out["object_locations"] = existing_locations[:12]
+
+    # Secret (Phase 1 Blocker A): engine-only hidden state. NEVER seeded into
+    # simulation_hooks or any prompt-visible field. Stored unrevealed until a
+    # future explicit reveal trigger promotes it. Already excluded from the
+    # LLM <prior_state> block (_prompt_safe_rolling) and from player API
+    # (player_api blocks the nested key 'secret_registry').
+    secret = setup.get("secret")
+    if secret:
+        registry = list(out.get("secret_registry") or [])
+        registry.append({
+            "secret": _short_text(secret, 400),
+            "revealed": False,
+            "turn_added": 1,
+        })
+        out["secret_registry"] = registry[:6]
     return out
 
 
@@ -1752,7 +1832,7 @@ async def _build_messages(
         rel_block = relationships.build_relationship_block(rolling)
         prior_state_block = (
             "<prior_state>\n"
-            + _json.dumps(rolling, indent=2, ensure_ascii=False)
+            + _json.dumps(_prompt_safe_rolling(rolling), indent=2, ensure_ascii=False)
             + "\n</prior_state>\n\n"
         )
         prefix = ""
