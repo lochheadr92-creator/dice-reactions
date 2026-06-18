@@ -138,7 +138,7 @@ backend:
       - working: true
         agent: "testing"
         comment: |
-          Verified via /app/backend_test.py + /app/_retry_story.py (public URL https://repo-status-8.preview.emergentagent.com/api).
+          Verified via /app/backend_test.py + /app/_retry_story.py (public URL https://narrative-hooks.preview.emergentagent.com/api).
           - chat_completion exercised end-to-end through /api/story/new and /api/story/action against
             openai/gpt-oss-120b:free. Both calls returned 200 OK with valid <narrative>/<choices>/
             <state>/<ledger>/<debug> blocks (paragraphs=4 and 3, choices=6/6, debug present).
@@ -315,7 +315,7 @@ frontend:
         agent: "testing"
         comment: |
           Regression test PASSED (5/6 tests, 1 blocked as expected). Tested against
-          https://repo-status-8.preview.emergentagent.com.
+          https://narrative-hooks.preview.emergentagent.com.
           
           PASS: Settings screen loads with testID "settings-screen", "· READING ·" section,
           and all four text-size chips (S/M/L/XL) with correct testIDs (font-scale-0.9,
@@ -387,7 +387,7 @@ agent_communication:
   - agent: "testing"
     message: |
       Backend OpenRouter migration validated end-to-end against the public ingress
-      (https://repo-status-8.preview.emergentagent.com/api). Tests live in
+      (https://narrative-hooks.preview.emergentagent.com/api). Tests live in
       /app/backend_test.py and /app/_retry_story.py. Summary:
 
       PASS — GET /api/health (provider=openrouter, llm_configured=true, all fields present)
@@ -544,7 +544,7 @@ agent_communication:
   - agent: "testing"
     message: |
       REGRESSION TEST COMPLETE: Settings screen & text-size wiring after security patch (ADR-012).
-      Tested against https://repo-status-8.preview.emergentagent.com (Expo Router web).
+      Tested against https://narrative-hooks.preview.emergentagent.com (Expo Router web).
       
       PASS (5/6 tests):
       1. ✅ SETTINGS LOADS: Settings screen (testID "settings-screen") renders without errors.
