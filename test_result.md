@@ -274,6 +274,31 @@ frontend:
             including Quick Start completion, review edits, loading state, story creation, play-screen
             navigation, no secret/admin/mechanic leakage, preserved Advanced Builder access, and Settings
             font scaling still functional.
+  - task: "Chronicle Creation Phase 3 — Guided Start and three-mode New Chronicle structure"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/new-story.tsx, /app/frontend/src/newstory/GuidedStart.tsx, /app/frontend/__tests__/new-story.test.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Implemented Guided Start as a distinct curated flow while preserving Quick Start as the
+          default and keeping Advanced Builder accessible. Added a three-mode selector, separate
+          per-mode state, deterministic Guided Start review, existing-endpoint payload mapping, and
+          shared duplicate-submit protection.
+      - working: true
+        agent: "main"
+        comment: |
+          Verification completed in this pass:
+          - backend/tests/test_onboarding_hooks.py: 16 passed
+          - frontend/__tests__/new-story.test.tsx: 17 passed
+          - npx tsc --noEmit: passed
+          - Manual preview regression passed on https://narrative-hooks.preview.emergentagent.com/new-story
+            covering Quick Start, Guided Start, Advanced Builder accessibility, play-screen navigation,
+            no secret/admin/engine leakage, and Settings XL font scale.
   - task: "Admin AI controls in Settings screen"
     implemented: true
     working: "NA"
@@ -388,7 +413,7 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Chronicle Creation Phase 2 — Quick Start default onboarding"
+    - "Chronicle Creation Phase 3 — Guided Start and three-mode New Chronicle structure"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -402,6 +427,16 @@ agent_communication:
         /app/frontend/__tests__/new-story.test.tsx) because test files inside `app/` break preview bundling.
       - Existing Advanced Builder remains intentionally preserved in new-story.tsx and is not yet extracted.
       - Guided Start, secret reveal mechanics, and art integration remain out of scope and unimplemented.
+
+  - agent: "main"
+    message: |
+      Phase 3 is complete and verified. Important implementation notes for future agents:
+      - New Chronicle now has three modes: Quick Start (default), Guided Start, Advanced Builder.
+      - Guided Start uses the same POST /api/story/new contract; it does NOT add a backend endpoint.
+      - Guided Start world-detail choices are mapped into custom_premise; want/fear/whoMatters map into custom_world_setup.
+      - Backend engine mode remains advanced; frontend creation mode names remain separate from backend mode.
+      - Public Advanced Builder hides debug/engine-only controls unless local developer unlock is active.
+      - Secret reveal remains unimplemented; no secret field is exposed in Guided Start.
 
   - agent: "main"
     message: |

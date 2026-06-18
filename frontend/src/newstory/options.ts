@@ -193,6 +193,40 @@ export const QUICK_TONES = [
 export type QuickToneValue = (typeof QUICK_TONES)[number]["value"];
 
 // --------------------------------------------------------------------------- //
+// GUIDED / ADVANCED · Difficulty
+// Existing backend contract still expects top-level `difficulty`.
+// --------------------------------------------------------------------------- //
+
+export const STORY_DIFFICULTIES = [
+  {
+    value: "soft",
+    label: "Soft",
+    explanation: "The world still bites, but it gives you room to recover.",
+    consequence: "Expect: more breathing room, more help, and clearer warning signs.",
+  },
+  {
+    value: "standard",
+    label: "Standard",
+    explanation: "Consequences land fairly and the world keeps moving.",
+    consequence: "Expect: hard choices, but no easy cruelty from the world itself.",
+  },
+  {
+    value: "hard",
+    label: "Hard",
+    explanation: "Pressure escalates faster and safety is harder to hold onto.",
+    consequence: "Expect: colder people, scarcer resources, and sharper setbacks.",
+  },
+  {
+    value: "brutal",
+    label: "Brutal",
+    explanation: "Survival is fragile and mistakes can leave permanent marks.",
+    consequence: "Expect: little mercy, compounding damage, and a harsher world.",
+  },
+] as const;
+
+export type StoryDifficultyValue = (typeof STORY_DIFFICULTIES)[number]["value"];
+
+// --------------------------------------------------------------------------- //
 // QUICK START · Step 4 — Story Hooks (3 required questions)
 // These become persistent simulation inputs (Phase 1 seeding).
 // --------------------------------------------------------------------------- //
@@ -292,6 +326,13 @@ export type GuidedQuestion = {
   question: string;
   options: OptionCopy[];
 };
+
+export type GuidedWorldValue = Exclude<QuickWorldValue, "random">;
+
+export const GUIDED_WORLDS = QUICK_WORLDS.filter(
+  (world): world is (typeof QUICK_WORLDS)[number] & { value: GuidedWorldValue } =>
+    world.value !== "random"
+);
 
 export const GUIDED_QUESTIONS: Partial<Record<QuickWorldValue, GuidedQuestion>> = {
   cyberpunk: {

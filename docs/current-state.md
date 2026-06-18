@@ -212,11 +212,10 @@ Derived from confirmed gaps (not speculative features):
 
 | Priority | Work | Evidence |
 |----------|------|----------|
-| P1 | Chronicle Creation Phase 3 — Guided Start UI is still unimplemented | Code + manual preview after Phase 2 |
 | P1 | Chronicle Creation Phase 4 — Advanced Builder extraction/refactor remains pending | `frontend/app/new-story.tsx` still hosts preserved legacy builder |
 | P1 | Secret reveal trigger remains unimplemented; `secret_registry` stays engine-only | Code + `test_onboarding_hooks.py` |
-| P2 | Live-server long-run stress (`qa_live_20turn_hostile.py`) and wider story-engine bundle | Not run in this Phase 2 pass |
-| P2 | CI job for frontend Quick Start deterministic tests | `__tests__/new-story.test.tsx` currently local-only |
+| P2 | Live-server long-run stress (`qa_live_20turn_hostile.py`) and wider story-engine bundle | Not run in this Phase 3 pass |
+| P2 | CI job for frontend New Chronicle deterministic tests | `__tests__/new-story.test.tsx` currently local-only |
 
 ---
 
@@ -230,6 +229,20 @@ Derived from confirmed gaps (not speculative features):
 - **Frontend tests added:** `frontend/__tests__/new-story.test.tsx` covers default mode, step flow, review summary, payload mapping, duplicate-submit protection, failure recovery, Advanced Builder accessibility, and font scaling. **Evidence:** Jest 10/10 passed.
 - **Manual regression passed:** Preview flow completed from `/new-story` to `/play/[id]`; no secret/admin/mechanic leakage observed; Settings font-scale remained functional. **Evidence:** Playwright screenshots + console run 2026-06-18.
 - **Known limitation:** Guided Start, Advanced extraction, art integration, and secret reveal mechanics are intentionally still out of scope for this pass.
+
+---
+
+## Phase 3 update — Guided Start + three-mode structure (2026-06-18)
+
+- **Implemented:** New Chronicle now exposes three player-facing modes: `Quick Start`, `Guided Start`, and `Advanced Builder`. Quick Start remains the default. **Evidence:** Code + browser preview.
+- **Guided Start:** Added a curated multi-step flow in `frontend/src/newstory/GuidedStart.tsx` covering world, world turning point, character, tone, want, fear, who matters most, and intensity. It completes without typing and ends with a deterministic review. **Evidence:** Code + Jest + browser preview.
+- **Endpoint retained:** Guided Start still submits through the existing `POST /api/story/new` contract only. It maps world/character/tone/difficulty to top-level fields, uses `custom_premise` for the world turning point, and sends `custom_world_setup.{want,fear,whoMatters}`. Backend engine `mode` remains `advanced`. **Evidence:** Code + Jest.
+- **State isolation:** Quick Start, Guided Start, and Advanced Builder now maintain separate frontend state so switching modes does not silently discard or corrupt selections. **Evidence:** Code + Jest.
+- **Submission protection:** Guided Start reuses the screen-level submission lock and recoverable error handling already introduced in Phase 2. **Evidence:** Code + Jest + browser preview.
+- **Security / secrecy:** Guided Start does not request or render any secret field and does not expose admin/debug/engine terminology to normal players. **Evidence:** Code + backend tests + browser preview.
+- **Tests expanded:** `frontend/__tests__/new-story.test.tsx` now covers all three modes and Guided Start regressions. **Evidence:** Jest 17/17 passed.
+- **Manual regression passed:** Preview verified Quick Start, Guided Start, Advanced Builder access, play-screen navigation, and Settings XL font scale. No blank-route regression recurred. **Evidence:** Playwright screenshots + console run 2026-06-18.
+- **Known limitation:** Advanced Builder is still embedded in `frontend/app/new-story.tsx`; no Phase 4 extraction has been attempted here.
 
 ---
 
