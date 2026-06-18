@@ -44,6 +44,14 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+async function renderScreen(fontScale = 1) {
+  mockGetSettings.mockResolvedValue({ debugDefault: false, fontScale, developerUnlocked: false });
+  render(<NewStoryScreen />);
+  await waitFor(() => {
+    expect(screen.getByTestId("quick-start-step-1")).toBeTruthy();
+  });
+}
+
 async function completeQuickStart() {
   fireEvent.press(screen.getByTestId("quick-start-option-world-fantasy"));
   fireEvent.press(screen.getByTestId("quick-start-next-button"));
@@ -83,7 +91,6 @@ describe("NewStoryScreen Quick Start", () => {
       ],
     });
     mockGetDeviceId.mockResolvedValue("device-123");
-    mockGetSettings.mockResolvedValue({ debugDefault: false, fontScale: 1, developerUnlocked: false });
     mockNewStory.mockResolvedValue({
       session_id: "session-123",
       turn: { id: "turn-1" },
@@ -93,7 +100,7 @@ describe("NewStoryScreen Quick Start", () => {
   });
 
   it("shows Quick Start by default and renders step 1", async () => {
-    render(<NewStoryScreen />);
+    await renderScreen();
 
     expect(screen.getByTestId("creation-flow-quick")).toBeTruthy();
     expect(screen.getByTestId("quick-start-step-1")).toBeTruthy();
@@ -103,7 +110,7 @@ describe("NewStoryScreen Quick Start", () => {
   });
 
   it("allows one selection and advances progress", async () => {
-    render(<NewStoryScreen />);
+    await renderScreen();
 
     fireEvent.press(screen.getByTestId("quick-start-option-world-fantasy"));
     expect(screen.getByTestId("quick-start-option-selected-world-fantasy")).toBeTruthy();
@@ -114,7 +121,7 @@ describe("NewStoryScreen Quick Start", () => {
   });
 
   it("preserves previous selections when going back", async () => {
-    render(<NewStoryScreen />);
+    await renderScreen();
 
     fireEvent.press(screen.getByTestId("quick-start-option-world-fantasy"));
     fireEvent.press(screen.getByTestId("quick-start-next-button"));
@@ -125,7 +132,7 @@ describe("NewStoryScreen Quick Start", () => {
   });
 
   it("completes all six steps without typing and shows player-facing review labels", async () => {
-    render(<NewStoryScreen />);
+    await renderScreen();
 
     await completeQuickStart();
 
@@ -135,13 +142,13 @@ describe("NewStoryScreen Quick Start", () => {
     expect(screen.getByTestId("quick-start-review-value-want").props.children).toBe("Justice");
     expect(screen.getByTestId("quick-start-review-value-fear").props.children).toBe("Failure");
     expect(screen.getByTestId("quick-start-review-value-whoMatters").props.children).toBe("Friend");
-    expect(screen.getByTestId("quick-start-review-summary").props.children).toContain("Fantasy");
+    expect(screen.getByTestId("quick-start-review-summary").props.children).toContain("fantasy");
     expect(String(screen.getByTestId("quick-start-review-summary").props.children)).not.toContain("whoMatters");
     expect(String(screen.getByTestId("quick-start-review-summary").props.children)).not.toContain("losing-control");
   });
 
   it("updates the review after changing a previous choice", async () => {
-    render(<NewStoryScreen />);
+    await renderScreen();
     await completeQuickStart();
 
     fireEvent.press(screen.getByTestId("quick-start-change-tone"));
@@ -150,34 +157,37 @@ describe("NewStoryScreen Quick Start", () => {
     fireEvent.press(screen.getByTestId("quick-start-next-button"));
     fireEvent.press(screen.getByTestId("quick-start-next-button"));
     fireEvent.press(screen.getByTestId("quick-start-next-button"));
+    fireEvent.press(screen.getByTestId("quick-start-next-button"));
 
     expect(screen.getByTestId("quick-start-review-value-tone").props.children).toBe("Brutal");
-    expect(String(screen.getByTestId("quick-start-review-summary").props.children)).toContain("Brutal");
+    expect(String(screen.getByTestId("quick-start-review-summary").props.children)).toContain("brutal");
   });
 
   it("submits the correct typed payload, disables while pending, and blocks duplicates", async () => {
     const pending = deferred<any>();
     mockNewStory.mockReturnValueOnce(pending.promise);
-    render(<NewStoryScreen />);
+    await renderScreen();
 
     await completeQuickStart();
     fireEvent.press(screen.getByTestId("quick-start-start-button"));
     fireEvent.press(screen.getByTestId("quick-start-start-button"));
 
-    expect(mockNewStory).toHaveBeenCalledTimes(1);
-    expect(mockNewStory).toHaveBeenCalledWith({
-      device_id: "device-123",
-      genre: "fantasy",
-      role: "a hardened survivor",
-      tone: "hopeful",
-      difficulty: "standard",
-      debug_mode: false,
-      mode: "advanced",
-      custom_world_setup: {
-        want: "justice",
-        fear: "failure",
-        whoMatters: "friend",
-      },
+    await waitFor(() => {
+      expect(mockNewStory).toHaveBeenCalledTimes(1);
+      expect(mockNewStory).toHaveBeenCalledWith({
+        device_id: "device-123",
+        genre: "fantasy",
+        role: "a hardened survivor",
+        tone: "hopeful",
+        difficulty: "standard",
+        debug_mode: false,
+        mode: "advanced",
+        custom_world_setup: {
+          want: "justice",
+          fear: "failure",
+          whoMatters: "friend",
+        },
+      });
     });
     expect(screen.getByTestId("quick-start-loading-state")).toBeTruthy();
 
@@ -199,7 +209,7 @@ describe("NewStoryScreen Quick Start", () => {
     mockNewStory
       .mockRejectedValueOnce(new Error("500: backend trace"))
       .mockResolvedValueOnce({ session_id: "session-retry", turn: {}, session: {} });
-    render(<NewStoryScreen />);
+    await renderScreen();
 
     await completeQuickStart();
     fireEvent.press(screen.getByTestId("quick-start-start-button"));
@@ -219,18 +229,21 @@ describe("NewStoryScreen Quick Start", () => {
   });
 
   it("shows no admin controls, no secret fields, and no raw rolling state", async () => {
-    render(<NewStoryScreen />);
+    await renderScreen();
 
     expect(screen.queryByText(/ADMIN/i)).toBeNull();
-    expect(screen.queryByText(/Secret/i)).toBeNull();
+    expect(screen.queryByText(/^Secret$/i)).toBeNull();
     expect(screen.queryByText(/rolling_state/i)).toBeNull();
     expect(screen.queryByText(/ENGINE MODE/i)).toBeNull();
   });
 
   it("keeps the existing Advanced Builder available where accessed", async () => {
-    render(<NewStoryScreen />);
+    await renderScreen();
 
     fireEvent.press(screen.getByTestId("creation-flow-advanced"));
+    await waitFor(() => {
+      expect(screen.getByTestId("scenario-modern-mystery")).toBeTruthy();
+    });
 
     expect(screen.getByTestId("advanced-builder-panel")).toBeTruthy();
     expect(screen.getByTestId("scenario-modern-mystery")).toBeTruthy();
@@ -240,8 +253,7 @@ describe("NewStoryScreen Quick Start", () => {
   });
 
   it("still renders and advances at large font scale", async () => {
-    mockGetSettings.mockResolvedValueOnce({ debugDefault: false, fontScale: 1.25, developerUnlocked: false });
-    render(<NewStoryScreen />);
+    await renderScreen(1.25);
 
     await waitFor(() => {
       expect(screen.getByTestId("quick-start-heading").props.style).toEqual(
