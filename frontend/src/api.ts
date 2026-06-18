@@ -1,4 +1,13 @@
 import { API } from "./theme";
+import type {
+  WantValue,
+  FearValue,
+  WhoMattersValue,
+  GhostValue,
+  TalentValue,
+  FlawValue,
+  LineValue,
+} from "./newstory/options";
 
 export type TurnChoice = { label: string; text: string };
 
@@ -49,6 +58,7 @@ export type Scenario = {
 };
 
 export type CustomWorldSetup = {
+  // --- Advanced / custom free-text inputs (unchanged) ---
   worldConcept?: string;
   worldTone?: string;
   danger?: string;
@@ -62,6 +72,20 @@ export type CustomWorldSetup = {
   storyFocus?: string[];
   contentSettings?: Record<string, string>;
   seedAnswers?: string[];
+
+  // --- Quick Start story hooks (closed catalogs — see newstory/options.ts) ---
+  want?: WantValue;
+  fear?: FearValue;
+  whoMatters?: WhoMattersValue;
+
+  // --- Advanced optional narrative hook pool (closed catalogs) ---
+  ghost?: GhostValue;
+  talent?: TalentValue;
+  flaw?: FlawValue;
+  line?: LineValue;
+
+  // --- Advanced optional free-text (kept hidden until reveal — see Phase 1 Blocker A) ---
+  secret?: string;
 };
 
 const DEVICE_ID_HEADER = "X-Device-Id";
