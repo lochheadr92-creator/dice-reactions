@@ -1,7 +1,7 @@
 import React from "react";
 import { Alert } from "react-native";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react-native";
-import NewStoryScreen from "./new-story";
+import NewStoryScreen from "../app/new-story";
 
 const mockReplace = jest.fn();
 const mockBack = jest.fn();

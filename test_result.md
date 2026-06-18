@@ -247,6 +247,33 @@ backend:
           credits to use the paid default model.
 
 frontend:
+  - task: "Chronicle Creation Phase 2 — Quick Start default onboarding"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/new-story.tsx, /app/frontend/src/newstory/QuickStart.tsx, /app/frontend/__tests__/new-story.test.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Implemented Phase 2 only. Added a default story-first Quick Start flow with six selection
+          steps (World, Character, Tone, Want, Fear, Who matters most), deterministic review text,
+          typed payload mapping into the existing /api/story/new contract, and local duplicate-submit
+          protection. Preserved the old builder behind an explicit Advanced Builder toggle without
+          rewriting its business logic.
+      - working: true
+        agent: "main"
+        comment: |
+          Verification completed in this pass:
+          - backend/tests/test_onboarding_hooks.py: 16 passed
+          - frontend/__tests__/new-story.test.tsx: 10 passed
+          - npx tsc --noEmit: passed
+          - Manual preview regression passed on https://narrative-hooks.preview.emergentagent.com/new-story
+            including Quick Start completion, review edits, loading state, story creation, play-screen
+            navigation, no secret/admin/mechanic leakage, preserved Advanced Builder access, and Settings
+            font scaling still functional.
   - task: "Admin AI controls in Settings screen"
     implemented: true
     working: "NA"
@@ -360,12 +387,22 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Chronicle Creation Phase 2 — Quick Start default onboarding"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
+  - agent: "main"
+    message: |
+      Phase 2 Quick Start is complete and verified. Important implementation notes for future agents:
+      - Quick Start is the default New Chronicle mode.
+      - The deterministic test file MUST remain outside Expo Router `app/` (moved to
+        /app/frontend/__tests__/new-story.test.tsx) because test files inside `app/` break preview bundling.
+      - Existing Advanced Builder remains intentionally preserved in new-story.tsx and is not yet extracted.
+      - Guided Start, secret reveal mechanics, and art integration remain out of scope and unimplemented.
+
   - agent: "main"
     message: |
       OpenRouter migration is complete. All AI requests now route through /app/backend/ai_service.py

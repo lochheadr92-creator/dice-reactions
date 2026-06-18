@@ -214,15 +214,13 @@
 ---
 
 ## Backlog / next candidate increments (in priority order)
-1. **P1 — Ch 31 sub-increments:** route ALL LLM calls through the gateway; add
-   knowledge-boundary + action-assertion checks; expand strip coverage (Ch 3).
-2. **P2 — Ch 29 Relationship Calculus:** numeric trust/loyalty/fear/resentment vector
-   maintained by the engine, fed from interaction events. Highest emergent-behaviour ROI.
-3. **P2 — Ch 26 Gravity Governance:** unify retention scoring; replace ad-hoc compression.
-4. **P2 — Ch 27 Utility AI:** deterministic NPC action selection.
-5. **P3 — Ch 25 Actor Resolution, Ch 5 Heartbeat, Ch 30 Burn-In, Ch 22 Event Sourcing.**
+1. **P0 — Chronicle Creation Phase 3:** Guided Start remains unimplemented; add the middle path without changing the Phase 2 Quick Start contract.
+2. **P1 — Chronicle Creation Phase 4:** Extract/preserve Advanced Builder into dedicated components; keep current behaviour identical.
+3. **P1 — Secret reveal trigger:** promote `secret_registry` content only through a later explicit reveal mechanic; still not implemented.
+4. **P2 — Actor Resolution / Utility AI / Gravity Governance:** still deferred outside this frontend-only Phase 2 pass.
+5. **P3 — Ch 5 Heartbeat, Ch 30 Burn-In, Ch 22 Event Sourcing.**
 
 ## Verification status
-- `tests/test_anti_hallucination_gateway.py`: 13 passing (unit).
-- `tests/test_custom_world_system.py`: 7 passing (live).
-- Live end-to-end gateway probe (revive/resurrect): **pending testing_agent run.**
+- `backend/tests/test_onboarding_hooks.py`: 16 passing (Phase 1 verification rerun in this pass).
+- `frontend/__tests__/new-story.test.tsx`: 10 passing (Quick Start deterministic coverage).
+- Browser preview regression: Quick Start completed end-to-end to play screen; Settings/font scaling still functional; no secret/admin leakage observed.

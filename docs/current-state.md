@@ -212,11 +212,24 @@ Derived from confirmed gaps (not speculative features):
 
 | Priority | Work | Evidence |
 |----------|------|----------|
-| P1 | Configure `ADMIN_API_KEY` in deployment; document operator admin workflow (client Settings UI cannot call admin routes without proxy) | P0 increment shipped |
-| P1 | Run live-server test bundle; update or quarantine outdated tests | Unverified list above |
-| P1 | Execute `qa_live_20turn_hostile.py` and PRD P1 stress items | Not run; Docs-claimed backlog |
-| P1 | Pin `httpx` in `requirements.txt` | Dependency gap |
-| P2 | CI job for 47-test deterministic bundle | Tests passed 2026-06-17 |
+| P1 | Chronicle Creation Phase 3 — Guided Start UI is still unimplemented | Code + manual preview after Phase 2 |
+| P1 | Chronicle Creation Phase 4 — Advanced Builder extraction/refactor remains pending | `frontend/app/new-story.tsx` still hosts preserved legacy builder |
+| P1 | Secret reveal trigger remains unimplemented; `secret_registry` stays engine-only | Code + `test_onboarding_hooks.py` |
+| P2 | Live-server long-run stress (`qa_live_20turn_hostile.py`) and wider story-engine bundle | Not run in this Phase 2 pass |
+| P2 | CI job for frontend Quick Start deterministic tests | `__tests__/new-story.test.tsx` currently local-only |
+
+---
+
+## Phase 2 update — Quick Start UI (2026-06-18)
+
+- **Implemented:** `frontend/src/newstory/QuickStart.tsx` now drives the default New Chronicle path with six deterministic, zero-typing steps: World, Character, Tone, Want, Fear, and Who matters most. **Evidence:** Code + browser preview.
+- **Request mapping:** Quick Start submits through the existing `POST /api/story/new` contract only. It maps to top-level `genre` / `role` / `tone` / `difficulty` / `mode="advanced"` and `custom_world_setup.{want,fear,whoMatters}`. **Evidence:** Code + deterministic test.
+- **Duplicate-submit protection:** `frontend/app/new-story.tsx` uses a local submission lock plus immediate button disabling so one tap can create at most one request. **Evidence:** Code + deterministic test + browser preview.
+- **Advanced Builder preservation:** The previous large builder remains available behind an explicit `Advanced Builder` switch; its scenario/manual setup path and submission contract remain intact. **Evidence:** Code + deterministic test + browser preview.
+- **Secret handling verified:** Quick Start does not collect or render any secret field. Existing Phase 1 protections still keep secret data out of `simulation_hooks`, prompt-visible `<prior_state>`, and player/session payloads. **Evidence:** `backend/tests/test_onboarding_hooks.py` (16 passed).
+- **Frontend tests added:** `frontend/__tests__/new-story.test.tsx` covers default mode, step flow, review summary, payload mapping, duplicate-submit protection, failure recovery, Advanced Builder accessibility, and font scaling. **Evidence:** Jest 10/10 passed.
+- **Manual regression passed:** Preview flow completed from `/new-story` to `/play/[id]`; no secret/admin/mechanic leakage observed; Settings font-scale remained functional. **Evidence:** Playwright screenshots + console run 2026-06-18.
+- **Known limitation:** Guided Start, Advanced extraction, art integration, and secret reveal mechanics are intentionally still out of scope for this pass.
 
 ---
 

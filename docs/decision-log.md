@@ -241,3 +241,20 @@ Promote to ADR when implementation and tests exist.
 | **Files affected** | `rate_limit.py`, `player_api.py`, `server.py`, `security.py`, `frontend/src/api.ts`, `frontend/src/storage.ts`, tests |
 | **Tests required** | `test_rate_limit.py`, `test_player_api.py`, extended `test_security.py` |
 | **Evidence** | 83-test deterministic bundle passed 2026-06-17 |
+
+---
+
+## ADR-014: Phase 2 Quick Start becomes the default New Chronicle experience
+
+| Field | Detail |
+|-------|--------|
+| **Date** | 2026-06-18 |
+| **Status** | Accepted |
+| **Context** | The prior New Chronicle screen defaulted to an abstract, scroll-heavy worldbuilding form. Product direction requires a concrete story-first default that reduces cognitive load without breaking the existing backend contract or the legacy builder. |
+| **Decision** | Introduce `frontend/src/newstory/QuickStart.tsx` as the default entry flow on `frontend/app/new-story.tsx`. Quick Start uses six deterministic selections (World, Character, Tone, Want, Fear, Who matters most), zero mandatory typing, and a deterministic review summary. Submission continues through the existing `POST /api/story/new` payload only, mapped to top-level story fields plus `custom_world_setup.{want,fear,whoMatters}` with engine `mode` fixed to `advanced`. |
+| **Alternatives considered** | Full immediate extraction of the old builder (reject — Phase 4 scope); introducing a second API contract (reject — backend stability and migration risk); exposing secret/engine terms in Quick Start (reject — violates product language and Phase 1 secrecy constraints). |
+| **Consequences** | `new-story.tsx` now hosts a small flow switcher: Quick Start by default, preserved Advanced Builder behind an explicit toggle. Frontend must guard against duplicate submit locally because story creation is paid/slow. Test files must live outside Expo Router `app/` so Metro does not bundle them as routes. |
+| **Risks** | The preserved Advanced Builder remains a large file until a later extraction. Guided Start is still absent, so some players still need the Advanced path for deeper setup. |
+| **Files affected** | `frontend/app/new-story.tsx`, `frontend/src/newstory/QuickStart.tsx`, `frontend/src/api.ts`, `frontend/src/newstory/options.ts`, `frontend/__tests__/new-story.test.tsx` |
+| **Tests required** | Frontend deterministic flow tests + browser preview regression |
+| **Evidence** | `frontend/__tests__/new-story.test.tsx` (10 passed), preview regression run 2026-06-18 |
