@@ -214,13 +214,13 @@
 ---
 
 ## Backlog / next candidate increments (in priority order)
-1. **P0 — Chronicle Creation Phase 3:** Guided Start remains unimplemented; add the middle path without changing the Phase 2 Quick Start contract.
-2. **P1 — Chronicle Creation Phase 4:** Extract/preserve Advanced Builder into dedicated components; keep current behaviour identical.
-3. **P1 — Secret reveal trigger:** promote `secret_registry` content only through a later explicit reveal mechanic; still not implemented.
-4. **P2 — Actor Resolution / Utility AI / Gravity Governance:** still deferred outside this frontend-only Phase 2 pass.
+1. **P0 — Chronicle Creation Phase 4:** Extract/preserve Advanced Builder into dedicated components; keep current behaviour identical.
+2. **P1 — Secret reveal trigger:** promote `secret_registry` content only through a later explicit reveal mechanic; still not implemented.
+3. **P1 — Guided Start depth pass:** only if needed later, expand curated question coverage without changing the request contract.
+4. **P2 — Actor Resolution / Utility AI / Gravity Governance:** still deferred outside this frontend onboarding work.
 5. **P3 — Ch 5 Heartbeat, Ch 30 Burn-In, Ch 22 Event Sourcing.**
 
 ## Verification status
 - `backend/tests/test_onboarding_hooks.py`: 16 passing (Phase 1 verification rerun in this pass).
-- `frontend/__tests__/new-story.test.tsx`: 10 passing (Quick Start deterministic coverage).
-- Browser preview regression: Quick Start completed end-to-end to play screen; Settings/font scaling still functional; no secret/admin leakage observed.
+- `frontend/__tests__/new-story.test.tsx`: 17 passing (three-mode + Guided Start deterministic coverage).
+- Browser preview regression: Quick Start and Guided Start completed end-to-end to play screen; Advanced Builder remained accessible; Settings/font scaling still functional; no secret/admin leakage observed.

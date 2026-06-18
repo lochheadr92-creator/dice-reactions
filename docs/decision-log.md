@@ -258,3 +258,20 @@ Promote to ADR when implementation and tests exist.
 | **Files affected** | `frontend/app/new-story.tsx`, `frontend/src/newstory/QuickStart.tsx`, `frontend/src/api.ts`, `frontend/src/newstory/options.ts`, `frontend/__tests__/new-story.test.tsx` |
 | **Tests required** | Frontend deterministic flow tests + browser preview regression |
 | **Evidence** | `frontend/__tests__/new-story.test.tsx` (10 passed), preview regression run 2026-06-18 |
+
+---
+
+## ADR-015: Phase 3 adds Guided Start while preserving the single creation contract
+
+| Field | Detail |
+|-------|--------|
+| **Date** | 2026-06-18 |
+| **Status** | Accepted |
+| **Context** | Quick Start reduced cognitive load, but players still needed a richer curated path before falling all the way back to the legacy builder. Product direction requires a three-mode structure without introducing a second backend creation API or exposing engine terminology. |
+| **Decision** | Add `Guided Start` as a dedicated curated flow alongside `Quick Start` and the preserved `Advanced Builder`. Guided Start remains fully deterministic, requires no typing, and uses existing catalogs from `frontend/src/newstory/options.ts`. It maps its world turning point into `custom_premise`, maps world/character/tone/difficulty to existing top-level request fields, maps want/fear/who matters most into `custom_world_setup`, and keeps backend engine `mode` fixed to `advanced`. |
+| **Alternatives considered** | New `/story/new-guided` endpoint (reject — contract duplication); free-text-heavy guided setup (reject — higher abandonment, less deterministic); refactoring the full Advanced Builder first (reject — Phase 4 scope). |
+| **Consequences** | `new-story.tsx` now owns three mode states and one shared submission lock. Mode switching must preserve each mode’s selections independently. Public Advanced Builder intentionally hides dev-only engine/debug controls unless the existing local developer unlock is active. |
+| **Risks** | `new-story.tsx` remains structurally heavy until later extraction. Guided Start currently covers only fields already supported by the existing request contract. |
+| **Files affected** | `frontend/app/new-story.tsx`, `frontend/src/newstory/GuidedStart.tsx`, `frontend/src/newstory/QuickStart.tsx`, `frontend/src/newstory/options.ts`, `frontend/src/api.ts`, `frontend/__tests__/new-story.test.tsx` |
+| **Tests required** | Backend onboarding tests, frontend deterministic flow tests, browser preview regression |
+| **Evidence** | `backend/tests/test_onboarding_hooks.py` (16 passed), `frontend/__tests__/new-story.test.tsx` (17 passed), preview regression run 2026-06-18 |

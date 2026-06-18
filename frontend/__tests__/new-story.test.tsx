@@ -68,6 +68,30 @@ async function completeQuickStart() {
   await screen.findByTestId("quick-start-review-step");
 }
 
+async function completeGuidedStart() {
+  fireEvent.press(screen.getByTestId("creation-flow-guided"));
+  await waitFor(() => {
+    expect(screen.getByTestId("guided-start-step-1")).toBeTruthy();
+  });
+  fireEvent.press(screen.getByTestId("guided-start-option-world-fantasy"));
+  fireEvent.press(screen.getByTestId("guided-start-next-button"));
+  fireEvent.press(screen.getByTestId("guided-start-option-worldDetail-magic-is-dying"));
+  fireEvent.press(screen.getByTestId("guided-start-next-button"));
+  fireEvent.press(screen.getByTestId("guided-start-option-character-scholar"));
+  fireEvent.press(screen.getByTestId("guided-start-next-button"));
+  fireEvent.press(screen.getByTestId("guided-start-option-tone-dark"));
+  fireEvent.press(screen.getByTestId("guided-start-next-button"));
+  fireEvent.press(screen.getByTestId("guided-start-option-want-knowledge"));
+  fireEvent.press(screen.getByTestId("guided-start-next-button"));
+  fireEvent.press(screen.getByTestId("guided-start-option-fear-becoming-a-monster"));
+  fireEvent.press(screen.getByTestId("guided-start-next-button"));
+  fireEvent.press(screen.getByTestId("guided-start-option-whoMatters-mentor"));
+  fireEvent.press(screen.getByTestId("guided-start-next-button"));
+  fireEvent.press(screen.getByTestId("guided-start-option-difficulty-hard"));
+  fireEvent.press(screen.getByTestId("guided-start-next-button"));
+  await screen.findByTestId("guided-start-review-step");
+}
+
 describe("NewStoryScreen Quick Start", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -248,8 +272,8 @@ describe("NewStoryScreen Quick Start", () => {
     expect(screen.getByTestId("advanced-builder-panel")).toBeTruthy();
     expect(screen.getByTestId("scenario-modern-mystery")).toBeTruthy();
     expect(screen.getByTestId("role-input")).toBeTruthy();
-    expect(screen.getByTestId("mode-advanced")).toBeTruthy();
     expect(screen.getByTestId("begin-story-btn")).toBeTruthy();
+    expect(screen.queryByTestId("mode-advanced")).toBeNull();
   });
 
   it("still renders and advances at large font scale", async () => {
@@ -265,5 +289,183 @@ describe("NewStoryScreen Quick Start", () => {
     fireEvent.press(screen.getByTestId("quick-start-next-button"));
 
     expect(screen.getByTestId("quick-start-step-2")).toBeTruthy();
+  });
+
+  it("shows three player-facing creation modes and switches without crashing", async () => {
+    await renderScreen();
+
+    expect(screen.getByTestId("creation-flow-quick")).toBeTruthy();
+    expect(screen.getByTestId("creation-flow-guided")).toBeTruthy();
+    expect(screen.getByTestId("creation-flow-advanced")).toBeTruthy();
+    expect(screen.queryByText(/rolling state/i)).toBeNull();
+    expect(screen.queryByText(/simulation hook/i)).toBeNull();
+
+    fireEvent.press(screen.getByTestId("creation-flow-guided"));
+    await waitFor(() => {
+      expect(screen.getByTestId("guided-start-step-1")).toBeTruthy();
+    });
+
+    fireEvent.press(screen.getByTestId("creation-flow-advanced"));
+    await waitFor(() => {
+      expect(screen.getByTestId("advanced-builder-panel")).toBeTruthy();
+    });
+
+    fireEvent.press(screen.getByTestId("creation-flow-quick"));
+    await waitFor(() => {
+      expect(screen.getByTestId("quick-start-step-1")).toBeTruthy();
+    });
+  });
+
+  it("Guided Start renders, advances, and preserves choices when going back", async () => {
+    await renderScreen();
+
+    fireEvent.press(screen.getByTestId("creation-flow-guided"));
+    await waitFor(() => {
+      expect(screen.getByTestId("guided-start-step-1")).toBeTruthy();
+    });
+    fireEvent.press(screen.getByTestId("guided-start-option-world-fantasy"));
+    fireEvent.press(screen.getByTestId("guided-start-next-button"));
+    expect(screen.getByTestId("guided-start-step-2")).toBeTruthy();
+    fireEvent.press(screen.getByTestId("guided-start-option-worldDetail-magic-is-dying"));
+    fireEvent.press(screen.getByTestId("guided-start-back-button"));
+
+    expect(screen.getByTestId("guided-start-step-1")).toBeTruthy();
+    expect(screen.getByTestId("guided-start-option-selected-world-fantasy")).toBeTruthy();
+
+    fireEvent.press(screen.getByTestId("guided-start-next-button"));
+    expect(screen.getByTestId("guided-start-option-selected-worldDetail-magic-is-dying")).toBeTruthy();
+  });
+
+  it("Guided Start completes without typing, shows player-facing review labels, and updates after edits", async () => {
+    await renderScreen();
+    await completeGuidedStart();
+
+    expect(screen.getByTestId("guided-start-review-value-world").props.children).toBe("Fantasy");
+    expect(screen.getByTestId("guided-start-review-value-worldDetail").props.children).toBe("Magic is dying");
+    expect(screen.getByTestId("guided-start-review-value-character").props.children).toBe("Scholar");
+    expect(screen.getByTestId("guided-start-review-value-tone").props.children).toBe("Dark");
+    expect(screen.getByTestId("guided-start-review-value-want").props.children).toBe("Knowledge");
+    expect(screen.getByTestId("guided-start-review-value-fear").props.children).toBe("Becoming a monster");
+    expect(screen.getByTestId("guided-start-review-value-whoMatters").props.children).toBe("Mentor");
+    expect(screen.getByTestId("guided-start-review-value-difficulty").props.children).toBe("Hard");
+    expect(String(screen.getByTestId("guided-start-review-summary").props.children)).toContain("magic is dying");
+    expect(String(screen.getByTestId("guided-start-review-summary").props.children)).not.toContain("worldDetail");
+    expect(String(screen.getByTestId("guided-start-review-summary").props.children)).not.toContain("rolling_state");
+
+    fireEvent.press(screen.getByTestId("guided-start-change-difficulty"));
+    fireEvent.press(screen.getByTestId("guided-start-option-difficulty-brutal"));
+    fireEvent.press(screen.getByTestId("guided-start-next-button"));
+
+    expect(screen.getByTestId("guided-start-review-value-difficulty").props.children).toBe("Brutal");
+    expect(String(screen.getByTestId("guided-start-review-summary").props.children)).toContain("brutal");
+  });
+
+  it("Guided Start maps to the existing payload and prevents duplicate submit", async () => {
+    const pending = deferred<any>();
+    mockNewStory.mockReturnValueOnce(pending.promise);
+    await renderScreen();
+    await completeGuidedStart();
+
+    fireEvent.press(screen.getByTestId("guided-start-start-button"));
+    fireEvent.press(screen.getByTestId("guided-start-start-button"));
+
+    await waitFor(() => {
+      expect(mockNewStory).toHaveBeenCalledTimes(1);
+      expect(mockNewStory).toHaveBeenCalledWith({
+        device_id: "device-123",
+        genre: "fantasy",
+        role: "a scholar",
+        tone: "grim",
+        difficulty: "hard",
+        debug_mode: false,
+        custom_premise: "Fantasy: Magic is dying. The old power is draining away.",
+        mode: "advanced",
+        custom_world_setup: {
+          want: "knowledge",
+          fear: "becoming-a-monster",
+          whoMatters: "mentor",
+        },
+      });
+    });
+    expect(screen.getByTestId("guided-start-loading-state")).toBeTruthy();
+
+    await act(async () => {
+      pending.resolve({
+        session_id: "guided-123",
+        turn: { id: "turn-guided" },
+        session: { id: "guided-123" },
+      });
+      await pending.promise;
+    });
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith("/play/guided-123");
+    });
+  });
+
+  it("Guided Start preserves answers after failure and retry", async () => {
+    mockNewStory
+      .mockRejectedValueOnce(new Error("502: trace"))
+      .mockResolvedValueOnce({ session_id: "guided-retry", turn: {}, session: {} });
+    await renderScreen();
+    await completeGuidedStart();
+
+    fireEvent.press(screen.getByTestId("guided-start-start-button"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("new-story-error-banner")).toBeTruthy();
+    });
+    expect(screen.getByTestId("guided-start-review-value-world").props.children).toBe("Fantasy");
+    expect(screen.getByTestId("guided-start-review-value-difficulty").props.children).toBe("Hard");
+    expect(String(screen.getByTestId("new-story-error-banner").props.children)).not.toContain("trace");
+
+    fireEvent.press(screen.getByTestId("guided-start-start-button"));
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith("/play/guided-retry");
+    });
+    expect(mockNewStory).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps Guided Start state isolated from Quick Start and Advanced Builder", async () => {
+    await renderScreen();
+
+    fireEvent.press(screen.getByTestId("creation-flow-guided"));
+    await waitFor(() => {
+      expect(screen.getByTestId("guided-start-step-1")).toBeTruthy();
+    });
+    fireEvent.press(screen.getByTestId("guided-start-option-world-fantasy"));
+
+    fireEvent.press(screen.getByTestId("creation-flow-quick"));
+    await waitFor(() => {
+      expect(screen.getByTestId("quick-start-step-1")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("quick-start-option-selected-world-fantasy")).toBeNull();
+
+    fireEvent.press(screen.getByTestId("creation-flow-guided"));
+    await waitFor(() => {
+      expect(screen.getByTestId("guided-start-step-1")).toBeTruthy();
+    });
+    expect(screen.getByTestId("guided-start-option-selected-world-fantasy")).toBeTruthy();
+
+    fireEvent.press(screen.getByTestId("creation-flow-advanced"));
+    await waitFor(() => {
+      expect(screen.getByTestId("advanced-builder-panel")).toBeTruthy();
+    });
+    expect(screen.getByTestId("role-input").props.value).toBe("");
+  });
+
+  it("renders Guided Start safely at XL font scale", async () => {
+    await renderScreen(1.25);
+
+    fireEvent.press(screen.getByTestId("creation-flow-guided"));
+    await waitFor(() => {
+      expect(screen.getByTestId("guided-start-heading").props.style).toEqual(
+        expect.arrayContaining([expect.objectContaining({ fontSize: 38 })])
+      );
+    });
+
+    fireEvent.press(screen.getByTestId("guided-start-option-world-fantasy"));
+    fireEvent.press(screen.getByTestId("guided-start-next-button"));
+    expect(screen.getByTestId("guided-start-step-2")).toBeTruthy();
   });
 });

@@ -24,6 +24,11 @@ import {
   buildQuickStartRequest,
   type QuickStartSelections,
 } from "../src/newstory/QuickStart";
+import {
+  GuidedStart,
+  buildGuidedStartRequest,
+  type GuidedStartSelections,
+} from "../src/newstory/GuidedStart";
 
 type Genre = {
   key: string;
@@ -138,7 +143,7 @@ const CONTENT_ROWS = [
 export default function NewStoryScreen() {
   const router = useRouter();
   const submitLockRef = useRef(false);
-  const [creationFlow, setCreationFlow] = useState<"quick" | "advanced">("quick");
+  const [creationFlow, setCreationFlow] = useState<"quick" | "guided" | "advanced">("quick");
   const [genre, setGenre] = useState<string>("");
   const [customGenre, setCustomGenre] = useState("");
   const [role, setRole] = useState("");
@@ -149,10 +154,12 @@ export default function NewStoryScreen() {
   const [loading, setLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [fontScale, setFontScale] = useState(1);
+  const [developerUnlocked, setDeveloperUnlocked] = useState(false);
   const [mode, setMode] = useState<"basic" | "advanced">("advanced");
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [scenarioId, setScenarioId] = useState<string | null>(null);
   const [quickSelections, setQuickSelections] = useState<QuickStartSelections>({});
+  const [guidedSelections, setGuidedSelections] = useState<GuidedStartSelections>({});
   const [customSetup, setCustomSetup] = useState<CustomWorldSetup>({
     pressures: [],
     storyFocus: [],
@@ -173,7 +180,10 @@ export default function NewStoryScreen() {
       if (active) setScenarios(r.scenarios);
     }).catch(() => {});
     getSettings().then((settings) => {
-      if (active) setFontScale(settings.fontScale || 1);
+      if (active) {
+        setFontScale(settings.fontScale || 1);
+        setDeveloperUnlocked(!!settings.developerUnlocked);
+      }
     }).catch(() => {});
     return () => {
       active = false;
@@ -241,6 +251,17 @@ export default function NewStoryScreen() {
     clearError();
   };
 
+  const setGuidedSelection = (patch: Partial<GuidedStartSelections>) => {
+    setGuidedSelections((prev) => {
+      const next = { ...prev, ...patch };
+      if (patch.world && patch.world !== prev.world) {
+        next.worldDetail = undefined;
+      }
+      return next;
+    });
+    clearError();
+  };
+
   const beginSubmit = () => {
     if (submitLockRef.current || loading) return false;
     submitLockRef.current = true;
@@ -260,7 +281,7 @@ export default function NewStoryScreen() {
     releaseSubmit();
   };
 
-  const switchFlow = (nextFlow: "quick" | "advanced") => {
+  const switchFlow = (nextFlow: "quick" | "guided" | "advanced") => {
     if (loading) return;
     setCreationFlow(nextFlow);
     clearError();
@@ -331,6 +352,43 @@ export default function NewStoryScreen() {
     }
   };
 
+  const handleGuidedStart = async () => {
+    if (!beginSubmit()) return;
+
+    const settings = await getSettings().catch(() => ({
+      debugDefault: false,
+      fontScale: 1,
+      developerUnlocked: false,
+    }));
+    const payload = buildGuidedStartRequest(guidedSelections);
+    if (!payload) {
+      creationFailure(new Error("incomplete-guided-start"));
+      return;
+    }
+
+    try {
+      const device_id = await getDeviceId();
+      const res = await newStory({
+        device_id,
+        genre: payload.genre,
+        role: payload.role,
+        tone: payload.tone,
+        difficulty: payload.difficulty,
+        debug_mode: settings.debugDefault,
+        custom_premise: payload.custom_premise,
+        mode: payload.mode,
+        custom_world_setup: payload.custom_world_setup,
+      });
+      if (!res?.session_id) {
+        creationFailure(new Error("invalid-session"));
+        return;
+      }
+      router.replace(`/play/${res.session_id}`);
+    } catch (error) {
+      creationFailure(error);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safe} testID="new-story-screen">
       <KeyboardAvoidingView
@@ -353,7 +411,7 @@ export default function NewStoryScreen() {
           <Text style={styles.pageLabel} testID="new-story-page-label">NEW CHRONICLE</Text>
           <Text style={styles.pageTitle} testID="new-story-page-title">Choose how your story begins.</Text>
           <Text style={styles.pageHelp} testID="new-story-page-help">
-            Quick Start leads with story choices. Advanced Builder keeps the full world setup exactly where it already lives.
+            Quick Start is fastest. Guided Start gives you more curated control. Advanced Builder keeps the full manual setup.
           </Text>
 
           <View style={styles.creationFlowRow} testID="creation-flow-switcher">
@@ -365,6 +423,15 @@ export default function NewStoryScreen() {
               testID="creation-flow-quick"
             >
               <Text style={[styles.creationFlowText, creationFlow === "quick" && styles.creationFlowTextActive]}>Quick Start</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.creationFlowButton, creationFlow === "guided" && styles.creationFlowButtonActive]}
+              onPress={() => switchFlow("guided")}
+              disabled={loading}
+              accessibilityState={{ selected: creationFlow === "guided", disabled: loading }}
+              testID="creation-flow-guided"
+            >
+              <Text style={[styles.creationFlowText, creationFlow === "guided" && styles.creationFlowTextActive]}>Guided Start</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.creationFlowButton, creationFlow === "advanced" && styles.creationFlowButtonActive]}
@@ -391,6 +458,14 @@ export default function NewStoryScreen() {
               fontScale={fontScale}
               onChange={setQuickSelection}
               onStart={handleQuickStart}
+            />
+          ) : creationFlow === "guided" ? (
+            <GuidedStart
+              selections={guidedSelections}
+              loading={loading}
+              fontScale={fontScale}
+              onChange={setGuidedSelection}
+              onStart={handleGuidedStart}
             />
           ) : (
             <View testID="advanced-builder-panel">
@@ -677,29 +752,35 @@ export default function NewStoryScreen() {
             {difficulty === "brutal" && "Fragile survival. Mistakes compound. Death is causal and quiet."}
           </Text>
 
-              <Text style={[styles.stepLabel, { marginTop: 28 }]}>05 · ENGINE · MODE</Text>
-              <View style={styles.chipRow}>
-                {(["basic", "advanced"] as const).map((m) => (
-                  <TouchableOpacity
-                    key={m}
-                    style={[styles.chip, mode === m && styles.chipActive]}
-                    onPress={() => {
-                      clearError();
-                      setMode(m);
-                    }}
-                    testID={`mode-${m}`}
-                  >
-                    <Text style={[styles.chipText, mode === m && styles.chipTextActive]}>{m}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-          <Text style={styles.diffHelp}>
-            {mode === "basic"
-              ? "Lighter scenes, fewer choices. Faster, cheaper play."
-              : "Deeper memory, richer characters, longer arcs. Consequences carry further."}
-          </Text>
+              {developerUnlocked ? (
+                <>
+                  <Text style={[styles.stepLabel, { marginTop: 28 }]}>05 · ENGINE · MODE</Text>
+                  <View style={styles.chipRow}>
+                    {(["basic", "advanced"] as const).map((m) => (
+                      <TouchableOpacity
+                        key={m}
+                        style={[styles.chip, mode === m && styles.chipActive]}
+                        onPress={() => {
+                          clearError();
+                          setMode(m);
+                        }}
+                        testID={`mode-${m}`}
+                      >
+                        <Text style={[styles.chipText, mode === m && styles.chipTextActive]}>{m}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <Text style={styles.diffHelp}>
+                    {mode === "basic"
+                      ? "Lighter scenes, fewer choices. Faster, cheaper play."
+                      : "Deeper memory, richer characters, longer arcs. Consequences carry further."}
+                  </Text>
+                </>
+              ) : null}
 
-              <Text style={[styles.stepLabel, { marginTop: 28 }]}>06 · OPENING · HOOK  (optional)</Text>
+              <Text style={[styles.stepLabel, { marginTop: 28 }]}>
+                {developerUnlocked ? "06 · OPENING · HOOK  (optional)" : "05 · OPENING · HOOK  (optional)"}
+              </Text>
               <TextInput
                 value={premise}
                 onChangeText={(value) => {
@@ -713,23 +794,25 @@ export default function NewStoryScreen() {
                 testID="premise-input"
               />
 
-              <TouchableOpacity
-                style={styles.debugRow}
-                onPress={() => {
-                  clearError();
-                  setDebugMode((v) => !v);
-                }}
-                testID="debug-toggle"
-                activeOpacity={0.7}
-              >
-            <View style={[styles.checkbox, debugMode && styles.checkboxOn]}>
-              {debugMode && <Ionicons name="checkmark" size={14} color={COLORS.background} />}
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.debugTitle}>DEBUG · MODE</Text>
-              <Text style={styles.debugHelp}>Surface rolls, modifiers, and active systems each turn.</Text>
-            </View>
-              </TouchableOpacity>
+              {developerUnlocked ? (
+                <TouchableOpacity
+                  style={styles.debugRow}
+                  onPress={() => {
+                    clearError();
+                    setDebugMode((v) => !v);
+                  }}
+                  testID="debug-toggle"
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.checkbox, debugMode && styles.checkboxOn]}>
+                    {debugMode && <Ionicons name="checkmark" size={14} color={COLORS.background} />}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.debugTitle}>DEBUG · MODE</Text>
+                    <Text style={styles.debugHelp}>Surface rolls, modifiers, and active systems each turn.</Text>
+                  </View>
+                </TouchableOpacity>
+              ) : null}
 
               <TouchableOpacity
                 style={[styles.startBtn, !canStartAdvanced && styles.startBtnDisabled]}
