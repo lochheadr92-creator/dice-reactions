@@ -47,6 +47,12 @@ OPENROUTER_BASE_URL = os.environ.get(
 # LLM call path — OpenRouter remains the sole active provider. The value is
 # never returned in API responses, logged, or exposed to the Expo client.
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+# Base URL for the optional direct-OpenAI provider (OpenAI-compatible /chat/completions).
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+# A model is routed to direct OpenAI ONLY when its id carries this explicit,
+# opt-in namespace (e.g. "openai-direct/gpt-4o"). Every other id stays on OpenRouter,
+# including OpenRouter's own "openai/..." catalogue ids.
+OPENAI_PROVIDER_PREFIX = "openai-direct/"
 
 DEFAULT_TEMPERATURE = float(os.environ.get("DEFAULT_TEMPERATURE", "0.85"))
 DEFAULT_MAX_TOKENS = int(os.environ.get("DEFAULT_MAX_TOKENS", "2048"))
@@ -196,6 +202,25 @@ SUPPORTED_MODELS: List[Dict[str, Any]] = [
     },
 ]
 
+# Optional direct-OpenAI models. Surfaced (and accepted by admin validation)
+# ONLY when OPENAI_API_KEY is configured — see get_supported_models(). Selecting
+# one routes the call to api.openai.com instead of OpenRouter. The "openai-direct/"
+# namespace is intentionally distinct from OpenRouter's own "openai/..." ids.
+OPENAI_DIRECT_MODELS: List[Dict[str, Any]] = [
+    {
+        "id": "openai-direct/gpt-4o-mini",
+        "label": "GPT-4o Mini · OpenAI Direct",
+        "context": 128000,
+        "note": "Direct OpenAI · opt-in · requires OPENAI_API_KEY",
+    },
+    {
+        "id": "openai-direct/gpt-4o",
+        "label": "GPT-4o · OpenAI Direct",
+        "context": 128000,
+        "note": "Direct OpenAI · opt-in · requires OPENAI_API_KEY",
+    },
+]
+
 
 class AIServiceError(Exception):
     """Raised when the underlying AI provider call fails permanently."""
@@ -206,8 +231,15 @@ class AIServiceError(Exception):
 
 
 def get_supported_models() -> List[Dict[str, Any]]:
-    """Return the curated list of model options for the admin UI."""
-    return SUPPORTED_MODELS
+    """Return the curated list of model options for the admin UI.
+
+    Direct-OpenAI models are appended ONLY when OPENAI_API_KEY is configured, so
+    OpenAI stays opt-in and is never selectable (nor passes admin validation)
+    without a key. The OpenRouter catalogue is always returned unchanged.
+    """
+    if openai_is_configured():
+        return list(SUPPORTED_MODELS) + list(OPENAI_DIRECT_MODELS)
+    return list(SUPPORTED_MODELS)
 
 
 def get_default_settings() -> Dict[str, Any]:
@@ -226,9 +258,40 @@ def is_configured() -> bool:
 
 def openai_is_configured() -> bool:
     """Report whether a direct OpenAI key is present (boolean only — never returns
-    or logs the value). Provider switching is NOT implemented; OpenRouter remains
-    the sole active provider until an optional OpenAI provider is approved."""
+    or logs the value)."""
     return bool(OPENAI_API_KEY)
+
+
+def resolve_provider_route(model_id: str) -> Dict[str, Any]:
+    """Resolve which provider serves a given model id.
+
+    Default is OpenRouter — unchanged for every existing model id, including
+    OpenRouter's own "openai/..." catalogue. A request is routed to direct
+    OpenAI ONLY when the id carries the explicit opt-in OPENAI_PROVIDER_PREFIX.
+
+    The returned dict carries the api_key for the caller to build the request
+    locally; the value is never logged or returned in any API response.
+    """
+    mid = model_id or ""
+    if mid.startswith(OPENAI_PROVIDER_PREFIX):
+        return {
+            "provider": "openai",
+            "label": "OpenAI",
+            "base_url": OPENAI_BASE_URL,
+            "api_key": OPENAI_API_KEY,
+            "api_model": mid[len(OPENAI_PROVIDER_PREFIX):],
+            "key_env": "OPENAI_API_KEY",
+            "extra_headers": {},
+        }
+    return {
+        "provider": "openrouter",
+        "label": "OpenRouter",
+        "base_url": OPENROUTER_BASE_URL,
+        "api_key": OPENROUTER_API_KEY,
+        "api_model": mid,
+        "key_env": "OPENROUTER_API_KEY",
+        "extra_headers": {"HTTP-Referer": APP_PUBLIC_URL, "X-Title": APP_TITLE},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -297,26 +360,31 @@ async def _call_model_once(
     max_tokens: int,
     extra_headers: Optional[Dict[str, str]] = None,
 ) -> Tuple[str, Dict[str, Any]]:
-    """One HTTP call to OpenRouter for a single model. Returns (content, telemetry)."""
-    if not OPENROUTER_API_KEY:
-        raise AIServiceError("OPENROUTER_API_KEY is not configured", kind=KIND_OTHER)
+    """One HTTP call to the resolved provider for a single model. Returns (content, telemetry).
+
+    OpenRouter is the default route for every existing model id (behaviour
+    unchanged). Direct OpenAI is used only for explicitly namespaced ids.
+    """
+    route = resolve_provider_route(model_id)
+    label = route["label"]
+    if not route["api_key"]:
+        raise AIServiceError(f"{route['key_env']} is not configured", kind=KIND_OTHER)
 
     payload: Dict[str, Any] = {
-        "model": model_id,
+        "model": route["api_model"],
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {route['api_key']}",
         "Content-Type": "application/json",
-        "HTTP-Referer": APP_PUBLIC_URL,
-        "X-Title": APP_TITLE,
     }
+    headers.update(route["extra_headers"])
     if extra_headers:
         headers.update(extra_headers)
 
-    url = f"{OPENROUTER_BASE_URL}/chat/completions"
+    url = f"{route['base_url']}/chat/completions"
     started = time.monotonic()
 
     async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
@@ -326,7 +394,7 @@ async def _call_model_once(
     if resp.status_code >= 400:
         kind = _classify_http(resp.status_code, resp.text)
         raise AIServiceError(
-            f"OpenRouter HTTP {resp.status_code} [{kind}]: {resp.text[:400]}",
+            f"{label} HTTP {resp.status_code} [{kind}]: {resp.text[:400]}",
             kind=kind,
         )
 
@@ -334,20 +402,20 @@ async def _call_model_once(
         data = resp.json()
     except Exception as je:
         raise AIServiceError(
-            f"OpenRouter returned non-JSON body: {je}", kind=KIND_MALFORMED
+            f"{label} returned non-JSON body: {je}", kind=KIND_MALFORMED
         ) from je
 
     choices = data.get("choices") or []
     if not choices:
         raise AIServiceError(
-            f"OpenRouter response had no choices: {data.get('error') or data}",
+            f"{label} response had no choices: {data.get('error') or data}",
             kind=KIND_MALFORMED,
         )
 
     content = (choices[0].get("message") or {}).get("content")
     if not content:
         raise AIServiceError(
-            f"OpenRouter returned empty content: {data}", kind=KIND_MALFORMED
+            f"{label} returned empty content: {data}", kind=KIND_MALFORMED
         )
 
     usage = data.get("usage") or {}
@@ -360,6 +428,7 @@ async def _call_model_once(
         "provider": (data.get("provider") or {}).get("name")
         if isinstance(data.get("provider"), dict)
         else data.get("provider"),
+        "provider_route": route["provider"],
         "status": KIND_OK,
     }
     return content, telemetry
@@ -426,7 +495,8 @@ async def chat_completion_with_meta(
                     model_id, messages, temp, mt, extra_headers=extra_headers
                 )
                 logger.info(
-                    "OpenRouter completion ok · model=%s · attempt=%s · in_msgs=%s · out_chars=%s · latency=%sms · tokens=%s",
+                    "LLM completion ok · provider=%s · model=%s · attempt=%s · in_msgs=%s · out_chars=%s · latency=%sms · tokens=%s",
+                    telem.get("provider_route"),
                     model_id,
                     attempt,
                     len(messages),
