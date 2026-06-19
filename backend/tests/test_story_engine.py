@@ -5,6 +5,8 @@ Tests health, story creation, action, listing, retrieval, deletion, and 404 hand
 import uuid
 import pytest
 
+pytestmark = pytest.mark.live
+
 from security import DEVICE_ID_HEADER
 
 

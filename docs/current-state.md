@@ -180,10 +180,10 @@ pytest tests/test_security.py \
 | `test_story_engine.py` outdated assertions | Code + `AGENTS.md` + PRD |
 | `test_story_engine.py` flake8 `E741` | Docs-claimed (PRD) |
 | `httpx` not pinned in `requirements.txt` | Code (`ai_service.py` imports it) |
-| `emergentintegrations` in requirements, unused in inspected modules | Code search |
+| `emergentintegrations` removed from requirements (was unused, unavailable on PyPI) | Code search + CI hardening 2026-06-20 |
 | FastAPI `@app.on_event("shutdown")` deprecated | Tests warnings when importing `server` |
 | No MongoDB indexes defined in code | Code |
-| No CI/CD manifest in repo | Code search |
+| Deterministic CI on `emergent` | `.github/workflows/deterministic-ci.yml` — 205 backend + 17 frontend tests; Yarn + `yarn.lock` canonical |
 | Documentation pass 1–2 authored against `main`, cherry-picked to `emergent` without re-audit | Git history + code diff vs `main` |
 
 ---
@@ -216,7 +216,7 @@ Derived from confirmed gaps (not speculative features):
 | P1 | Chronicle Creation Phase 4 — Advanced Builder extraction/refactor remains pending | `frontend/app/new-story.tsx` still hosts preserved legacy builder |
 | P1 | Secret reveal trigger remains unimplemented; `secret_registry` stays engine-only | Code + `test_onboarding_hooks.py` |
 | P2 | Live-server long-run stress (`qa_live_20turn_hostile.py`) and wider story-engine bundle | Not run in this Phase 3 pass |
-| P2 | CI job for frontend New Chronicle deterministic tests | `__tests__/new-story.test.tsx` currently local-only |
+| P2 | ~~CI job for deterministic tests~~ ✅ | `.github/workflows/deterministic-ci.yml` (2026-06-20) |
 
 ---
 

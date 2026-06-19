@@ -95,6 +95,7 @@ def custom_story(api_client, base_url):
     )
 
 
+@pytest.mark.live
 def test_custom_story_new_shape(custom_story):
     data = custom_story["data"]
     turn = data["turn"]
@@ -103,6 +104,7 @@ def test_custom_story_new_shape(custom_story):
     assert 4 <= len(turn.get("choices") or []) <= 6
 
 
+@pytest.mark.live
 def test_custom_setup_persisted_to_protected_rolling_fields(custom_story):
     data = custom_story["data"]
     sid = data["session_id"]
@@ -135,6 +137,7 @@ def test_custom_setup_persisted_to_protected_rolling_fields(custom_story):
 
 
 # --- Feature: mechanic probing must not leak internals into player narrative ---
+@pytest.mark.live
 def test_mechanic_probe_action_no_term_leak(custom_story):
     data = custom_story["data"]
     sid = data["session_id"]
@@ -160,6 +163,7 @@ def test_mechanic_probe_action_no_term_leak(custom_story):
 
 
 # --- Feature: preset genre/scenario flow still works (regression) ---
+@pytest.mark.live
 def test_preset_flow_still_works(api_client, base_url):
     payload = {
         "device_id": f"TEST_preset_{uuid.uuid4()}",

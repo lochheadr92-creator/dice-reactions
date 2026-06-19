@@ -21,6 +21,8 @@ import uuid
 import pytest
 import requests
 
+pytestmark = pytest.mark.live
+
 BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "").rstrip("/")
 TIMEOUT = 120  # per-turn LLM budget
 DIMENSIONS = ("trust", "loyalty", "fear", "resentment")

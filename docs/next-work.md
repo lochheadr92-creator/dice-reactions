@@ -159,17 +159,14 @@ Practical backlog from confirmed repo gaps on the **`emergent`** branch. No spec
 | **Files** | `backend/tests/`, `docs/api.md` |
 | **Dependencies** | NW-P1-01 |
 
-### NW-P2-03: CI pipeline for deterministic bundle
+### NW-P2-03: CI pipeline for deterministic bundle ✅
 
 | Field | Detail |
 |-------|--------|
-| **Problem** | No GitHub Actions / CI config; 47-test bundle run manually only. |
-| **Evidence** | 47 passed 2026-06-17; no `.github/workflows` |
-| **Impact** | Regressions on gateway/relationship/HUD undetected on PR |
-| **Recommended action** | CI job: 47-test pytest bundle + `yarn tsc` |
-| **Acceptance criteria** | CI runs deterministic tests without API key |
-| **Files** | `.github/workflows/` (future) |
-| **Dependencies** | None |
+| **Resolution** | `.github/workflows/deterministic-ci.yml` — separate backend (pytest `-m "not live"`, MongoDB service) and frontend (`yarn test`, `yarn typecheck`) jobs on `emergent` |
+| **Evidence** | 205 backend + 17 frontend tests passed locally 2026-06-20 |
+| **Files** | `.github/workflows/deterministic-ci.yml`, `backend/pytest.ini`, `backend/tests/conftest.py`, `frontend/yarn.lock` |
+| **Follow-up** | Add `yarn lint` to CI when Expo lint runs reliably on Ubuntu runners; run live `@pytest.mark.live` bundle manually |
 
 ---
 

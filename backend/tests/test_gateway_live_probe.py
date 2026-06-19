@@ -22,6 +22,8 @@ from typing import Any, Dict, List, Optional
 import pytest
 import requests
 
+pytestmark = pytest.mark.live
+
 BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "").rstrip("/")
 ACTION_TIMEOUT = 150  # seconds — rate-limited free model can fall back slowly
 NEW_TIMEOUT = 150

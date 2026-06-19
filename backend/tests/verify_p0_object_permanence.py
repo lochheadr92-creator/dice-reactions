@@ -242,6 +242,22 @@ def scenario_setup_seed_canonical() -> bool:
     return ok
 
 
+def test_scenario_status_drift():
+    assert scenario_status_drift()
+
+
+def test_scenario_compression_cycles():
+    assert scenario_compression_cycles()
+
+
+def test_scenario_ledger_dedup():
+    assert scenario_ledger_dedup()
+
+
+def test_scenario_setup_seed_canonical():
+    assert scenario_setup_seed_canonical()
+
+
 def main() -> int:
     results = []
     results.append(scenario_status_drift())

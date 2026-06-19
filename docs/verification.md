@@ -4,26 +4,59 @@ Test coverage and verification status for the **`emergent`** branch.
 
 **Evidence rule:** `memory/PRD.md` is the **planning and Source-of-Truth conformance tracker** — not runtime truth. PRD-dated verification below is **Docs-claimed** unless re-run and recorded in [current-state.md](./current-state.md) or [change-history.md](./change-history.md).
 
-## Deterministic test bundle (no live server)
+## GitHub Actions — Deterministic CI
 
-**Passed 2026-06-17 on `emergent`:** 83 tests (security, rate-limit, player allowlist, gateway, P0/P1/P1.5)
+**Workflow:** `.github/workflows/deterministic-ci.yml`
+
+| Setting | Value |
+|---------|-------|
+| Triggers | `push` to `emergent`, `pull_request` targeting `emergent`, `workflow_dispatch` |
+| Concurrency | Newer run on same branch/PR cancels in-progress run |
+| Permissions | `contents: read` only |
+| Backend Python | 3.12 |
+| Frontend Node | 20 |
+| Frontend Yarn | 1.22.22 |
+| MongoDB | Service container `mongo:7` on `localhost:27017` (hermetic — not external Atlas) |
+
+**Backend job command:**
 
 ```bash
 cd backend
-# Set ADMIN_API_KEY for security + raw-export integration tests
-export ADMIN_API_KEY=your-secret-key   # PowerShell: $env:ADMIN_API_KEY="..."
+export MONGO_URL=mongodb://localhost:27017
+export DB_NAME=dice_reactions_ci
+export ADMIN_API_KEY=test-admin-key
+python -m pytest -m "not live" -q
+```
 
-pytest tests/test_security.py \
-       tests/test_rate_limit.py \
-       tests/test_player_api.py \
-       tests/test_anti_hallucination_gateway.py \
-       tests/test_relationship_calculus.py \
-       tests/test_hud.py \
-       tests/test_gateway_e2e.py \
-       tests/verify_p0_object_permanence.py \
-       tests/verify_p1_immersion_integrity.py \
-       tests/verify_p15_microfixes.py -q
-# 83 passed
+**Frontend job commands:**
+
+```bash
+cd frontend
+yarn install --frozen-lockfile
+yarn test
+yarn typecheck
+```
+
+**Passed 2026-06-20 on `emergent`:** **205** deterministic backend tests (includes P2 consequence/rumour verifier) + **17** frontend Jest tests + TypeScript clean.
+
+**Lint:** `yarn lint` passes locally (exit 0) but is **not** a required CI step in this increment — Expo lint subprocess emits a benign `yarnpkg` shim warning on Windows; no ESLint rule debt was found.
+
+**Backend install:** `python -m pip install -r backend/requirements.txt` (exact committed file; no CI mutation). Stale `emergentintegrations==0.1.0` removed 2026-06-20 — never imported by backend code.
+
+**Frontend install:** Yarn 1.22.22 with `frontend/yarn.lock` only (`package-lock.json` removed).
+
+## Deterministic test bundle (no live server)
+
+**Local equivalent of CI backend job:**
+
+```bash
+cd backend
+# PowerShell:
+#   $env:MONGO_URL="mongodb://localhost:27017"
+#   $env:DB_NAME="dice_reactions_ci"
+#   $env:ADMIN_API_KEY="test-admin-key"
+python -m pytest -m "not live" -q
+# 205 passed, 34 deselected (live)
 ```
 
 | File | What it covers |
@@ -59,27 +92,45 @@ yarn lint
 | `verify_p0_object_permanence.py` | script | ✅ Passed 2026-06-17 |
 | `verify_p1_immersion_integrity.py` | script | ✅ Passed 2026-06-17 |
 | `verify_p15_microfixes.py` | script | ✅ Passed 2026-06-17 |
-| `test_custom_world_system.py` | pytest | **Unverified** — needs live server |
-| `test_story_engine.py` | pytest | **Unverified** — outdated assertions (Docs-claimed) |
-| `test_gateway_live_probe.py` | pytest | **Unverified** — needs live server + OpenRouter |
-| `test_relationship_calculus_live.py` | pytest | **Unverified** — needs live server + export |
+| `test_early_game_pacing.py` | pytest | ✅ Passed 2026-06-20 (offline, MongoDB) |
+| `test_http_integration.py` | pytest | ✅ Passed 2026-06-20 (TestClient + mocked LLM) |
+| `test_onboarding_hooks.py` | pytest | ✅ Passed 2026-06-20 (offline) |
+| `test_provider_selection.py` | pytest | ✅ Passed 2026-06-20 (offline) |
+| `test_ci_network_safety.py` | pytest | ✅ Passed 2026-06-20 (gateway chokepoint guard) |
+| `test_custom_world_system.py` | pytest | **Mixed** — 3 unit guards ✅ in CI; 4 integration tests marked `@pytest.mark.live` |
+| `test_story_engine.py` | pytest | **Live only** — `@pytest.mark.live` (24 tests) |
+| `test_gateway_live_probe.py` | pytest | **Live only** — `@pytest.mark.live` (5 tests) |
+| `test_relationship_calculus_live.py` | pytest | **Live only** — `@pytest.mark.live` (2 tests) |
 | `qa_live_20turn_hostile.py` | script | **Unverified** — live 20-turn stress |
 | `qa_live_20turn_full_stack.py` | script | **Unverified** — live full-stack stress |
 | `qa_live_20turn_p2_stack.py` | script | **Unverified** — live P2 stress |
-| `verify_p2_consequences_rumours.py` | script | **Unverified** — hardcoded `/app/backend` path |
+| `verify_p2_consequences_rumours.py` | pytest | ✅ Passed 2026-06-20 (offline, delayed consequences + rumour propagation) |
 
 `conftest.py` loads `backend/.env` and `frontend/.env` for `EXPO_PUBLIC_BACKEND_URL`.
 
-## Live-server tests (unverified in this pass)
+## Live tests (excluded from CI via `@pytest.mark.live`)
 
-These require MongoDB, Uvicorn on `localhost:8000` (or `EXPO_PUBLIC_BACKEND_URL`), and `OPENROUTER_API_KEY`:
+Run manually when a live stack is available:
 
-- `test_custom_world_system.py` — integration + unit guards
-- `test_story_engine.py` — full API contract (stale)
-- `test_gateway_live_probe.py` — live LLM gateway probe
-- `test_relationship_calculus_live.py` — live relationship events via `/export`
-- `qa_live_20turn_*.py` — long-run stress scripts
-- `verify_p2_consequences_rumours.py` — P2 rumour propagation (path may not match local tree)
+```bash
+cd backend
+export EXPO_PUBLIC_BACKEND_URL=http://localhost:8000
+export OPENROUTER_API_KEY=sk-or-...
+uvicorn server:app --port 8000   # separate terminal
+python -m pytest -m live -q
+```
+
+| Module | Count | Requires |
+|--------|-------|----------|
+| `test_story_engine.py` | 24 | Running FastAPI + OpenRouter |
+| `test_custom_world_system.py` (live only) | 4 | Running FastAPI + OpenRouter |
+| `test_gateway_live_probe.py` | 5 | Running FastAPI + OpenRouter |
+| `test_relationship_calculus_live.py` | 2 | Running FastAPI + OpenRouter + export |
+
+**Not collected by default pytest:**
+
+- `qa_live_20turn_*.py` — long-run stress scripts (`if __name__` only)
+
 
 Security coverage: `test_security.py` — ownership (10), admin auth (5), export safety (5). Requires `ADMIN_API_KEY` in test environment.
 
@@ -101,9 +152,36 @@ Security coverage: `test_security.py` — ownership (10), admin auth (5), export
 - Backend regression: **30 passed** (superseded locally by **47 passed** deterministic bundle on `emergent`)
 - Custom World setup visibility, preset regression, mechanic-concealment probe
 
+## What CI proves (2026-06-20)
+
+- Early-game pacing (Stage 1 structural validation, directive plumbing, context-budget protection)
+- Anti-Hallucination Gateway deterministic strip/detect/registry behaviour
+- Gateway end-to-end with mocked `invoke_llm`
+- Relationship calculus (engine-owned vectors, event deltas)
+- HUD shaping (DNG/MOM/PRS vocabularies, pressure derivation)
+- Security (ownership, admin auth, export safety, player route sanitisation)
+- Rate limiting (Mongo quotas, trusted-proxy extraction)
+- Player API allowlist sanitisation
+- Onboarding hooks and secret concealment
+- Object permanence, immersion integrity, microfix regression scenarios
+- P2 delayed consequences and rumour propagation (`verify_p2_consequences_rumours.py`)
+- Hermetic HTTP integration (TestClient + mocked LLM)
+- Provider selection routing (no live calls — network-safety autouse fixture)
+- New Chronicle frontend: Quick Start, Guided Start, Advanced Builder, duplicate-submit, payload mapping, mode isolation, large font scale
+
+## What CI does not prove
+
+- Live OpenRouter behaviour or provider fallback under outage
+- Long-run Chronicle quality (20+ turns)
+- Autonomous world movement / living-world heartbeat
+- Live MongoDB integration against Atlas or production topology
+- Browser rendering or mobile device behaviour
+- Custom World live integration (`test_custom_world_system.py` live tests)
+- Full `test_story_engine.py` API contract against real LLM output
+
 ## Observations / regressions
 
-- No runtime-breaking regressions confirmed in 47-test bundle (2026-06-17)
+- No runtime-breaking regressions in **205** deterministic backend tests (2026-06-20)
 - Prior docs described `main` branch — missing gateway/relationship/HUD; corrected in reconciliation pass
 - Lint tooling not fully clean: `test_story_engine.py` flake8 `E741` (Docs-claimed)
 
@@ -117,7 +195,7 @@ Security coverage: `test_security.py` — ownership (10), admin auth (5), export
 | P1 | 15+ turn stress chronicle (compression + context budget) |
 | P1 | Deliberate provider fallback test |
 | P1 | Pin `httpx` in `requirements.txt` |
-| P2 | CI job for 47-test deterministic bundle |
+| P2 | ~~CI job for deterministic bundle~~ ✅ `.github/workflows/deterministic-ci.yml` |
 | P2 | In-app long-run diagnostics summary |
 | P2 | Share/export-friendly chronicle summary view |
 
@@ -131,7 +209,7 @@ Do not schedule unless a future subsystem introduces scoring/ranking.
 ## Items marked Unknown
 
 - Whether P1 live stress tests have been run since PRD last update
-- CI/CD integration for automated verification
+- ~~CI/CD integration for automated verification~~ — **resolved** 2026-06-20 (`deterministic-ci.yml`)
 - Coverage metrics or minimum coverage targets
 - Production monitoring / alerting setup
-- Frontend `tsc` / `lint` status on current `emergent` HEAD
+- Frontend `tsc` ✅ and Jest ✅ on `emergent` HEAD 2026-06-20; lint clean but excluded from required CI

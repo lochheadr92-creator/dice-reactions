@@ -6,7 +6,11 @@ from pathlib import Path
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-# Explicit admin key for live/raw-export tests — do not rely on import order.
+# Safe defaults so server.py imports succeed in hermetic CI without a .env file.
+os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
+os.environ.setdefault("DB_NAME", "dice_reactions_test")
+
+# Explicit admin key for security/raw-export tests — do not rely on import order.
 os.environ.setdefault("ADMIN_API_KEY", "test-admin-key-for-live-suite")
 
 # Frontend env has the public URL
@@ -31,3 +35,19 @@ def api_client():
     s = requests.Session()
     s.headers.update({"Content-Type": "application/json"})
     return s
+
+
+@pytest.fixture(autouse=True)
+def block_live_llm_in_deterministic_suite(request, monkeypatch):
+    """Fail closed if gateway.invoke_llm is reached during non-live tests."""
+    if request.node.get_closest_marker("live"):
+        return
+
+    import gateway
+
+    def _blocked(*_args, **_kwargs):
+        raise RuntimeError(
+            "Live LLM provider call blocked in deterministic test suite"
+        )
+
+    monkeypatch.setattr(gateway, "invoke_llm", _blocked)

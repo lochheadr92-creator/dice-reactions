@@ -223,6 +223,22 @@ def scenario_no_p1b_regression() -> bool:
     return ok
 
 
+def test_scenario_f1_hygiene():
+    assert scenario_f1_hygiene()
+
+
+def test_scenario_f2_schema():
+    assert scenario_f2_schema()
+
+
+def test_scenario_f3_verb_trim():
+    assert scenario_f3_verb_trim()
+
+
+def test_scenario_no_p1b_regression():
+    assert scenario_no_p1b_regression()
+
+
 def main() -> int:
     results = []
     results.append(scenario_f1_hygiene())
