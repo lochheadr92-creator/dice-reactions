@@ -16,26 +16,31 @@ Distinguishes **runnable today** (commands exist in repo) from **recommended** (
 
 ## Before merge
 
-### Runtime tests (runnable)
+### Runtime tests (runnable — matches CI)
 
 ```bash
-# Backend deterministic verification (no live server; needs MongoDB + ADMIN_API_KEY)
+# Backend deterministic verification (no live server; needs local MongoDB)
 cd backend
-export ADMIN_API_KEY=your-secret-key   # or set in backend/.env
-pytest tests/test_early_game_pacing.py \
-       tests/test_security.py \
-       tests/test_rate_limit.py \
-       tests/test_player_api.py \
-       tests/test_anti_hallucination_gateway.py \
-       tests/test_relationship_calculus.py \
-       tests/test_hud.py \
-       tests/test_gateway_e2e.py \
-       tests/verify_p0_object_permanence.py \
-       tests/verify_p1_immersion_integrity.py \
-       tests/verify_p15_microfixes.py -q
+export MONGO_URL=mongodb://localhost:27017
+export DB_NAME=dice_reactions_ci
+export ADMIN_API_KEY=test-admin-key
+python -m pytest -m "not live" -q
 ```
 
-- [ ] Security + deterministic bundle passes (83 tests)
+- [ ] Deterministic backend bundle passes (**205** tests as of 2026-06-20)
+
+### Frontend tests (matches CI)
+
+```bash
+cd frontend
+yarn install --frozen-lockfile
+yarn test
+yarn typecheck
+```
+
+- [ ] Jest New Chronicle suite passes (17 tests)
+- [ ] TypeScript passes
+- [ ] Lint passes (optional — not required in CI until Expo lint shim warning resolved cross-platform)
 
 ### Runtime tests (require live backend + OpenRouter key)
 
@@ -66,16 +71,12 @@ pytest tests/test_story_engine.py -q   # update assertions if outdated
 - [ ] `GET /api/story/session/{id}/export` shape matches documented schema
 - [ ] `POST /api/story/session/{id}/reset` returns `{ reset: true }` and clears turns
 
-### Frontend build (runnable)
+### GitHub Actions (automated on `emergent`)
 
-```bash
-cd frontend
-yarn tsc --noEmit
-yarn lint
-```
+Workflow: `.github/workflows/deterministic-ci.yml`
 
-- [ ] Typecheck passes
-- [ ] Lint passes (known: generic JS lint may be unreliable on TSX per PRD)
+- [ ] Backend job green (pytest `-m "not live"`)
+- [ ] Frontend job green (`yarn test`, `yarn typecheck`)
 
 ### Configuration review
 
@@ -108,7 +109,7 @@ yarn lint
 
 ### Git diff review
 
-- [ ] No unintended `frontend/package-lock.json` changes
+- [ ] No unintended `frontend/yarn.lock` changes (Yarn is canonical; `package-lock.json` removed)
 - [ ] No runtime code changes bundled with doc-only PRs
 - [ ] Guard pipeline order preserved
 

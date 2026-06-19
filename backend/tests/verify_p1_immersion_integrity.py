@@ -323,6 +323,22 @@ def scenario_npc_memory_and_faction() -> bool:
     return ok
 
 
+def test_scenario_leak_validator():
+    assert scenario_leak_validator()
+
+
+def test_scenario_direct_inspection():
+    assert scenario_direct_inspection()
+
+
+def test_scenario_room_audit():
+    assert scenario_room_audit()
+
+
+def test_scenario_npc_memory_and_faction():
+    assert scenario_npc_memory_and_faction()
+
+
 def main() -> int:
     results = []
     results.append(scenario_leak_validator())

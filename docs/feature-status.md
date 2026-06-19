@@ -16,7 +16,7 @@
 | Backend player sanitization | Verified complete | `player_api.py` allowlist serializers | `test_security.py`, `test_player_api.py` ✅ | `architecture.md` | — | — |
 | Story creation rate limits | Verified complete (deterministic) | `rate_limit.py` | `test_rate_limit.py` ✅ | `api.md` | IP trust requires `TRUSTED_PROXY_COUNT` | Tune limits per deployment |
 | Frontend sanitization | Verified complete (unit) | `frontend/src/sanitize.ts`, `play/[id].tsx` | None dedicated | `frontend.md` | Presentation-only; state still holds leaks | Optional snapshot tests |
-| Object permanence | Verified complete (deterministic) | `server.py`, `memory.py` | `verify_p0_object_permanence.py` ✅ | `story-engine.md` | Heuristic ledger matching | Run inside CI |
+| Object permanence | Verified complete (deterministic) | `server.py`, `memory.py` | `verify_p0_object_permanence.py` ✅ | `story-engine.md` | Heuristic ledger matching | — |
 | Inventory and item state | Partial | `server.py`, `memory.py`, `gateway.py` (destruction registry) | P0 ✅, `test_gateway_e2e.py` ✅ | `story-engine.md` | LLM can invent items before guards | Live hostile inventory probe |
 | Actor resolution | Planned — not present | — | — | PRD Ch 25 | No module in repo or git history | Implement or mark permanently out of scope |
 | Relationship threads (legacy) | Partial | `server.py` (seed + prompt schema), `memory.py` | Custom World tests (unverified) | `story-engine.md` | Superseded by `relationship_vectors` for mechanics | Document as narrative seed only |
@@ -42,7 +42,7 @@
 | Room audit | Verified complete (deterministic) | `server.py` `_apply_room_audit` | P1-C ✅ | `story-engine.md` | Drift flag only; no auto-repair | — |
 | Curated scenarios | Implemented but unverified | `scenarios.py`, `new-story.tsx` | Indirect via `story/new` | `overview.md` | Only 3 presets | Live preset smoke test |
 | Advanced Builder preservation during Guided Start rollout | Verified complete (preserved, not extracted) | `frontend/app/new-story.tsx` | `frontend/__tests__/new-story.test.tsx` ✅, browser preview regression ✅ | `current-state.md` | Still a large screen file; Phase 4 extraction pending | Refactor later without changing contract |
-| Context budget governor | Implemented but unverified | `memory.enforce_context_budget` | None dedicated | `story-engine.md` | Heuristic token estimate | 15+ turn budget test |
+| Context budget governor | Verified complete (deterministic) | `memory.enforce_context_budget` | `test_early_game_pacing.py` ✅ | `story-engine.md` | Heuristic token estimate | 15+ turn live budget stress |
 | Scoring / rankings | N/A | — | — | — | Never existed in this repo | Do not backlog as lost feature |
 
 **Status definitions used:**

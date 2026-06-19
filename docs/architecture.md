@@ -201,7 +201,7 @@ Device-scoped isolation — not full user accounts. See [api.md](./api.md) and A
 
 - MongoDB indexes and migration strategy
 - Production deployment topology (hosting, process manager, TLS termination)
-- Whether `emergentintegrations` package is used at runtime (listed in `requirements.txt` but not imported in inspected app modules)
+- ~~Whether `emergentintegrations` package is used at runtime~~ — **resolved**: never imported; removed from `requirements.txt` 2026-06-20
 - Explicit `httpx` dependency declaration (`ai_service.py` imports it; not listed directly in `requirements.txt`)
 
 **Export endpoint:** Documented in [api.md](./api.md) — returns unsanitized full session + turns (max 500), no `device_id` check.

@@ -4,6 +4,20 @@ Lightweight log of documentation and operational changes. One entry per meaningf
 
 ---
 
+## 2026-06-20 — Deterministic GitHub Actions CI
+
+| Field | Detail |
+|-------|--------|
+| **Change** | Added `.github/workflows/deterministic-ci.yml` (push/PR to `emergent`, `workflow_dispatch`). Added `backend/pytest.ini` with `live` marker. Marked live-only tests in `test_story_engine.py`, `test_gateway_live_probe.py`, `test_relationship_calculus_live.py`, and four integration tests in `test_custom_world_system.py`. Added network-safety autouse fixture in `conftest.py` and `test_ci_network_safety.py`. Added pytest wrappers in verify scripts. Added `frontend/package.json` scripts `test` and `typecheck`; generated `frontend/yarn.lock`. |
+| **Reason** | Automate deterministic regression detection on every `emergent` push/PR without OpenRouter, live server, or paid APIs. |
+| **Files affected** | `.github/workflows/deterministic-ci.yml`, `backend/pytest.ini`, `backend/tests/conftest.py`, live marker files, verify wrappers, `frontend/package.json`, `frontend/yarn.lock`, `docs/verification.md`, `docs/release-checklist.md`, `docs/current-state.md`, `docs/feature-status.md`, `docs/next-work.md`, `docs/change-history.md` |
+| **Tests run** | Backend: `python -m pytest -m "not live" -q` → **205 passed**, 34 deselected. Frontend: `yarn test` → **17 passed**; `yarn typecheck` → clean |
+| **CI boundary** | Proves deterministic backend/frontend surfaces; excludes live OpenRouter, provider fallback, long-run quality, browser/mobile |
+| **Dependency note** | Removed unused `emergentintegrations==0.1.0` from `requirements.txt`; CI installs exact committed file |
+| **Hardening patch** | Deleted `frontend/package-lock.json` (Yarn canonical); fixed `verify_p2_consequences_rumours.py` path + pytest wrapper → **205** deterministic tests |
+
+---
+
 ## 2026-06-20 — Early-Game Pacing Governor v1
 
 | Field | Detail |

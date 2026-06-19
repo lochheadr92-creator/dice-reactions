@@ -3,7 +3,7 @@ from pathlib import Path
 import json
 
 # Add backend dir to path so we can import server.py functions
-sys.path.append(str(Path('/app/backend')))
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from server import _apply_delayed_consequence_tick, _apply_rumour_propagation_tick
 
@@ -292,6 +292,10 @@ def run_tests():
 
 
     print("\nAll synthetic tests passed successfully! 🎉")
+
+def test_verify_p2_consequences_and_rumours():
+    run_tests()
+
 
 if __name__ == "__main__":
     run_tests()
