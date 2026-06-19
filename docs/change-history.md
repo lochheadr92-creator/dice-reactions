@@ -4,6 +4,20 @@ Lightweight log of documentation and operational changes. One entry per meaningf
 
 ---
 
+## 2026-06-20 — Early-Game Pacing Governor v1
+
+| Field | Detail |
+|-------|--------|
+| **Change** | Added `backend/pacing.py` (stage mapping, non-persisted directives, Stage 1 structural validation, pacing retry instruction). Wired into `server.py` `_build_messages`, `_full_validate`, `_generate_validated_turn`, and strengthened `_create_new_story` genesis contract. Added `backend/tests/test_early_game_pacing.py` (46 tests). Updated `test_gateway_e2e.py` Turn 1 fixture for Stage 1 required fields. |
+| **Reason** | Reduce slow atmospheric openings without claiming prompt instructions constitute an autonomous world heartbeat. |
+| **Files affected** | `backend/pacing.py`, `backend/server.py`, `backend/tests/test_early_game_pacing.py`, `backend/tests/test_gateway_e2e.py`, `docs/current-state.md`, `docs/feature-status.md`, `docs/failure-modes.md`, `docs/decision-log.md`, `docs/next-work.md`, `docs/change-history.md` |
+| **Tests run** | `pytest tests/test_early_game_pacing.py tests/test_security.py tests/test_anti_hallucination_gateway.py tests/test_relationship_calculus.py tests/test_hud.py tests/test_gateway_e2e.py tests/verify_p0_object_permanence.py tests/verify_p1_immersion_integrity.py tests/verify_p15_microfixes.py -q` → **118 passed** |
+| **Documentation updated** | Listed above |
+| **Decision-log entry** | ADR-016 |
+| **Remaining risks** | Semantic opening quality provider-dependent; Living World Test unresolved; Stage 3 green test proves directive plumbing only |
+
+---
+
 ## 2026-06-17 — P0/P1 security hardening (rate limits + allowlists + minimal health)
 
 | Field | Detail |

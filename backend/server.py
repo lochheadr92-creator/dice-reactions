@@ -48,6 +48,7 @@ from memory import (  # noqa: E402
 import gateway  # noqa: E402  — Anti-Hallucination Gateway (Ch 31)
 import relationships  # noqa: E402  — Relationship Calculus (Ch 29)
 import hud  # noqa: E402  — player-facing HUD shaping (status chips + Pressure)
+import pacing  # noqa: E402  — Early-Game Pacing Governor v1 (deterministic)
 from security import fetch_owned_session, require_admin, require_device_id  # noqa: E402
 from rate_limit import (  # noqa: E402
     _rollback_bucket_reservations,
@@ -1789,6 +1790,7 @@ async def _build_messages(
     user_text: str,
     memory_depth: int,
     history_window_fallback: int,
+    early_game_stage: Optional[int] = None,
 ) -> List[Dict[str, str]]:
     """Construct an OpenAI-style messages array.
 
@@ -1805,6 +1807,12 @@ async def _build_messages(
     messages: List[Dict[str, str]] = [
         {"role": "system", "content": STORY_ENGINE_SYSTEM_PROMPT},
     ]
+
+    pacing_directive = pacing.build_early_game_directive(
+        early_game_stage, session.get("rolling_state")
+    )
+    if pacing_directive:
+        messages.append({"role": "system", "content": pacing_directive})
 
     rolling = session.get("rolling_state")
 
@@ -1847,7 +1855,9 @@ async def _build_messages(
 
 
 async def _generate_turn(
-    session: Dict[str, Any], user_text: str
+    session: Dict[str, Any],
+    user_text: str,
+    early_game_stage: Optional[int] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """Centralised call: resolve admin settings + per-session mode, build messages, call aiService.
 
@@ -1913,6 +1923,7 @@ async def _generate_turn(
         augmented_user_text,
         memory_depth=memory_depth,
         history_window_fallback=history_window,
+        early_game_stage=early_game_stage,
     )
 
     # ---- Context Budget Governor v3.9 ----
@@ -2155,14 +2166,20 @@ def _full_validate(
     parsed: ParsedTurn,
     session: Dict[str, Any],
     player_action: Optional[str],
+    early_game_stage: Optional[int] = None,
 ) -> Tuple[bool, str, str]:
-    """Format validation first, then Anti-Hallucination prose check.
+    """Format validation, optional Stage-1 pacing check, then prose contradiction.
 
-    Returns ``(ok, reason, kind)`` where kind ∈ {"format", "hallucination", "ok"}.
+    Returns ``(ok, reason, kind)`` where kind ∈
+    {"format", "pacing", "hallucination", "ok"}.
     """
     ok, reason = _validate_parsed(parsed, player_action=player_action)
     if not ok:
         return False, reason, "format"
+    if early_game_stage == 1:
+        pacing_reason = pacing.validate_opening_structure(parsed)
+        if pacing_reason:
+            return False, pacing_reason, "pacing"
     contradictions = gateway.detect_prose_contradictions(
         session.get("rolling_state"), parsed, player_action
     )
@@ -2180,18 +2197,30 @@ async def _generate_validated_turn(
     Returns ``(parsed, raw, meta)`` where meta aggregates model_used,
     fallback_events across both attempts, telemetry, and validation diagnostics.
     """
-    raw, meta = await _generate_turn(session, user_text)
+    early_game_stage = pacing.get_early_game_stage(session.get("turn_count", 0))
+    dev_on = "[DEV_MODE: ON]" in user_text
+
+    raw, meta = await _generate_turn(session, user_text, early_game_stage=early_game_stage)
     parsed = parse_turn(raw)
-    ok, reason, kind = _full_validate(parsed, session, player_action)
+    ok, reason, kind = _full_validate(
+        parsed, session, player_action, early_game_stage=early_game_stage
+    )
     if ok:
+        if (
+            dev_on
+            and early_game_stage == 3
+            and not pacing.has_engine_owned_development(session.get("rolling_state"))
+        ):
+            meta["pacing_stage3_no_engine_development"] = True
         return parsed, raw, meta
 
-    dev_on = "[DEV_MODE: ON]" in user_text
     debug_clause = ", <debug>" if dev_on else ""
     if kind == "hallucination":
         retry_note = _HALLUCINATION_RETRY_INSTRUCTION.format(
             reason=reason, debug_clause=debug_clause
         )
+    elif kind == "pacing":
+        retry_note = pacing.build_pacing_retry_instruction(reason, debug_clause)
     else:
         retry_note = _RETRY_INSTRUCTION.format(reason=reason, debug_clause=debug_clause)
     logger.info("Turn validation failed (%s/%s) — retrying once", kind, reason)
@@ -2220,6 +2249,7 @@ async def _generate_validated_turn(
             user_text,
             memory_depth=memory_depth,
             history_window_fallback=history_window,
+            early_game_stage=early_game_stage,
         )
         # Show the model exactly what it produced, then ask it to rewrite.
         messages.append({"role": "assistant", "content": raw[:6000]})
@@ -2261,7 +2291,9 @@ async def _generate_validated_turn(
         result2["budget"] = retry_budget_diag
         raw2 = result2["content"]
         parsed2 = parse_turn(raw2)
-        ok2, reason2, kind2 = _full_validate(parsed2, session, player_action)
+        ok2, reason2, kind2 = _full_validate(
+            parsed2, session, player_action, early_game_stage=early_game_stage
+        )
 
         combined_meta: Dict[str, Any] = {
             "model_used": result2["model_used"],
@@ -2278,6 +2310,12 @@ async def _generate_validated_turn(
         }
 
         if ok2:
+            if (
+                dev_on
+                and early_game_stage == 3
+                and not pacing.has_engine_owned_development(session.get("rolling_state"))
+            ):
+                combined_meta["pacing_stage3_no_engine_development"] = True
             return parsed2, raw2, combined_meta
 
         logger.warning(
@@ -2346,6 +2384,8 @@ def _meta_into_debug(
         debug["validation_first_fail"] = str(meta["validation_first_fail"])
     if meta.get("validation_second_fail"):
         debug["validation_second_fail"] = str(meta["validation_second_fail"])
+    if meta.get("pacing_stage3_no_engine_development"):
+        debug["pacing_stage3_no_engine_development"] = "true"
     # ---- Context Budget Governor v3.9 diagnostics ----
     budget = meta.get("budget") or {}
     for key, label in (
@@ -2651,7 +2691,10 @@ async def _create_new_story(req: NewStoryRequest):
         f"{difficulty_marker}\n"
         f"{mode_marker}\n\n"
         f"Begin the story now. Use the following setup:\n{setup_text}\n\n"
-        f"Open with an immersive in-medias-res scene that establishes location, sensory atmosphere, the character's immediate situation, and one active pressure or hook. "
+        f"Open in medias res with a specific immediate situation — not pure setup, routine, or generic exploration. "
+        f"Give the player a reason to decide now and connect first choices to that situation. "
+        f"Populate state Pressure, rolling_state.active_pressures, and at least one objectives or unresolved stake. "
+        f"Preserve hidden-threat secrecy; do not reveal latent threats merely to create pace. "
         f"Populate the inventory ledger with the starting kit. "
         f"Present the appropriate number of meaningful first choices for the mode. "
         f"Honour the difficulty modifier on this very first roll. "

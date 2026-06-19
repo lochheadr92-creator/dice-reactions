@@ -22,7 +22,8 @@ Distinguishes **runnable today** (commands exist in repo) from **recommended** (
 # Backend deterministic verification (no live server; needs MongoDB + ADMIN_API_KEY)
 cd backend
 export ADMIN_API_KEY=your-secret-key   # or set in backend/.env
-pytest tests/test_security.py \
+pytest tests/test_early_game_pacing.py \
+       tests/test_security.py \
        tests/test_rate_limit.py \
        tests/test_player_api.py \
        tests/test_anti_hallucination_gateway.py \

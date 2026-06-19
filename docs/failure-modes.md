@@ -291,6 +291,36 @@ For each mode: detection, prevention, recovery, and **current protection status*
 
 ---
 
+## FM-21: Slow or atmospheric early-game openings
+
+| Field | Detail |
+|-------|--------|
+| **Trigger** | LLM emits setup-heavy Turn 1 prose despite genesis contract; Stages 2–4 guidance ignored. |
+| **Effect** | Player spends several turns in low-yield exploration before encountering a concrete situation. |
+| **Detection** | Live play review; optional qualitative opening probe (provider-dependent). |
+| **Prevention** | Stage 1 genesis directive + structural field-presence validation (`pacing.validate_opening_structure`); strengthened `_create_new_story` opening contract; Stages 2–4 non-persisted continuity guidance. |
+| **Recovery** | Single pacing retry on Stage 1 structural failure; player action still resolves normally on later turns. |
+| **Files** | `pacing.py`, `server.py` |
+| **Tests** | `test_early_game_pacing.py` ✅ (directive routing, validation, retry budget, leak safety) |
+| **Status** | **Partial** — deterministic field-presence enforced on Stage 1 only; semantic pacing quality not deterministically proven; no autonomous heartbeat |
+
+---
+
+## FM-22: Pacing directive leak into player-visible persistence
+
+| Field | Detail |
+|-------|--------|
+| **Trigger** | Internal pacing system message mistakenly stored in turn/session/export payloads. |
+| **Effect** | Engine instructions visible in chronicle, exports, or API responses. |
+| **Detection** | `test_early_game_pacing.py` persistence/export assertions. |
+| **Prevention** | Directive injected only as ephemeral system message in `_build_messages`; never appended to `player_action` or rolling state. |
+| **Recovery** | N/A — prevented by construction. |
+| **Files** | `pacing.py`, `server.py` |
+| **Tests** | `test_early_game_pacing.py` ✅ |
+| **Status** | **Protected** (deterministic leak tests) |
+
+---
+
 ## FM-19: Stale documentation treated as runtime truth
 
 | Field | Detail |

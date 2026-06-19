@@ -107,6 +107,18 @@ Practical backlog from confirmed repo gaps on the **`emergent`** branch. No spec
 | **Files** | `backend/requirements.txt` |
 | **Dependencies** | None |
 
+### NW-P1-07: Living World Test (autonomous heartbeat — not implemented)
+
+| Field | Detail |
+|-------|--------|
+| **Problem** | Early-Game Pacing Governor v1 improves opening guidance and Stage 1 field-presence but does not prove the world moves without player requests. |
+| **Evidence** | ADR-016; `test_early_game_pacing.py` explicitly does not claim autonomous simulation |
+| **Impact** | Cannot verify engine-owned world advancement between turns or while player is absent |
+| **Recommended action** | Design and implement a separate Living World Test: deterministic engine ticks producing state before LLM narration; Stage 3 must surface only engine-authored developments |
+| **Acceptance criteria** | Test proves state changes originate from engine modules, not pacing directives alone; documented separately from pacing v1 |
+| **Files** | Future engine modules; `docs/verification.md` |
+| **Dependencies** | Pressure ecology / delayed-consequence engine maturity (planned — not present) |
+
 ### NW-P1-06: Live gateway and relationship probes
 
 | Field | Detail |

@@ -46,11 +46,17 @@ def _run(scenario):
     return asyncio.run(wrapper())
 
 
-def _raw(narrative, rolling_state, ledger, choices="A. Go left\nB. Go right\nC. Wait\nD. Listen"):
+def _raw(
+    narrative,
+    rolling_state,
+    ledger,
+    choices="A. Go left\nB. Go right\nC. Wait\nD. Listen",
+    pressure="the chamber is collapsing",
+):
     return (
         f"<narrative>\n{narrative}\n</narrative>\n"
         f"<choices>\n{choices}\n</choices>\n"
-        f"<state>\nHealth: wounded\n</state>\n"
+        f"<state>\nHealth: wounded\nPressure: {pressure}\n</state>\n"
         f"<ledger>\n" + "\n".join(f"{k}: {v}" for k, v in ledger.items()) + "\n</ledger>\n"
         f"<rolling_state>\n{json.dumps(rolling_state)}\n</rolling_state>\n"
     )
@@ -62,6 +68,8 @@ TURN1 = _raw(
     "breathes, pressed flat against the wall.",
     {
         "scene": "a collapsing furnace chamber",
+        "active_pressures": ["roof beams cracking overhead"],
+        "objectives": ["escape before the chamber seals"],
         "object_locations": [{"object": "iron key", "status": "destroyed", "where": "furnace"}],
         "npcs": [{"name": "Garrett", "stance": "unknown"}, {"name": "Mira", "stance": "neutral"}],
         "npc_memory": [
