@@ -175,14 +175,29 @@ For each mode: detection, prevention, recovery, and **current protection status*
 
 | Field | Detail |
 |-------|--------|
-| **Trigger** | Turns fetched out of order; concurrent writes **Unknown**. |
-| **Effect** | Wrong chronicle display. |
-| **Detection** | `sort("turn_number", 1)` on queries. |
-| **Prevention** | Monotonic `turn_number` increment in code. |
-| **Recovery** | Re-fetch session. |
-| **Files** | `server.py` |
-| **Tests** | `test_story_engine.py` (ordering assertion — not run) |
-| **Status** | **Partial** — single-writer assumed; no concurrency tests |
+| **Trigger** | Turns fetched out of order; concurrent `story_action` writes (mitigated for `story_action` only as of v1). |
+| **Effect** | Wrong chronicle display; duplicate turn numbers (mitigated when unique index present). |
+| **Detection** | `sort("turn_number", 1)` on queries; HTTP **409** on lease conflict. |
+| **Prevention** | Mongo-backed action lease before provider work; `next_turn_number` from locked session; final CAS on lease token + `turn_count`; optional unique `(session_id, turn_number)` index. |
+| **Recovery** | Re-fetch session; stale lease expires (default 600s) and may be reclaimed; rejected concurrent action makes zero provider calls. |
+| **Files** | `action_concurrency.py`, `server.py` |
+| **Tests** | `test_action_concurrency.py` ✅ |
+| **Status** | **Partial** — `story_action` protected; reset/delete/mode unguarded |
+
+---
+
+## FM-12b: Concurrent story_action overlap
+
+| Field | Detail |
+|-------|--------|
+| **Trigger** | Duplicate tab submit, network retry, or second worker while an action is in flight. |
+| **Effect** | Without guard: duplicate turns, clobbered rolling state, double secret reveals, wasted provider spend. |
+| **Detection** | Lease acquire miss → HTTP **409** `An action is already in progress for this chronicle`. |
+| **Prevention** | Atomic lease acquire before reveal/provider; token-scoped release; CAS before session commit. |
+| **Recovery** | Client retries after first action completes; expired lease auto-recovers. |
+| **Files** | `action_concurrency.py`, `server.py` (`story_action`) |
+| **Tests** | `test_action_concurrency.py` ✅ |
+| **Status** | **Protected** for `POST /story/action` only (deterministic tests) |
 
 ---
 

@@ -45,6 +45,19 @@ Practical backlog from confirmed repo gaps on the **`emergent`** branch. No spec
 
 ---
 
+## Completed (Session Action Concurrency Guard v1)
+
+### NW-CONCURRENCY-01: Per-session action lease ✅
+
+| Field | Detail |
+|-------|--------|
+| **Resolution** | `backend/action_concurrency.py` — Mongo lease on session; acquire before provider; CAS persistence; HTTP **409** on conflict |
+| **Tests** | `test_action_concurrency.py` ✅ (33 cases); `test_secret_reveal.py` regression ✅ |
+| **ADR** | ADR-018 |
+| **Follow-up** | Reset/delete/mode concurrency audit; frontend 409 UX; repair plan if historical duplicate `(session_id, turn_number)` rows block unique index |
+
+---
+
 ## Completed (Secret Reveal Trigger v1)
 
 ### NW-SECRET-01: Explicit confession reveal ✅

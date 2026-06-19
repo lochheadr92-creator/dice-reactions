@@ -104,6 +104,14 @@ Submit a player action for the next turn.
 
 **Response:** `{ turn: Turn }`
 
+**Conflict (concurrent action):** When another unexpired action already owns the session lease, the server returns **409** with:
+
+```json
+{ "detail": "An action is already in progress for this chronicle" }
+```
+
+No lock token, timestamps, internal field names, or player action text are included. The rejected request makes zero provider calls. Successful responses are unchanged.
+
 Turn shape (player-facing responses always omit internal fields):
 
 | Field | Type |
