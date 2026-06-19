@@ -60,6 +60,16 @@ from rate_limit import (  # noqa: E402
     release_story_creation_slot,
     resolve_client_ip,
 )
+from action_concurrency import (  # noqa: E402
+    ACTION_CONFLICT_DETAIL,
+    ActionLeaseConflict,
+    ActionLeaseLost,
+    acquire_action_lease,
+    build_model_lock_patch,
+    build_persist_cas_filter,
+    ensure_action_concurrency_indexes,
+    release_action_lease,
+)
 from player_api import (  # noqa: E402
     build_new_story_session_payload,
     build_player_session,
@@ -2834,6 +2844,38 @@ async def _apply_story_action_session_update(
     await db.sessions.update_one({"id": session_id}, {"$set": update_set})
 
 
+async def _cas_update_story_action_session(
+    session_id: str,
+    lease_token: str,
+    expected_turn_count: int,
+    update_set: Dict[str, Any],
+    meta: Dict[str, Any],
+    turn_number: int,
+) -> bool:
+    """Final session write: lease token + expected turn_count CAS, model lock folded in."""
+    model_set, model_push = build_model_lock_patch(meta, turn_number)
+    final_set = {**update_set, **model_set}
+    ops: Dict[str, Any] = {"$set": final_set}
+    if model_push:
+        ops["$push"] = model_push
+    cas_filter = build_persist_cas_filter(
+        session_id, lease_token, expected_turn_count
+    )
+    result = await db.sessions.update_one(cas_filter, ops)
+    if result.matched_count:
+        fe = list(meta.get("fallback_events") or [])
+        if fe:
+            logger.warning(
+                "Session %s model switch: %s (turn %s)",
+                session_id,
+                " → ".join([fe[0].get("from") or ""] + [e.get("to") or "" for e in fe]),
+                turn_number,
+            )
+        return True
+    logger.info("action persistence CAS conflict for session %s", session_id)
+    return False
+
+
 async def _persist_story_action_turn(
     session_id: str,
     turn_number: int,
@@ -2841,16 +2883,30 @@ async def _persist_story_action_turn(
     update_set: Dict[str, Any],
     session_snapshot: Dict[str, Any],
     meta: Dict[str, Any],
+    *,
+    lease_token: str,
+    expected_turn_count: int,
 ) -> None:
-    """Atomically persist one story_action turn via compensating rollback."""
+    """Persist one story_action turn: insert turn, then lease+turn_count CAS session update."""
     turn_inserted = False
     session_updated = False
     try:
         await _insert_story_action_turn(turn_doc)
         turn_inserted = True
-        await _apply_story_action_session_update(session_id, update_set)
-        session_updated = True
-        await _persist_model_lock(session_id, meta, at_turn=turn_number)
+        if await _cas_update_story_action_session(
+            session_id,
+            lease_token,
+            expected_turn_count,
+            update_set,
+            meta,
+            turn_number,
+        ):
+            session_updated = True
+            return
+        await db.turns.delete_one({"session_id": session_id, "id": turn_doc["id"]})
+        raise ActionLeaseLost()
+    except ActionLeaseLost:
+        raise
     except Exception:
         logger.exception("story persistence failed during story_action")
         try:
@@ -3091,178 +3147,177 @@ async def _create_new_story(req: NewStoryRequest):
 
 @api_router.post("/story/action")
 async def story_action(req: ActionRequest, device_id: str = Depends(require_device_id)):
-    session = await fetch_owned_session(db, req.session_id, device_id)
-
-    debug_marker = "[DEV_MODE: ON]" if (await get_ai_settings()).get("developer_mode") and req.debug_mode else "[DEV_MODE: OFF]"
-    difficulty_marker = f"[DIFFICULTY: {session.get('difficulty', 'standard')}]"
-    mode_marker = f"[MODE: {session.get('mode', DEFAULT_MODE)}]"
-    user_text = f"{debug_marker}\n{difficulty_marker}\n{mode_marker}\n\nPlayer action: {req.action_text}"
-
-    next_turn_number = session.get("turn_count", 0) + 1
-    working_rolling, secret_directive, reveal_diag = secrets.prepare_turn_reveal(
-        session.get("rolling_state"),
-        req.action_text,
-        next_turn_number,
-    )
-    gen_session = dict(session)
-    gen_session["rolling_state"] = working_rolling
-
+    lease_token: Optional[str] = None
+    session_id = req.session_id
     try:
-        parsed, raw, meta = await _generate_validated_turn(
-            gen_session,
-            user_text,
+        session, lease_token = await acquire_action_lease(db, session_id, device_id)
+        expected_turn_count = session.get("turn_count", 0)
+        next_turn_number = expected_turn_count + 1
+
+        debug_marker = "[DEV_MODE: ON]" if (await get_ai_settings()).get("developer_mode") and req.debug_mode else "[DEV_MODE: OFF]"
+        difficulty_marker = f"[DIFFICULTY: {session.get('difficulty', 'standard')}]"
+        mode_marker = f"[MODE: {session.get('mode', DEFAULT_MODE)}]"
+        user_text = f"{debug_marker}\n{difficulty_marker}\n{mode_marker}\n\nPlayer action: {req.action_text}"
+
+        working_rolling, secret_directive, reveal_diag = secrets.prepare_turn_reveal(
+            session.get("rolling_state"),
+            req.action_text,
+            next_turn_number,
+        )
+        gen_session = dict(session)
+        gen_session["rolling_state"] = working_rolling
+
+        try:
+            parsed, raw, meta = await _generate_validated_turn(
+                gen_session,
+                user_text,
+                player_action=req.action_text,
+                secret_reveal_directive=secret_directive,
+            )
+        except AIServiceError:
+            logger.exception("AI service failed during story_action")
+            raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
+        except Exception:
+            logger.exception("LLM call failed during story_action")
+            raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
+
+        secrets.merge_reveal_diagnostics(meta, reveal_diag)
+        guard_adjustments = _apply_state_supremacy(session, parsed, req.action_text)
+        guard_adjustments.extend(_apply_object_permanence(parsed))
+
+        # ---- Anti-Hallucination Gateway (Ch 31) — STRIP illegal mutations ----
+        prior_rolling = working_rolling
+        guard_adjustments.extend(
+            gateway.strip_illegal_state_changes(
+                prior_rolling, session.get("last_state"), parsed, req.action_text
+            )
+        )
+        enriched_debug = _meta_into_debug(parsed.debug, meta)
+
+        # ---- Rolling Memory Compression v3.8 ----
+        merged_rolling = consolidate_rolling_state(prior_rolling, parsed.rolling_state)
+        guard_adjustments.extend(
+            secrets.enforce_authoritative_registry(
+                merged_rolling,
+                working_rolling.get("secret_registry"),
+            )
+        )
+
+        guard_adjustments.extend(
+            _apply_ledger_object_permanence(parsed, authoritative_state=merged_rolling)
+        )
+        guard_adjustments.extend(_apply_room_audit(parsed, merged_rolling))
+        guard_adjustments.extend(
+            _apply_npc_memory_bounds(merged_rolling, current_turn=next_turn_number)
+        )
+        guard_adjustments.extend(_apply_faction_consequence_tick(merged_rolling))
+        guard_adjustments.extend(
+            _apply_delayed_consequence_tick(merged_rolling, current_turn=next_turn_number)
+        )
+        guard_adjustments.extend(
+            _apply_rumour_propagation_tick(merged_rolling, current_turn=next_turn_number)
+        )
+        guard_adjustments.extend(_apply_rolling_state_hygiene(merged_rolling))
+        guard_adjustments.extend(
+            gateway.update_death_registry(
+                parsed, prior_rolling, merged_rolling, req.action_text
+            )
+        )
+        guard_adjustments.extend(
+            gateway.update_destruction_registry(
+                parsed, prior_rolling, merged_rolling, req.action_text
+            )
+        )
+        guard_adjustments.extend(
+            relationships.update_relationship_calculus(
+                parsed, prior_rolling, merged_rolling, req.action_text, next_turn_number
+            )
+        )
+        guard_adjustments.extend(hud.shape_hud(parsed.state, merged_rolling))
+        if guard_adjustments:
+            enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
+
+        settings_for_metrics = await get_ai_settings()
+        memory_depth = int(settings_for_metrics.get("memory_depth", DEFAULT_MEMORY_DEPTH))
+        older_threshold = next_turn_number - memory_depth
+        older_turns = []
+        if older_threshold > 0:
+            older_turns = await db.turns.find(
+                {"session_id": session_id, "turn_number": {"$lte": older_threshold}},
+                {"_id": 0, "raw": 1, "narrative": 1},
+            ).sort("turn_number", 1).to_list(length=500)
+        older_payloads = [
+            (t.get("raw") or t.get("narrative") or "") for t in older_turns
+        ]
+        compression = compute_compression_metrics(
+            turn_number=next_turn_number,
+            memory_depth=memory_depth,
+            prior_turns_payloads=older_payloads,
+        )
+        enriched_debug.update(
+            {f"compression_{k}": str(v) for k, v in compression.items()}
+        )
+
+        turn = TurnRecord(
+            session_id=session_id,
+            turn_number=next_turn_number,
             player_action=req.action_text,
-            secret_reveal_directive=secret_directive,
+            narrative=parsed.narrative,
+            paragraphs=parsed.paragraphs,
+            choices=parsed.choices,
+            state=parsed.state,
+            ledger=parsed.ledger,
+            rolling_state=merged_rolling or parsed.rolling_state,
+            debug=enriched_debug,
+            raw=raw,
         )
-    except AIServiceError:
-        logger.exception("AI service failed during story_action")
-        raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
-    except Exception:
-        logger.exception("LLM call failed during story_action")
-        raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
 
-    secrets.merge_reveal_diagnostics(meta, reveal_diag)
-    guard_adjustments = _apply_state_supremacy(session, parsed, req.action_text)
-    guard_adjustments.extend(_apply_object_permanence(parsed))
+        session_snapshot = {
+            "turn_count": expected_turn_count,
+            "last_narrative_snippet": session.get("last_narrative_snippet"),
+            "last_state": copy.deepcopy(session.get("last_state")),
+            "rolling_state": copy.deepcopy(session.get("rolling_state")),
+            "updated_at": session.get("updated_at"),
+            "debug_mode": session.get("debug_mode"),
+            "rolling_state_updated_at": session.get("rolling_state_updated_at"),
+            "active_model": session.get("active_model"),
+            "model_switches": copy.deepcopy(session.get("model_switches") or []),
+        }
 
-    # ---- Anti-Hallucination Gateway (Ch 31) — STRIP illegal mutations ----
-    # Runs on the FRESH parsed turn (pre-consolidation) so corrected truth
-    # feeds rolling-state consolidation below.
-    prior_rolling = working_rolling
-    guard_adjustments.extend(
-        gateway.strip_illegal_state_changes(
-            prior_rolling, session.get("last_state"), parsed, req.action_text
+        snippet = (parsed.paragraphs[0][:180] + "…") if parsed.paragraphs else ""
+        update_set: Dict[str, Any] = {
+            "turn_count": next_turn_number,
+            "last_narrative_snippet": snippet,
+            "last_state": parsed.state,
+            "updated_at": datetime.now(timezone.utc),
+            "debug_mode": req.debug_mode,
+        }
+        if merged_rolling:
+            update_set["rolling_state"] = merged_rolling
+            update_set["rolling_state_updated_at"] = datetime.now(timezone.utc)
+        elif parsed.rolling_state:
+            update_set["rolling_state"] = parsed.rolling_state
+            update_set["rolling_state_updated_at"] = datetime.now(timezone.utc)
+
+        await _persist_story_action_turn(
+            session_id,
+            next_turn_number,
+            turn.model_dump(),
+            update_set,
+            session_snapshot,
+            meta,
+            lease_token=lease_token,
+            expected_turn_count=expected_turn_count,
         )
-    )
-    enriched_debug = _meta_into_debug(parsed.debug, meta)
 
-    # ---- Rolling Memory Compression v3.8 ----
-    merged_rolling = consolidate_rolling_state(prior_rolling, parsed.rolling_state)
-    guard_adjustments.extend(
-        secrets.enforce_authoritative_registry(
-            merged_rolling,
-            working_rolling.get("secret_registry"),
-        )
-    )
-
-    # P0 — ledger-wide cross-category dedup using the post-consolidation
-    # rolling_state as authoritative truth. Must run AFTER consolidation
-    # (so canonicalized object_locations is the source-of-truth map) but
-    # BEFORE the turn is persisted.
-    guard_adjustments.extend(
-        _apply_ledger_object_permanence(parsed, authoritative_state=merged_rolling)
-    )
-    # P1-C — room audit reconciliation on revisit.
-    guard_adjustments.extend(_apply_room_audit(parsed, merged_rolling))
-    # P1-D — bounded NPC memory + lightweight faction tick.
-    guard_adjustments.extend(
-        _apply_npc_memory_bounds(merged_rolling, current_turn=next_turn_number)
-    )
-    guard_adjustments.extend(_apply_faction_consequence_tick(merged_rolling))
-    guard_adjustments.extend(_apply_delayed_consequence_tick(merged_rolling, current_turn=next_turn_number))
-    guard_adjustments.extend(_apply_rumour_propagation_tick(merged_rolling, current_turn=next_turn_number))
-    # F1 (P1.5) — strip meta leakage from rolling_state string fields so it
-    # cannot re-enter the prompt on subsequent turns.
-    guard_adjustments.extend(_apply_rolling_state_hygiene(merged_rolling))
-    # Ch 31 — record any NPC deaths this turn into the engine death registry.
-    guard_adjustments.extend(
-        gateway.update_death_registry(
-            parsed, prior_rolling, merged_rolling, req.action_text
-        )
-    )
-    # Ch 31 — record destroyed/consumed items as terminal object truth even when
-    # the model renames or silently drops them instead of marking status.
-    guard_adjustments.extend(
-        gateway.update_destruction_registry(
-            parsed, prior_rolling, merged_rolling, req.action_text
-        )
-    )
-    # Ch 29 — recompute NPC→player relationship vectors (engine-owned).
-    guard_adjustments.extend(
-        relationships.update_relationship_calculus(
-            parsed, prior_rolling, merged_rolling, req.action_text, next_turn_number
-        )
-    )
-    # HUD — drop objective guidance; set Danger/Momentum chips + Pressure line.
-    guard_adjustments.extend(hud.shape_hud(parsed.state, merged_rolling))
-    if guard_adjustments:
-        enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
-
-    # Diagnostics: which turn payloads were COMPRESSED OUT of this prompt?
-    settings_for_metrics = await get_ai_settings()
-    memory_depth = int(settings_for_metrics.get("memory_depth", DEFAULT_MEMORY_DEPTH))
-    # After this turn lands, turns >memory_depth turns back are no longer sent
-    # in full detail. They live only inside rolling_state.
-    older_threshold = next_turn_number - memory_depth  # may be ≤ 0 on early turns
-    older_turns = []
-    if older_threshold > 0:
-        older_turns = await db.turns.find(
-            {"session_id": req.session_id, "turn_number": {"$lte": older_threshold}},
-            {"_id": 0, "raw": 1, "narrative": 1},
-        ).sort("turn_number", 1).to_list(length=500)
-    older_payloads = [
-        (t.get("raw") or t.get("narrative") or "") for t in older_turns
-    ]
-    compression = compute_compression_metrics(
-        turn_number=next_turn_number,
-        memory_depth=memory_depth,
-        prior_turns_payloads=older_payloads,
-    )
-    enriched_debug.update(
-        {f"compression_{k}": str(v) for k, v in compression.items()}
-    )
-
-    turn = TurnRecord(
-        session_id=req.session_id,
-        turn_number=next_turn_number,
-        player_action=req.action_text,
-        narrative=parsed.narrative,
-        paragraphs=parsed.paragraphs,
-        choices=parsed.choices,
-        state=parsed.state,
-        ledger=parsed.ledger,
-        rolling_state=merged_rolling or parsed.rolling_state,
-        debug=enriched_debug,
-        raw=raw,
-    )
-
-    session_snapshot = {
-        "turn_count": session.get("turn_count", 0),
-        "last_narrative_snippet": session.get("last_narrative_snippet"),
-        "last_state": copy.deepcopy(session.get("last_state")),
-        "rolling_state": copy.deepcopy(session.get("rolling_state")),
-        "updated_at": session.get("updated_at"),
-        "debug_mode": session.get("debug_mode"),
-        "rolling_state_updated_at": session.get("rolling_state_updated_at"),
-        "active_model": session.get("active_model"),
-        "model_switches": copy.deepcopy(session.get("model_switches") or []),
-    }
-
-    snippet = (parsed.paragraphs[0][:180] + "…") if parsed.paragraphs else ""
-    update_set: Dict[str, Any] = {
-        "turn_count": next_turn_number,
-        "last_narrative_snippet": snippet,
-        "last_state": parsed.state,
-        "updated_at": datetime.now(timezone.utc),
-        "debug_mode": req.debug_mode,
-    }
-    if merged_rolling:
-        update_set["rolling_state"] = merged_rolling
-        update_set["rolling_state_updated_at"] = datetime.now(timezone.utc)
-    elif parsed.rolling_state:
-        update_set["rolling_state"] = parsed.rolling_state
-        update_set["rolling_state_updated_at"] = datetime.now(timezone.utc)
-
-    await _persist_story_action_turn(
-        req.session_id,
-        next_turn_number,
-        turn.model_dump(),
-        update_set,
-        session_snapshot,
-        meta,
-    )
-
-    return {"turn": build_player_turn(turn.model_dump(mode="json"))}
+        return {"turn": build_player_turn(turn.model_dump(mode="json"))}
+    except ActionLeaseConflict:
+        raise HTTPException(status_code=409, detail=ACTION_CONFLICT_DETAIL)
+    except ActionLeaseLost:
+        raise HTTPException(status_code=409, detail=ACTION_CONFLICT_DETAIL)
+    finally:
+        if lease_token:
+            await release_action_lease(db, session_id, lease_token)
 
 
 @api_router.post("/story/session/{session_id}/mode")
@@ -3408,6 +3463,7 @@ logger = logging.getLogger(__name__)
 @app.on_event("startup")
 async def startup_rate_limit_indexes():
     await ensure_rate_limit_indexes(db)
+    await ensure_action_concurrency_indexes(db)
 
 
 @app.on_event("shutdown")

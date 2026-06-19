@@ -309,3 +309,20 @@ Promote to ADR when implementation and tests exist.
 | **Files affected** | `backend/secrets.py`, `backend/server.py`, `backend/tests/test_secret_reveal.py`, `docs/*` |
 | **Tests required** | `test_secret_reveal.py` ✅; `test_onboarding_hooks.py` ✅; full deterministic bundle ✅ |
 | **Evidence** | 242 deterministic tests passed 2026-06-20 on `emergent` |
+
+---
+
+## ADR-018: Session Action Concurrency Guard v1 (Mongo-backed lease)
+
+| Field | Detail |
+|-------|--------|
+| **Date** | 2026-06-20 |
+| **Status** | Accepted |
+| **Context** | Overlapping `POST /story/action` requests (multiple tabs, retries, workers) could race on `turn_count`, `rolling_state`, secret reveals, and provider calls. In-memory `asyncio.Lock` does not span processes. |
+| **Decision** | Store an engine-only lease on the session document (`action_lock_token`, `action_lock_acquired_at`, `action_lock_expires_at`). Acquire atomically via `find_one_and_update` before reveal detection, turn-number calculation, or any provider call. Reject conflicts with HTTP **409** and zero provider use. Keep one token per request through retry and persistence. Final session write requires matching lease token and expected `turn_count` (optimistic CAS). Fold model-lock fields into the same CAS update. Release in `finally` with token-scoped `$unset`. Default lease 600s (`ACTION_LOCK_LEASE_SEC`, clamped 60–3600). |
+| **Alternatives considered** | `asyncio.Lock` / process mutex (reject — not cross-worker); turn-number check alone (reject — does not block provider spend); Mongo multi-document transactions (reject — not used elsewhere; compensating rollback retained); idempotency keys on client (reject — out of v1 scope). |
+| **Consequences** | Lease fields excluded from player serializers and prompt-safe rolling; raw admin export may include them. CAS conflict deletes only the exact inserted turn by `TurnRecord.id` — no blind session snapshot restore. Stale leases expire and may be reclaimed atomically. |
+| **Risks** | Reset/delete/mode endpoints remain unguarded; duplicate historical `(session_id, turn_number)` rows defer unique index creation; clock skew beyond expiry model not addressed. |
+| **Files affected** | `backend/action_concurrency.py`, `backend/server.py`, `backend/tests/test_action_concurrency.py`, `docs/*` |
+| **Tests required** | `test_action_concurrency.py` ✅; `test_secret_reveal.py` regression ✅; full deterministic bundle ✅ |
+| **Evidence** | 306 deterministic tests passed 2026-06-20 on `emergent` |

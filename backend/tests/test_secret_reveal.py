@@ -12,6 +12,7 @@ import copy
 import json
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -490,6 +491,22 @@ def _insert_session(sync_db, device_id: str, rolling: Dict[str, Any], turn_count
         }
     )
     return sid
+
+
+def _attach_action_lease(sync_db, sid: str) -> str:
+    token = str(uuid.uuid4())
+    now = datetime(2026, 6, 20, 12, 0, 0, tzinfo=timezone.utc)
+    sync_db.sessions.update_one(
+        {"id": sid},
+        {
+            "$set": {
+                "action_lock_token": token,
+                "action_lock_acquired_at": now,
+                "action_lock_expires_at": now + timedelta(seconds=600),
+            }
+        },
+    )
+    return token
 
 
 def test_generation_failure_leaves_persisted_registry_unchanged(client, mongo_env):
@@ -1022,10 +1039,11 @@ def test_rollback_restores_session_and_removes_turn(mongo_env):
     assert stored["rolling_state"]["secret_registry"][0]["revealed"] is False
 
 
-def test_persist_story_action_turn_rolls_back_when_model_lock_fails(mongo_env, monkeypatch):
+def test_persist_story_action_turn_rolls_back_when_cas_update_fails(mongo_env, monkeypatch):
     device_id = f"dev_{uuid.uuid4()}"
     rolling = _registry(_entry(SECRET_A))
     sid = _insert_session(mongo_env, device_id, rolling)
+    lease_token = _attach_action_lease(mongo_env, sid)
     revealed = _registry(_entry(SECRET_A, revealed=True, revealed_turn=2, reveal_mode="player_confession"))
     snapshot = {
         "turn_count": 1,
@@ -1054,17 +1072,24 @@ def test_persist_story_action_turn_rolls_back_when_model_lock_fails(mongo_env, m
         "updated_at": "2026-01-01T00:00:00Z",
     }
 
-    async def boom_lock(*_args, **_kwargs):
-        raise RuntimeError("model lock failed")
+    async def boom_cas(*_args, **_kwargs):
+        raise RuntimeError("session CAS failed")
 
-    monkeypatch.setattr(server, "_persist_model_lock", boom_lock)
+    monkeypatch.setattr(server, "_cas_update_story_action_session", boom_cas)
 
     async def run():
         from fastapi import HTTPException
 
         with pytest.raises(HTTPException) as exc:
             await server._persist_story_action_turn(
-                sid, 2, turn_doc, update_set, snapshot, {"model_used": "test"}
+                sid,
+                2,
+                turn_doc,
+                update_set,
+                snapshot,
+                {"model_used": "test"},
+                lease_token=lease_token,
+                expected_turn_count=1,
             )
         assert exc.value.status_code == 502
 
@@ -1079,6 +1104,7 @@ def test_turn_insert_failure_leaves_session_registry_unchanged(mongo_env, monkey
     device_id = f"dev_{uuid.uuid4()}"
     rolling = _registry(_entry(SECRET_A))
     sid = _insert_session(mongo_env, device_id, rolling)
+    lease_token = _attach_action_lease(mongo_env, sid)
     revealed = _registry(_entry(SECRET_A, revealed=True, revealed_turn=2, reveal_mode="player_confession"))
     snapshot = {
         "turn_count": 1,
@@ -1111,7 +1137,14 @@ def test_turn_insert_failure_leaves_session_registry_unchanged(mongo_env, monkey
 
         with pytest.raises(HTTPException) as exc:
             await server._persist_story_action_turn(
-                sid, 2, turn_doc, update_set, snapshot, {"model_used": "test"}
+                sid,
+                2,
+                turn_doc,
+                update_set,
+                snapshot,
+                {"model_used": "test"},
+                lease_token=lease_token,
+                expected_turn_count=1,
             )
         assert exc.value.status_code == 502
 
@@ -1126,6 +1159,7 @@ def test_session_update_failure_rolls_back_inserted_turn(mongo_env, monkeypatch)
     device_id = f"dev_{uuid.uuid4()}"
     rolling = _registry(_entry(SECRET_A))
     sid = _insert_session(mongo_env, device_id, rolling)
+    lease_token = _attach_action_lease(mongo_env, sid)
     revealed = _registry(_entry(SECRET_A, revealed=True, revealed_turn=2, reveal_mode="player_confession"))
     snapshot = {
         "turn_count": 1,
@@ -1151,14 +1185,21 @@ def test_session_update_failure_rolls_back_inserted_turn(mongo_env, monkeypatch)
     async def fail_update(*_args, **_kwargs):
         raise RuntimeError("session update failed")
 
-    monkeypatch.setattr(server, "_apply_story_action_session_update", fail_update)
+    monkeypatch.setattr(server, "_cas_update_story_action_session", fail_update)
 
     async def run():
         from fastapi import HTTPException
 
         with pytest.raises(HTTPException) as exc:
             await server._persist_story_action_turn(
-                sid, 2, turn_doc, update_set, snapshot, {"model_used": "test"}
+                sid,
+                2,
+                turn_doc,
+                update_set,
+                snapshot,
+                {"model_used": "test"},
+                lease_token=lease_token,
+                expected_turn_count=1,
             )
         assert exc.value.status_code == 502
 
@@ -1286,6 +1327,10 @@ def test_rollback_deletes_only_exact_turn_id_when_turn_numbers_collide(mongo_env
     device_id = f"dev_{uuid.uuid4()}"
     rolling = _registry(_entry(SECRET_A))
     sid = _insert_session(mongo_env, device_id, rolling)
+    try:
+        mongo_env.turns.drop_index("turns_session_turn_unique")
+    except Exception:
+        pass
     winner_id = str(uuid.uuid4())
     loser_id = str(uuid.uuid4())
     winner_doc = {

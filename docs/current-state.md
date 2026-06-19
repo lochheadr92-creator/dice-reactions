@@ -52,6 +52,7 @@ This document is the canonical operational snapshot of the repository **as it ex
 | `developer_mode` (admin settings) | `false` | `backend/server.py` (`get_ai_settings`) |
 | `ADMIN_API_KEY` | unset unless configured in deployment | `backend/security.py` — required for admin routes |
 | `CORS_ORIGINS` | `*` | `backend/server.py` |
+| `ACTION_LOCK_LEASE_SEC` | `600` (clamped 60–3600) | `backend/action_concurrency.py` |
 | `EXPO_PUBLIC_BACKEND_URL` | `http://localhost:8000` | `frontend/.env` |
 
 ### Database overrides (Code)
@@ -215,6 +216,7 @@ Derived from confirmed gaps (not speculative features):
 |----------|------|----------|
 | P1 | Chronicle Creation Phase 4 — Advanced Builder extraction/refactor remains pending | `frontend/app/new-story.tsx` still hosts preserved legacy builder |
 | ~~P1 Secret reveal trigger~~ ✅ | Secret Reveal Trigger v1 — explicit confession only | `secrets.py` + `test_secret_reveal.py` ✅ |
+| ~~P1 Session action concurrency~~ ✅ | Session Action Concurrency Guard v1 — `story_action` only | `action_concurrency.py` + `test_action_concurrency.py` ✅ |
 | P2 | Live-server long-run stress (`qa_live_20turn_hostile.py`) and wider story-engine bundle | Not run in this Phase 3 pass |
 | P2 | ~~CI job for deterministic tests~~ ✅ | `.github/workflows/deterministic-ci.yml` (2026-06-20) |
 
@@ -239,6 +241,32 @@ Derived from confirmed gaps (not speculative features):
 **Evidence:** `backend/pacing.py`, `backend/tests/test_early_game_pacing.py` (46 tests); regression bundle **118 passed** 2026-06-20.
 
 A true **Living World Test** remains separate future work (see `next-work.md` NW-P1-07).
+
+---
+
+## Session Action Concurrency Guard v1 (2026-06-20)
+
+**What this increment proves (deterministic):**
+
+- Only one active `POST /story/action` may own a session at a time (Mongo lease on session document).
+- Conflicting requests are rejected with HTTP **409** before any provider call.
+- `next_turn_number` is derived from the locked session snapshot after atomic lease acquisition.
+- Final persistence requires lease ownership and expected `turn_count` (CAS); model-lock fields are folded into the same update.
+- Stale leases expire (default 600s) and may be reclaimed; old owners cannot release newer leases.
+- Exact-turn rollback by `TurnRecord.id` remains; CAS conflict does not restore an old session snapshot.
+- Successful API response contract is unchanged.
+- Lease fields are absent from player serializers, player-safe export, and LLM prompt construction.
+
+**What this increment does not prove:**
+
+- ACID cross-collection persistence (compensating rollback only).
+- Safety if MongoDB loses acknowledged writes.
+- Concurrency safety for reset/delete/mode endpoints.
+- Frontend handling of HTTP **409**.
+- Idempotent replay of the same action after a completed request.
+- Multi-region clock-skew resilience beyond the chosen expiry model.
+
+**Evidence:** `backend/action_concurrency.py`, `backend/tests/test_action_concurrency.py` (33 tests); targeted bundle **151 passed**; full deterministic bundle **306 passed** 2026-06-20.
 
 ---
 

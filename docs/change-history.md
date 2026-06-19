@@ -4,6 +4,19 @@ Lightweight log of documentation and operational changes. One entry per meaningf
 
 ---
 
+## 2026-06-20 — Session Action Concurrency Guard v1
+
+| Field | Detail |
+|-------|--------|
+| **Change** | Added `backend/action_concurrency.py` (Mongo-backed per-session lease on `sessions` document). Wired into `story_action` before reveal/provider work; final persistence uses lease-token + expected `turn_count` CAS with model-lock folded into the same update. HTTP **409** on active-action conflict. Added `test_action_concurrency.py` (33 tests). Startup creates idempotent unique indexes on `sessions.id`, `turns.id`, and `(session_id, turn_number)` when no historical duplicates exist. |
+| **Reason** | Prevent overlapping `POST /story/action` requests from racing turn numbers, rolling state, secret reveals, and provider spend across tabs, retries, and workers. |
+| **Files affected** | `backend/action_concurrency.py`, `backend/server.py`, `backend/tests/test_action_concurrency.py`, `backend/tests/test_secret_reveal.py`, `docs/*` |
+| **Tests run** | `pytest tests/test_action_concurrency.py tests/test_secret_reveal.py tests/test_early_game_pacing.py -q` → **151 passed**; full `pytest -m "not live" -q` → **306 passed** |
+| **Decision-log entry** | ADR-018 |
+| **Remaining risks** | No concurrency guard on reset/delete/mode; no frontend 409 handling; no idempotent replay of completed actions |
+
+---
+
 ## 2026-06-20 — Secret Reveal Trigger v1
 
 | Field | Detail |
