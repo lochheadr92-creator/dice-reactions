@@ -4,11 +4,11 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONTS } from "../theme";
 import type { CustomWorldSetup } from "../api";
+import { ReviewSummary } from "./ReviewSummary";
 import {
   GUIDED_WORLDS,
   GUIDED_QUESTIONS,
@@ -27,23 +27,13 @@ import {
   type StoryDifficultyValue,
   type GuidedQuestion,
 } from "./options";
+import type { GuidedStartSelections } from "./types";
 
 type GuidedOption = {
   value: string;
   label: string;
   explanation: string;
   consequence: string;
-};
-
-export type GuidedStartSelections = {
-  world?: GuidedWorldValue;
-  worldDetail?: string;
-  character?: QuickCharacterValue;
-  tone?: QuickToneValue;
-  want?: WantValue;
-  fear?: FearValue;
-  whoMatters?: WhoMattersValue;
-  difficulty?: StoryDifficultyValue;
 };
 
 type GuidedStartRequest = {
@@ -435,96 +425,21 @@ export function GuidedStart({
           </View>
         </View>
       ) : (
-        <View testID="guided-start-review-step">
-          <Text
-            style={[styles.stepText, { fontSize: Math.max(12, Math.round(12 * safeFontScale)) }]}
-            testID="guided-start-review-label"
-          >
-            Review
-          </Text>
-          <Text style={[styles.stepQuestion, { fontSize: Math.round(24 * safeFontScale) }]}>
-            Here’s the chronicle you’ve set in motion.
-          </Text>
-          <Text
-            style={[styles.reviewSummary, { fontSize: Math.max(18, Math.round(18 * safeFontScale)) }]}
-            testID="guided-start-review-summary"
-          >
-            {summary}
-          </Text>
-
-          <View style={styles.reviewList}>
-            {steps.map((step, index) => {
-              const selected = getOption(step.options, selections[step.key]);
-              return (
-                <View key={step.key} style={styles.reviewRow} testID={`guided-start-review-row-${step.key}`}>
-                  <View style={styles.reviewTextWrap}>
-                    <Text
-                      style={[styles.reviewLabel, { fontSize: Math.max(12, Math.round(12 * safeFontScale)) }]}
-                    >
-                      {step.label}
-                    </Text>
-                    <Text
-                      style={[styles.reviewValue, { fontSize: Math.round(17 * safeFontScale) }]}
-                      testID={`guided-start-review-value-${step.key}`}
-                    >
-                      {selected?.label}
-                    </Text>
-                  </View>
-                  <TouchableOpacity
-                    style={styles.reviewChangeButton}
-                    onPress={() => setStepIndex(index)}
-                    testID={`guided-start-change-${step.key}`}
-                  >
-                    <Text
-                      style={[
-                        styles.reviewChangeText,
-                        { fontSize: Math.max(12, Math.round(12 * safeFontScale)) },
-                      ]}
-                    >
-                      Change
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              );
-            })}
-          </View>
-
-          <View style={styles.navRow}>
-            <TouchableOpacity
-              style={styles.secondaryButton}
-              onPress={goBack}
-              disabled={loading}
-              testID="guided-start-review-back-button"
-            >
-              <Text style={[styles.secondaryButtonText, { fontSize: bodySize }]}>Back</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.primaryButton, loading && styles.primaryButtonDisabled]}
-              onPress={onStart}
-              disabled={loading}
-              accessibilityRole="button"
-              accessibilityState={{ disabled: loading, busy: loading }}
-              accessibilityLabel={loading ? "Starting your chronicle" : "Start chronicle"}
-              testID="guided-start-start-button"
-            >
-              {loading ? (
-                <View style={styles.loadingRow} testID="guided-start-loading-state">
-                  <ActivityIndicator color={COLORS.background} />
-                  <Text
-                    style={[
-                      styles.primaryButtonText,
-                      { fontSize: bodySize, color: COLORS.background },
-                    ]}
-                  >
-                    Starting your chronicle…
-                  </Text>
-                </View>
-              ) : (
-                <Text style={[styles.primaryButtonText, { fontSize: bodySize }]}>Start chronicle</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
+        <ReviewSummary
+          testIdPrefix="guided-start"
+          heading="Here’s the chronicle you’ve set in motion."
+          summary={summary}
+          rows={steps.map((step, index) => ({
+            key: step.key,
+            label: step.label,
+            value: getOption(step.options, selections[step.key])?.label,
+            onChange: () => setStepIndex(index),
+          }))}
+          fontScale={safeFontScale}
+          loading={loading}
+          onBack={goBack}
+          onStart={onStart}
+        />
       )}
     </View>
   );
@@ -678,56 +593,5 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.monoBold,
     color: COLORS.background,
     letterSpacing: 1.5,
-  },
-  reviewSummary: {
-    marginTop: 8,
-    marginBottom: 22,
-    fontFamily: FONTS.bodyItalic,
-    color: COLORS.textProse,
-    lineHeight: 26,
-  },
-  reviewList: {
-    gap: 12,
-  },
-  reviewRow: {
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.surface,
-    padding: 14,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  reviewTextWrap: {
-    flex: 1,
-  },
-  reviewLabel: {
-    fontFamily: FONTS.monoBold,
-    color: COLORS.textMuted,
-    letterSpacing: 1.5,
-    marginBottom: 4,
-  },
-  reviewValue: {
-    fontFamily: FONTS.headingBold,
-    color: COLORS.textPrimary,
-  },
-  reviewChangeButton: {
-    minWidth: 74,
-    minHeight: 44,
-    borderWidth: 1,
-    borderColor: COLORS.primary,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 10,
-  },
-  reviewChangeText: {
-    fontFamily: FONTS.monoBold,
-    color: COLORS.primary,
-    letterSpacing: 1.2,
-  },
-  loadingRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
   },
 });
