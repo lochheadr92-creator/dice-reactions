@@ -1,6 +1,6 @@
 # Story Engine
 
-The story engine lives primarily in `backend/server.py` with supporting modules `gateway.py`, `relationships.py`, `hud.py`, `memory.py`, `ai_service.py`, `ai_config.py`, and `scenarios.py`.
+The story engine lives primarily in `backend/server.py` with supporting modules `gateway.py`, `relationships.py`, `hud.py`, `memory.py`, `ai_service.py`, `ai_config.py`, `scenarios.py`, `pacing.py`, `secrets.py`, and `replayability.py` (+ `run_identity.py`, `opening_state.py`, `pressure_graph.py`, `consequence_echoes.py`).
 
 **Branch:** `emergent` — gateway, relationship calculus, and HUD modules are runtime truth here; absent on `main`.
 
@@ -23,10 +23,20 @@ Each LLM response must contain tagged blocks:
 
 All provider calls route through **`gateway.invoke_llm`** — the sole chokepoint (Ch 31.11). `_generate_turn` and validation retries must not call `ai_service` directly.
 
-Before each call, `_build_messages` may prepend:
+Before each call, `_build_messages` may prepend internal system directives (non-persisted), in order:
+
+1. Early-game pacing (`pacing.build_early_game_directive`)
+2. Replayability opening (`opening_state` — turn 1 only, when `replayability_state` present)
+3. Secret reveal continuity (`secrets.build_revealed_secret_directive`)
+4. Replayability pressure foreground (`pressure_graph.build_pressure_directive`)
+5. Replayability consequence echo (`consequence_echoes.build_echo_directive`)
+
+Then replay/history and, in the final user message:
 - `gateway.build_immutable_truth_block(rolling)` — established object/injury/death facts
 - `relationships.build_relationship_block(rolling)` — engine-owned NPC→player feelings (for prompt only)
 - `<prior_state>` JSON block
+
+**Policy A:** Sessions without `replayability_state` skip replayability directives (legacy chronicles).
 
 ## Simulation modes
 
@@ -90,8 +100,30 @@ These run after parsing and before persistence. Order on **`story_action`** matt
 12. `gateway.update_destruction_registry`
 13. `relationships.update_relationship_calculus` — NPC→player vectors
 14. `hud.shape_hud` — DNG/MOM/PRS; strip Objective
+15. `replayability.enforce_authoritative` — strip model replayability keys from `rolling_state` (when session has `replayability_state`)
 
 Turn 1 (`new_story`) skips state supremacy and gateway STRIP (no prior rolling state) but runs the remainder.
+
+## Replayability Engine v1 (`replayability.py`)
+
+**Storage:** `sessions.replayability_state` — **not** in `rolling_state`. Player serializers exclude the field.
+
+| Submodule | Role |
+|-----------|------|
+| `run_identity.py` | Narrative + causal closed enums; `has_secret` bool; difficulty → `severity_multiplier` only |
+| `opening_state.py` | 14 archetypes with structured facts (`immediate_problem`, `pressure_origins`, `fact_ids`); turn-1 directive |
+| `pressure_graph.py` | Causal nodes (`magnitude`, `trend`, `kind`, links); trend-only movement; foreground scoring; `threshold_crossings` |
+| `consequence_echoes.py` | Schedule from confirmed source events (`source_event_id`); mature; fire max 1/turn |
+
+**Canonical events:** `rolling_state` structures (delayed consequences, relationship vectors, faction ticks, destruction registry) plus `pressure_graph.threshold_crossings`. Replayability stores `transition_receipts` (idempotency only) — not a second event history.
+
+**Echo sources (v1):** pressure threshold crossed; delayed consequence fired; relationship threshold (`betrayal_risk`/`collapsed`); faction hostility tick; destruction confirmed; opening unresolved tension. Raw player text, narrative, and choices are **never** parsed.
+
+**Turn flow:**
+
+- `_create_new_story`: `init_new_story` → persist `replayability_state` → frozen directives → enforce after consolidation
+- `story_action`: `prepare_action_turn` **before** provider (tick pressure, mature/fire echo, frozen directives on retry) → guards → `collect_qualifying_echo_sources` → `finalize_action_turn` → persist
+- `reset_session`: clears `replayability_state` with turns and rolling state
 
 ### State supremacy (`_apply_state_supremacy`)
 

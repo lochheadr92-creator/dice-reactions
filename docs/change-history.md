@@ -4,6 +4,29 @@ Lightweight log of documentation and operational changes. One entry per meaningf
 
 ---
 
+## 2026-06-20 — Replayability Engine v1 (contract-correction pass)
+
+| Field | Detail |
+|-------|--------|
+| **Change** | Pre-commit contract correction: removed raw player-text echo scheduling; replaced `engine_events` with bounded `transition_receipts`; causal pressure graph (`magnitude`, `trend`, links, foreground scoring); causal run-identity dimensions seeding opening/pressure; structured opening facts; post-guard `collect_qualifying_echo_sources` + `finalize_action_turn`; `.gitignore` for `terminals/`. |
+| **Reason** | State-as-truth: echoes and pressure movement must come from confirmed engine structures, not keywords or a duplicate event log. |
+| **Files affected** | `backend/replayability.py`, `run_identity.py`, `opening_state.py`, `pressure_graph.py`, `consequence_echoes.py`, `server.py`, replayability test modules, `docs/*`, `.gitignore` |
+| **Tests run** | Target replayability bundle **185** ✅; full `pytest -m "not live" -q` → **390 passed** |
+| **Decision-log entry** | ADR-019 (updated) |
+| **Remaining risks** | Theft/violence/promise echo kinds unsupported until structured guard outputs exist; no cross-session replay comparison UI |
+
+---
+
+## 2026-06-20 — Replayability Engine v1 (initial)
+
+| Field | Detail |
+|-------|--------|
+| **Change** | Added replayability modules and session field `replayability_state`. Wired into new-story and story-action pipelines. Policy A legacy skip. |
+| **Reason** | Deterministic run variation without LLM-authored replayability truth. |
+| **Superseded by** | Contract-correction pass above (keyword echoes and `engine_events` removed) |
+
+---
+
 ## 2026-06-20 — Frontend Action Conflict Recovery v1 (three-stage increment)
 
 | Field | Detail |

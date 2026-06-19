@@ -255,6 +255,7 @@ def test_stage_computed_once_and_reused_for_retry():
         history_window_fallback,
         early_game_stage=None,
         secret_reveal_directive="",
+        replayability_directives=None,
     ):
         captured_stages.append(early_game_stage)
         return await original_build(
@@ -264,6 +265,7 @@ def test_stage_computed_once_and_reused_for_retry():
             history_window_fallback,
             early_game_stage=early_game_stage,
             secret_reveal_directive=secret_reveal_directive,
+            replayability_directives=replayability_directives,
         )
 
     original_build = server._build_messages

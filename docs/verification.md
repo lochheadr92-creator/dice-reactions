@@ -37,7 +37,7 @@ yarn test
 yarn typecheck
 ```
 
-**Passed 2026-06-20 on `emergent`:** **306** deterministic backend tests (includes action concurrency, secret reveal, P2 verifier) + **41** frontend Jest tests + TypeScript clean (includes action conflict recovery increment).
+**Passed 2026-06-20 on `emergent`:** **390** deterministic backend tests (includes contract-corrected replayability engine v1, action concurrency, secret reveal, P2 verifier) + **41** frontend Jest tests + TypeScript clean (includes action conflict recovery increment).
 
 **Lint:** `yarn lint` passes locally (exit 0) but is **not** a required CI step in this increment — Expo lint subprocess emits a benign `yarnpkg` shim warning on Windows; no ESLint rule debt was found.
 
@@ -56,7 +56,7 @@ cd backend
 #   $env:DB_NAME="dice_reactions_ci"
 #   $env:ADMIN_API_KEY="test-admin-key"
 python -m pytest -m "not live" -q
-# 306 passed, 34 deselected (live)
+# 394 passed, 34 deselected (live)
 ```
 
 | File | What it covers |
@@ -96,6 +96,11 @@ yarn lint
 | `test_http_integration.py` | pytest | ✅ Passed 2026-06-20 (TestClient + mocked LLM) |
 | `test_onboarding_hooks.py` | pytest | ✅ Passed 2026-06-20 (offline) |
 | `test_secret_reveal.py` | pytest | ✅ Passed 2026-06-20 (offline, explicit confession reveal) |
+| `test_run_identity.py` | pytest | ✅ Passed 2026-06-20 (offline, replayability identity) |
+| `test_opening_state.py` | pytest | ✅ Passed 2026-06-20 (offline, opening archetypes) |
+| `test_pressure_graph.py` | pytest | ✅ Passed 2026-06-20 (offline, pressure graph) |
+| `test_consequence_echoes.py` | pytest | ✅ Passed 2026-06-20 (offline, consequence echoes) |
+| `test_replayability_integration.py` | pytest | ✅ Passed 2026-06-20 (offline, server integration) |
 | `test_action_concurrency.py` | pytest | ✅ Passed 2026-06-20 (offline, per-session action lease + HTTP 409) |
 | `test_provider_selection.py` | pytest | ✅ Passed 2026-06-20 (offline) |
 | `test_ci_network_safety.py` | pytest | ✅ Passed 2026-06-20 (gateway chokepoint guard) |
@@ -188,7 +193,7 @@ Security coverage: `test_security.py` — ownership (10), admin auth (5), export
 
 ## Observations / regressions
 
-- No runtime-breaking regressions in **306** deterministic backend tests (2026-06-20)
+- No runtime-breaking regressions in **394** deterministic backend tests (2026-06-20)
 - Prior docs described `main` branch — missing gateway/relationship/HUD; corrected in reconciliation pass
 - Lint tooling not fully clean: `test_story_engine.py` flake8 `E741` (Docs-claimed)
 
