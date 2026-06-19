@@ -452,7 +452,8 @@ def enforce_context_budget(
     protected_recent_msgs: int,
 ) -> Tuple[List[Dict[str, str]], Dict[str, Any]]:
     """Trim the message list until under budget. Never touches:
-      • the system message (index 0)
+      • the contiguous leading system-message prefix (primary prompt + any
+        internal system directives placed before conversation history)
       • the last `protected_recent_msgs` messages BEFORE the final user msg
       • the final user message (carries active scene + prior_state)
 
@@ -460,7 +461,8 @@ def enforce_context_budget(
       1. Compress the final user message's <prior_state> JSON (drop archived /
          resolved / shrink lists).
       2. Strip engine blocks from older assistant messages (keep narrative).
-      3. Drop the OLDEST trimmable message until budget is met.
+      3. Drop the OLDEST trimmable message after the leading system prefix
+         until budget is met.
 
     Returns the (possibly mutated copy of) messages and a diagnostics dict.
     """
@@ -479,10 +481,15 @@ def enforce_context_budget(
     initial_tokens = estimate_messages_tokens(msgs)
     diag_actions: List[str] = []
 
+    # Contiguous leading system prefix — never drop or reorder.
+    leading_system = 0
+    while leading_system < len(msgs) and msgs[leading_system].get("role") == "system":
+        leading_system += 1
+
     # Index regions:
-    #   0           → system (NEVER trim)
-    #   1 .. -2     → replay history (oldest first) — trimmable but protect tail
-    #   -1          → final user with prior_state (compress in-place only)
+    #   0 .. leading_system-1 → leading system prefix (NEVER trim)
+    #   leading_system .. -2  → replay history (oldest first) — trimmable tail-protected
+    #   -1                    → final user with prior_state (compress in-place only)
 
     def _last_user() -> Dict[str, str]:
         return msgs[-1]
@@ -498,8 +505,8 @@ def enforce_context_budget(
 
     # Step 2 — strip engine blocks from older assistant messages
     if estimate_messages_tokens(msgs) > budget_tokens:
-        protected_start = max(1, len(msgs) - 1 - protected_recent_msgs)
-        for i in range(1, protected_start):
+        protected_start = max(leading_system, len(msgs) - 1 - protected_recent_msgs)
+        for i in range(leading_system, protected_start):
             if msgs[i].get("role") != "assistant":
                 continue
             new_text, changed = _strip_assistant_engine_blocks(
@@ -511,13 +518,10 @@ def enforce_context_budget(
                 if estimate_messages_tokens(msgs) <= budget_tokens:
                     break
 
-    # Step 3 — drop oldest trimmable messages outright
-    while (
-        estimate_messages_tokens(msgs) > budget_tokens
-        and len(msgs) > (1 + protected_recent_msgs + 1)
-    ):
-        # drop the message right after the system prompt
-        dropped = msgs.pop(1)
+    # Step 3 — drop oldest trimmable messages after the leading system prefix
+    min_msgs = leading_system + protected_recent_msgs + 1
+    while estimate_messages_tokens(msgs) > budget_tokens and len(msgs) > min_msgs:
+        dropped = msgs.pop(leading_system)
         diag_actions.append(f"dropped_{dropped.get('role','?')}")
 
     final_tokens = estimate_messages_tokens(msgs)

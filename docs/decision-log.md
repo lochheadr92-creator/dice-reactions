@@ -275,3 +275,20 @@ Promote to ADR when implementation and tests exist.
 | **Files affected** | `frontend/app/new-story.tsx`, `frontend/src/newstory/GuidedStart.tsx`, `frontend/src/newstory/QuickStart.tsx`, `frontend/src/newstory/options.ts`, `frontend/src/api.ts`, `frontend/__tests__/new-story.test.tsx` |
 | **Tests required** | Backend onboarding tests, frontend deterministic flow tests, browser preview regression |
 | **Evidence** | `backend/tests/test_onboarding_hooks.py` (16 passed), `frontend/__tests__/new-story.test.tsx` (17 passed), preview regression run 2026-06-18 |
+
+---
+
+## ADR-016: Early-Game Pacing Governor v1 (prompt guidance + Stage 1 structural enforcement)
+
+| Field | Detail |
+|-------|--------|
+| **Date** | 2026-06-20 |
+| **Status** | Accepted |
+| **Context** | Opening turns often spent atmosphere/setup before a concrete situation. Existing system-prompt rules mention scene advancement but do not constitute an autonomous world heartbeat. |
+| **Decision** | Add pure `pacing.py` module. Compute immutable pacing stage once from pre-generation `session.turn_count` (0→Stage 1 … 3→Stage 4; ≥4→none). Inject non-persisted internal system directives in `_build_messages`. Stage 1 only: structural field-presence validation after format checks, before gateway contradiction detection. Pacing failures share the single existing validation retry. Stage 1 may author genesis truth; Stages 2–4 may guide continuity/surfacing/direction from existing state only — not invent autonomous world movement. |
+| **Alternatives considered** | Prompt-only pacing (reject — no structural enforcement); separate pacing retry budget (reject — violates one-retry-total); persisting directives in rolling state (reject — leak risk). |
+| **Consequences** | Validation kind extended with `"pacing"`; opening prompt strengthened in `_create_new_story`; optional dev-only `pacing_stage3_no_engine_development` diagnostic when no engine-owned development exists. |
+| **Risks** | Field-presence validation cannot distinguish atmospheric vs concrete pressure; qualitative pacing remains provider-dependent; not a Living World Test. |
+| **Files affected** | `backend/pacing.py`, `backend/server.py`, `backend/tests/test_early_game_pacing.py`, `docs/*` |
+| **Tests required** | `test_early_game_pacing.py` ✅; existing 83-test regression bundle ✅ |
+| **Evidence** | 118-test bundle passed 2026-06-20 on `emergent` |

@@ -1,6 +1,6 @@
 # Current State Snapshot
 
-**Generated:** 2026-06-17 (reconciled against `emergent` runtime)
+**Generated:** 2026-06-20 (reconciled against `emergent` runtime)
 **Repository:** `dice-reactions` (FastAPI backend + Expo frontend)
 **Git branch:** `emergent` (canonical runtime branch for this documentation pass)
 
@@ -67,6 +67,7 @@ This document is the canonical operational snapshot of the repository **as it ex
 | System | Status | Evidence |
 |--------|--------|----------|
 | Story session CRUD | Implemented | Code (`server.py` routes) |
+| Early-Game Pacing Governor v1 | Implemented (deterministic structural Stage 1) | Code (`pacing.py`) + Tests (`test_early_game_pacing.py` ✅) |
 | Turn generation pipeline | Implemented | Code |
 | Anti-Hallucination Gateway | Implemented | Code (`gateway.py`) + Tests (`test_anti_hallucination_gateway.py`, `test_gateway_e2e.py` ✅) |
 | LLM chokepoint (`invoke_llm`) | Implemented | Code — all `_generate_turn` / retry calls route through `gateway.invoke_llm` |
@@ -216,6 +217,28 @@ Derived from confirmed gaps (not speculative features):
 | P1 | Secret reveal trigger remains unimplemented; `secret_registry` stays engine-only | Code + `test_onboarding_hooks.py` |
 | P2 | Live-server long-run stress (`qa_live_20turn_hostile.py`) and wider story-engine bundle | Not run in this Phase 3 pass |
 | P2 | CI job for frontend New Chronicle deterministic tests | `__tests__/new-story.test.tsx` currently local-only |
+
+---
+
+## Early-Game Pacing Governor v1 (2026-06-20)
+
+**What this increment proves (deterministic):**
+
+- Stage 1 (turn_count 0) receives a non-persisted internal genesis directive as a separate system message in `_build_messages`.
+- Stage 1 structural validation rejects missing/blank/placeholder `state.Pressure`, empty `active_pressures`, and missing both `objectives` and `unresolved` in `rolling_state`.
+- Pacing stage is computed once per request from pre-generation `turn_count` and threaded unchanged through initial generation, validation, and the single shared retry.
+- Only one retry total per request; pacing failures use the same retry budget as format/hallucination failures.
+- Internal directives are absent from `player_action`, turn records, rolling state, player export, raw admin export, and player API responses.
+
+**What this increment does not prove:**
+
+- Semantic concreteness of every opening (field presence ≠ narrative quality).
+- Autonomous world movement or a living-world heartbeat.
+- Stage 3 surfacing when no engine-owned development exists (directive plumbing only). Developer telemetry `pacing_stage3_no_engine_development` may appear in persisted turn `debug`, raw admin export turn debug, and admin diagnostics `latest_turn_debug` when `debug_mode` is on; it remains absent from player-safe exports, player session payloads, normal frontend responses, narrative, choices, player-facing state, and rolling state.
+
+**Evidence:** `backend/pacing.py`, `backend/tests/test_early_game_pacing.py` (46 tests); regression bundle **118 passed** 2026-06-20.
+
+A true **Living World Test** remains separate future work (see `next-work.md` NW-P1-07).
 
 ---
 
