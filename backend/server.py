@@ -2,6 +2,7 @@ from fastapi import Depends, FastAPI, APIRouter, HTTPException, Request
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+import copy
 import os
 import re
 import logging
@@ -49,6 +50,7 @@ import gateway  # noqa: E402  — Anti-Hallucination Gateway (Ch 31)
 import relationships  # noqa: E402  — Relationship Calculus (Ch 29)
 import hud  # noqa: E402  — player-facing HUD shaping (status chips + Pressure)
 import pacing  # noqa: E402  — Early-Game Pacing Governor v1 (deterministic)
+import secrets  # noqa: E402  — Secret Reveal Trigger v1 (deterministic)
 from security import fetch_owned_session, require_admin, require_device_id  # noqa: E402
 from rate_limit import (  # noqa: E402
     _rollback_bucket_reservations,
@@ -946,9 +948,11 @@ def _seed_custom_setup_into_rolling(
     if secret:
         registry = list(out.get("secret_registry") or [])
         registry.append({
+            "secret_id": secrets.build_stable_secret_id(len(registry)),
             "secret": _short_text(secret, 400),
             "revealed": False,
             "turn_added": 1,
+            "reveal_policy": secrets.DEFAULT_REVEAL_POLICY,
         })
         out["secret_registry"] = registry[:6]
     return out
@@ -1700,6 +1704,13 @@ def _scrub_meta_from_text(text: str) -> Tuple[str, int]:
     out = _MECHANIC_WORD_RE.sub(_sub, text)
     out = _SOFT_META_PHRASE_RE.sub(_sub, out)
     out = _STATE_FIELD_META_RE.sub(_sub, out)
+    for marker in _INTERNAL_SYSTEM_MARKERS:
+        if marker in out:
+            out = out.replace(marker, "[…]")
+            hits += 1
+    if _INTERNAL_DIRECTIVE_PROSE_RE.search(out):
+        out = _INTERNAL_DIRECTIVE_PROSE_RE.sub("[…]", out)
+        hits += 1
     # Collapse repeated placeholders and double-spaces left by substitution.
     out = re.sub(r"(\[…\]\s*){2,}", "[…] ", out)
     out = re.sub(r"\s{2,}", " ", out).strip()
@@ -1746,6 +1757,119 @@ def _apply_rolling_state_hygiene(rolling_state: Dict[str, Any]) -> List[str]:
     return []
 
 
+_PROTECTED_ROLLING_KEYS = frozenset({"secret_registry"})
+
+
+def _scrub_model_rolling_state_for_persistence(
+    rolling_state: Dict[str, Any],
+) -> Tuple[Dict[str, Any], int]:
+    """Scrub LLM-owned rolling_state strings. Never touches secret_registry."""
+    out = copy.deepcopy(rolling_state)
+    hits = 0
+    for key, val in list(out.items()):
+        if key in _PROTECTED_ROLLING_KEYS:
+            continue
+        if isinstance(val, str):
+            scrubbed, field_hits = _scrub_meta_from_text(val)
+            if field_hits:
+                out[key] = scrubbed
+                hits += field_hits
+        elif isinstance(val, list):
+            new_list: List[Any] = []
+            field_hits = 0
+            for item in val:
+                if isinstance(item, str):
+                    scrubbed, item_hits = _scrub_meta_from_text(item)
+                    field_hits += item_hits
+                    if scrubbed and scrubbed != "[…]":
+                        new_list.append(scrubbed)
+                else:
+                    new_list.append(item)
+            if field_hits:
+                out[key] = new_list
+                hits += field_hits
+    return out, hits
+
+
+def _scrub_parsed_for_persistence(parsed: ParsedTurn) -> Tuple[ParsedTurn, List[str]]:
+    """Strip internal directive leakage from fields persisted or replayed."""
+    adjustments: List[str] = []
+    narrative, narrative_hits = _scrub_meta_from_text(parsed.narrative or "")
+    paragraphs: List[str] = []
+    paragraph_hits = 0
+    for paragraph in parsed.paragraphs or []:
+        scrubbed, hits = _scrub_meta_from_text(paragraph)
+        paragraph_hits += hits
+        paragraphs.append(scrubbed)
+    choices: List[Dict[str, str]] = []
+    choice_hits = 0
+    for choice in parsed.choices or []:
+        row = dict(choice)
+        scrubbed, hits = _scrub_meta_from_text(row.get("text") or "")
+        choice_hits += hits
+        row["text"] = scrubbed
+        choices.append(row)
+    state: Dict[str, str] = {}
+    state_hits = 0
+    for key, value in (parsed.state or {}).items():
+        scrubbed, hits = _scrub_meta_from_text(str(value))
+        state_hits += hits
+        state[key] = scrubbed
+    ledger: Dict[str, Any] = {}
+    ledger_hits = 0
+    for key, value in (parsed.ledger or {}).items():
+        if isinstance(value, list):
+            new_list: List[Any] = []
+            for item in value:
+                scrubbed, hits = _scrub_meta_from_text(str(item))
+                ledger_hits += hits
+                new_list.append(scrubbed)
+            ledger[key] = new_list
+        else:
+            scrubbed, hits = _scrub_meta_from_text(str(value))
+            ledger_hits += hits
+            ledger[key] = scrubbed
+    rolling_state = parsed.rolling_state
+    rolling_hits = 0
+    if isinstance(rolling_state, dict):
+        rolling_state, rolling_hits = _scrub_model_rolling_state_for_persistence(
+            rolling_state
+        )
+    total_hits = (
+        narrative_hits
+        + paragraph_hits
+        + choice_hits
+        + state_hits
+        + ledger_hits
+        + rolling_hits
+    )
+    if total_hits:
+        adjustments.append(f"persistence_scrub:hits={total_hits}")
+    return (
+        ParsedTurn(
+            narrative=narrative,
+            paragraphs=paragraphs,
+            choices=choices,
+            state=state,
+            ledger=ledger,
+            rolling_state=rolling_state,
+            debug=parsed.debug,
+            raw=parsed.raw,
+        ),
+        adjustments,
+    )
+
+
+def _finalize_validated_turn(
+    parsed: ParsedTurn, raw: str, meta: Dict[str, Any]
+) -> Tuple[ParsedTurn, str, Dict[str, Any]]:
+    """Scrub parsed player/replay fields before any persistence path."""
+    scrubbed, adjustments = _scrub_parsed_for_persistence(parsed)
+    out_meta = dict(meta)
+    if adjustments:
+        out_meta["persistence_scrub"] = "; ".join(adjustments)
+    return scrubbed, raw, out_meta
+
 
 # ======================================================================
 # MESSAGE BUILDER + LLM CALL
@@ -1791,6 +1915,7 @@ async def _build_messages(
     memory_depth: int,
     history_window_fallback: int,
     early_game_stage: Optional[int] = None,
+    secret_reveal_directive: str = "",
 ) -> List[Dict[str, str]]:
     """Construct an OpenAI-style messages array.
 
@@ -1813,6 +1938,9 @@ async def _build_messages(
     )
     if pacing_directive:
         messages.append({"role": "system", "content": pacing_directive})
+
+    if secret_reveal_directive:
+        messages.append({"role": "system", "content": secret_reveal_directive})
 
     rolling = session.get("rolling_state")
 
@@ -1858,6 +1986,7 @@ async def _generate_turn(
     session: Dict[str, Any],
     user_text: str,
     early_game_stage: Optional[int] = None,
+    secret_reveal_directive: str = "",
 ) -> Tuple[str, Dict[str, Any]]:
     """Centralised call: resolve admin settings + per-session mode, build messages, call aiService.
 
@@ -1924,6 +2053,7 @@ async def _generate_turn(
         memory_depth=memory_depth,
         history_window_fallback=history_window,
         early_game_stage=early_game_stage,
+        secret_reveal_directive=secret_reveal_directive,
     )
 
     # ---- Context Budget Governor v3.9 ----
@@ -1991,6 +2121,14 @@ _MECHANIC_WORD_RE = re.compile(
 # Phrase-level soft-meta leakage. These words have valid in-world uses
 # ("steam engine", "immune system", "ration token") so we only block them
 # when they appear in clearly meta phrasing.
+_INTERNAL_SYSTEM_MARKERS = (
+    secrets.DIRECTIVE_MARKER,
+    pacing.PACING_DIRECTIVE_MARKER,
+)
+_INTERNAL_DIRECTIVE_PROSE_RE = re.compile(
+    "|".join(secrets.DIRECTIVE_PROSE_PATTERNS),
+    re.IGNORECASE,
+)
 _SOFT_META_PHRASE_RE = re.compile(
     r"\b(?:"
     r"the\s+(?:system|engine|simulation|runtime|parser|mechanics)|"
@@ -2004,6 +2142,14 @@ _SOFT_META_PHRASE_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+def _text_contains_internal_system_leak(text: str) -> bool:
+    if not text:
+        return False
+    if any(marker in text for marker in _INTERNAL_SYSTEM_MARKERS):
+        return True
+    return bool(_INTERNAL_DIRECTIVE_PROSE_RE.search(text))
+
+
 _FAKE_CHOICE_RE = re.compile(
     r"\b(?:not\s+allowed|not\s+yet|unavailable|locked|blocked|disabled|"
     r"can(?:not|'t)\s+|won't\s+work|impossible\s+to)\b",
@@ -2119,10 +2265,31 @@ def _validate_parsed(
         return False, "mechanic terminology leaked into narrative"
     if _SOFT_META_PHRASE_RE.search(joined):
         return False, "soft meta phrasing leaked into narrative"
+    if _text_contains_internal_system_leak(joined):
+        return False, "internal system directive leaked into narrative"
 
     for c in parsed.choices or []:
         if _FAKE_CHOICE_RE.search(c.get("text") or ""):
             return False, "fake or closed-off choice wording"
+        if _text_contains_internal_system_leak(c.get("text") or ""):
+            return False, "internal system directive leaked into choices"
+
+    for value in (parsed.state or {}).values():
+        if _text_contains_internal_system_leak(str(value)):
+            return False, "internal system directive leaked into state"
+
+    for value in (parsed.ledger or {}).values():
+        if isinstance(value, list):
+            leaked = any(_text_contains_internal_system_leak(str(item)) for item in value)
+        else:
+            leaked = _text_contains_internal_system_leak(str(value))
+        if leaked:
+            return False, "internal system directive leaked into ledger"
+
+    if parsed.rolling_state and _text_contains_internal_system_leak(
+        _json.dumps(parsed.rolling_state, default=str)
+    ):
+        return False, "internal system directive leaked into rolling_state"
 
     # 5. P1-B — direct inspection must resolve concretely
     inspection_reason = _check_direct_inspection_violation(parsed, player_action)
@@ -2191,6 +2358,7 @@ def _full_validate(
 async def _generate_validated_turn(
     session: Dict[str, Any], user_text: str,
     player_action: Optional[str] = None,
+    secret_reveal_directive: str = "",
 ) -> Tuple[ParsedTurn, str, Dict[str, Any]]:
     """Call the LLM, validate the parsed turn, and retry ONCE on failure.
 
@@ -2200,7 +2368,12 @@ async def _generate_validated_turn(
     early_game_stage = pacing.get_early_game_stage(session.get("turn_count", 0))
     dev_on = "[DEV_MODE: ON]" in user_text
 
-    raw, meta = await _generate_turn(session, user_text, early_game_stage=early_game_stage)
+    raw, meta = await _generate_turn(
+        session,
+        user_text,
+        early_game_stage=early_game_stage,
+        secret_reveal_directive=secret_reveal_directive,
+    )
     parsed = parse_turn(raw)
     ok, reason, kind = _full_validate(
         parsed, session, player_action, early_game_stage=early_game_stage
@@ -2212,7 +2385,7 @@ async def _generate_validated_turn(
             and not pacing.has_engine_owned_development(session.get("rolling_state"))
         ):
             meta["pacing_stage3_no_engine_development"] = True
-        return parsed, raw, meta
+        return _finalize_validated_turn(parsed, raw, meta)
 
     debug_clause = ", <debug>" if dev_on else ""
     if kind == "hallucination":
@@ -2250,6 +2423,7 @@ async def _generate_validated_turn(
             memory_depth=memory_depth,
             history_window_fallback=history_window,
             early_game_stage=early_game_stage,
+            secret_reveal_directive=secret_reveal_directive,
         )
         # Show the model exactly what it produced, then ask it to rewrite.
         messages.append({"role": "assistant", "content": raw[:6000]})
@@ -2316,7 +2490,7 @@ async def _generate_validated_turn(
                 and not pacing.has_engine_owned_development(session.get("rolling_state"))
             ):
                 combined_meta["pacing_stage3_no_engine_development"] = True
-            return parsed2, raw2, combined_meta
+            return _finalize_validated_turn(parsed2, raw2, combined_meta)
 
         logger.warning(
             "Retry still invalid (%s/%s) — using best-available output",
@@ -2324,21 +2498,21 @@ async def _generate_validated_turn(
             reason2,
         )
         if len(parsed2.choices or []) > len(parsed.choices or []):
-            return parsed2, raw2, combined_meta
+            return _finalize_validated_turn(parsed2, raw2, combined_meta)
 
         first_with_retry = dict(meta)
         first_with_retry["validation_retried"] = True
         first_with_retry["validation_first_fail"] = reason
         first_with_retry["validation_second_fail"] = reason2
         first_with_retry["fallback_events"] = combined_meta["fallback_events"]
-        return parsed, raw, first_with_retry
+        return _finalize_validated_turn(parsed, raw, first_with_retry)
     except Exception as exc:
         logger.warning("Retry call raised %s — falling back to first attempt", exc)
         recovered = dict(meta)
         recovered["validation_retried"] = True
         recovered["validation_first_fail"] = reason
         recovered["retry_exception"] = str(exc)[:240]
-        return parsed, raw, recovered
+        return _finalize_validated_turn(parsed, raw, recovered)
 
 
 # ======================================================================
@@ -2386,6 +2560,14 @@ def _meta_into_debug(
         debug["validation_second_fail"] = str(meta["validation_second_fail"])
     if meta.get("pacing_stage3_no_engine_development"):
         debug["pacing_stage3_no_engine_development"] = "true"
+    if meta.get("secret_reveal_occurred"):
+        debug["secret_reveal_occurred"] = "true"
+    if meta.get("secret_reveal_mode"):
+        debug["secret_reveal_mode"] = str(meta["secret_reveal_mode"])
+    if meta.get("secret_reveal_index") is not None:
+        debug["secret_reveal_index"] = str(meta["secret_reveal_index"])
+    if meta.get("secret_reveal_id"):
+        debug["secret_reveal_id"] = str(meta["secret_reveal_id"])
     # ---- Context Budget Governor v3.9 diagnostics ----
     budget = meta.get("budget") or {}
     for key, label in (
@@ -2598,6 +2780,96 @@ async def _cleanup_provisional_story(session_id: str) -> None:
     """Remove session and any turns created during a failed story creation."""
     await db.turns.delete_many({"session_id": session_id})
     await db.sessions.delete_one({"id": session_id})
+
+
+async def _rollback_story_action_persist(
+    session_id: str,
+    turn_id: str,
+    session_snapshot: Dict[str, Any],
+    attempted_update_set: Optional[Dict[str, Any]],
+    *,
+    turn_inserted: bool,
+    session_updated: bool,
+) -> None:
+    """Compensate partial story_action persistence. Raises on rollback failure."""
+    if turn_inserted:
+        await db.turns.delete_one({"session_id": session_id, "id": turn_id})
+    if session_updated:
+        restore_fields = {
+            key: session_snapshot[key]
+            for key in (
+                "turn_count",
+                "last_narrative_snippet",
+                "last_state",
+                "rolling_state",
+                "updated_at",
+                "debug_mode",
+                "rolling_state_updated_at",
+                "active_model",
+                "model_switches",
+            )
+            if key in session_snapshot
+        }
+        cas_filter: Dict[str, Any] = {"id": session_id}
+        if attempted_update_set:
+            if "turn_count" in attempted_update_set:
+                cas_filter["turn_count"] = attempted_update_set["turn_count"]
+            if "rolling_state" in attempted_update_set:
+                cas_filter["rolling_state"] = attempted_update_set["rolling_state"]
+        result = await db.sessions.update_one(cas_filter, {"$set": restore_fields})
+        if result.matched_count == 0:
+            logger.warning(
+                "session rollback skipped for session %s: compare-and-set miss",
+                session_id,
+            )
+
+
+async def _insert_story_action_turn(turn_doc: Dict[str, Any]) -> None:
+    await db.turns.insert_one(turn_doc)
+
+
+async def _apply_story_action_session_update(
+    session_id: str, update_set: Dict[str, Any]
+) -> None:
+    await db.sessions.update_one({"id": session_id}, {"$set": update_set})
+
+
+async def _persist_story_action_turn(
+    session_id: str,
+    turn_number: int,
+    turn_doc: Dict[str, Any],
+    update_set: Dict[str, Any],
+    session_snapshot: Dict[str, Any],
+    meta: Dict[str, Any],
+) -> None:
+    """Atomically persist one story_action turn via compensating rollback."""
+    turn_inserted = False
+    session_updated = False
+    try:
+        await _insert_story_action_turn(turn_doc)
+        turn_inserted = True
+        await _apply_story_action_session_update(session_id, update_set)
+        session_updated = True
+        await _persist_model_lock(session_id, meta, at_turn=turn_number)
+    except Exception:
+        logger.exception("story persistence failed during story_action")
+        try:
+            await _rollback_story_action_persist(
+                session_id,
+                turn_doc["id"],
+                session_snapshot,
+                update_set,
+                turn_inserted=turn_inserted,
+                session_updated=session_updated,
+            )
+        except Exception:
+            logger.exception(
+                "story_action persistence rollback failed for session %s turn_id %s",
+                session_id,
+                turn_doc.get("id"),
+            )
+            raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
+        raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
 
 
 async def _create_new_story(req: NewStoryRequest):
@@ -2826,8 +3098,22 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
     mode_marker = f"[MODE: {session.get('mode', DEFAULT_MODE)}]"
     user_text = f"{debug_marker}\n{difficulty_marker}\n{mode_marker}\n\nPlayer action: {req.action_text}"
 
+    next_turn_number = session.get("turn_count", 0) + 1
+    working_rolling, secret_directive, reveal_diag = secrets.prepare_turn_reveal(
+        session.get("rolling_state"),
+        req.action_text,
+        next_turn_number,
+    )
+    gen_session = dict(session)
+    gen_session["rolling_state"] = working_rolling
+
     try:
-        parsed, raw, meta = await _generate_validated_turn(session, user_text, player_action=req.action_text)
+        parsed, raw, meta = await _generate_validated_turn(
+            gen_session,
+            user_text,
+            player_action=req.action_text,
+            secret_reveal_directive=secret_directive,
+        )
     except AIServiceError:
         logger.exception("AI service failed during story_action")
         raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
@@ -2835,14 +3121,14 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
         logger.exception("LLM call failed during story_action")
         raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
 
-    next_turn_number = session.get("turn_count", 0) + 1
+    secrets.merge_reveal_diagnostics(meta, reveal_diag)
     guard_adjustments = _apply_state_supremacy(session, parsed, req.action_text)
     guard_adjustments.extend(_apply_object_permanence(parsed))
 
     # ---- Anti-Hallucination Gateway (Ch 31) — STRIP illegal mutations ----
     # Runs on the FRESH parsed turn (pre-consolidation) so corrected truth
     # feeds rolling-state consolidation below.
-    prior_rolling = session.get("rolling_state")
+    prior_rolling = working_rolling
     guard_adjustments.extend(
         gateway.strip_illegal_state_changes(
             prior_rolling, session.get("last_state"), parsed, req.action_text
@@ -2852,6 +3138,12 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
 
     # ---- Rolling Memory Compression v3.8 ----
     merged_rolling = consolidate_rolling_state(prior_rolling, parsed.rolling_state)
+    guard_adjustments.extend(
+        secrets.enforce_authoritative_registry(
+            merged_rolling,
+            working_rolling.get("secret_registry"),
+        )
+    )
 
     # P0 — ledger-wide cross-category dedup using the post-consolidation
     # rolling_state as authoritative truth. Must run AFTER consolidation
@@ -2933,7 +3225,18 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
         debug=enriched_debug,
         raw=raw,
     )
-    await db.turns.insert_one(turn.model_dump())
+
+    session_snapshot = {
+        "turn_count": session.get("turn_count", 0),
+        "last_narrative_snippet": session.get("last_narrative_snippet"),
+        "last_state": copy.deepcopy(session.get("last_state")),
+        "rolling_state": copy.deepcopy(session.get("rolling_state")),
+        "updated_at": session.get("updated_at"),
+        "debug_mode": session.get("debug_mode"),
+        "rolling_state_updated_at": session.get("rolling_state_updated_at"),
+        "active_model": session.get("active_model"),
+        "model_switches": copy.deepcopy(session.get("model_switches") or []),
+    }
 
     snippet = (parsed.paragraphs[0][:180] + "…") if parsed.paragraphs else ""
     update_set: Dict[str, Any] = {
@@ -2943,18 +3246,21 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
         "updated_at": datetime.now(timezone.utc),
         "debug_mode": req.debug_mode,
     }
-    # Always persist the CONSOLIDATED rolling_state so unresolved consequences
-    # are never lost just because the model omitted them on this turn.
     if merged_rolling:
         update_set["rolling_state"] = merged_rolling
         update_set["rolling_state_updated_at"] = datetime.now(timezone.utc)
     elif parsed.rolling_state:
         update_set["rolling_state"] = parsed.rolling_state
         update_set["rolling_state_updated_at"] = datetime.now(timezone.utc)
-    await db.sessions.update_one({"id": req.session_id}, {"$set": update_set})
 
-    # Persist any model switch from this turn.
-    await _persist_model_lock(req.session_id, meta, at_turn=next_turn_number)
+    await _persist_story_action_turn(
+        req.session_id,
+        next_turn_number,
+        turn.model_dump(),
+        update_set,
+        session_snapshot,
+        meta,
+    )
 
     return {"turn": build_player_turn(turn.model_dump(mode="json"))}
 

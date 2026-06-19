@@ -183,7 +183,7 @@ pytest tests/test_security.py \
 | `emergentintegrations` removed from requirements (was unused, unavailable on PyPI) | Code search + CI hardening 2026-06-20 |
 | FastAPI `@app.on_event("shutdown")` deprecated | Tests warnings when importing `server` |
 | No MongoDB indexes defined in code | Code |
-| Deterministic CI on `emergent` | `.github/workflows/deterministic-ci.yml` — 205 backend + 17 frontend tests; Yarn + `yarn.lock` canonical |
+| Deterministic CI on `emergent` | `.github/workflows/deterministic-ci.yml` — 242 backend + 17 frontend tests; Yarn + `yarn.lock` canonical |
 | Documentation pass 1–2 authored against `main`, cherry-picked to `emergent` without re-audit | Git history + code diff vs `main` |
 
 ---
@@ -214,7 +214,7 @@ Derived from confirmed gaps (not speculative features):
 | Priority | Work | Evidence |
 |----------|------|----------|
 | P1 | Chronicle Creation Phase 4 — Advanced Builder extraction/refactor remains pending | `frontend/app/new-story.tsx` still hosts preserved legacy builder |
-| P1 | Secret reveal trigger remains unimplemented; `secret_registry` stays engine-only | Code + `test_onboarding_hooks.py` |
+| ~~P1 Secret reveal trigger~~ ✅ | Secret Reveal Trigger v1 — explicit confession only | `secrets.py` + `test_secret_reveal.py` ✅ |
 | P2 | Live-server long-run stress (`qa_live_20turn_hostile.py`) and wider story-engine bundle | Not run in this Phase 3 pass |
 | P2 | ~~CI job for deterministic tests~~ ✅ | `.github/workflows/deterministic-ci.yml` (2026-06-20) |
 

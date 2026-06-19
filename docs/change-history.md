@@ -4,6 +4,19 @@ Lightweight log of documentation and operational changes. One entry per meaningf
 
 ---
 
+## 2026-06-20 — Secret Reveal Trigger v1
+
+| Field | Detail |
+|-------|--------|
+| **Change** | Added `backend/secrets.py` (explicit confession detection, copy-on-write reveal, internal directive, registry authority). Wired into `story_action`, `_build_messages`, `_generate_validated_turn` retry path, and post-consolidation registry protection. Added `test_secret_reveal.py` (37 tests). |
+| **Reason** | Allow deliberate player confession to reveal onboarding secrets deterministically without LLM classification or automatic triggers. |
+| **Files affected** | `backend/secrets.py`, `backend/server.py`, `backend/tests/test_secret_reveal.py`, `backend/tests/test_early_game_pacing.py` (signature fix), `docs/*` |
+| **Tests run** | `pytest tests/test_onboarding_hooks.py tests/test_secret_reveal.py tests/test_early_game_pacing.py -q` → **103 passed**; full `pytest -m "not live" -q` → **242 passed** |
+| **Decision-log entry** | ADR-017 |
+| **Remaining risks** | Confession phrasing false negatives; provider prose quality; no automatic/evidence reveals |
+
+---
+
 ## 2026-06-20 — Deterministic GitHub Actions CI
 
 | Field | Detail |

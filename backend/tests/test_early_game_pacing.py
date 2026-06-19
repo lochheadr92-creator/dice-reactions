@@ -248,10 +248,22 @@ def test_stage_computed_once_and_reused_for_retry():
     scripts = [bad, good]
     calls = {"n": 0}
 
-    async def track_build(session, user_text, memory_depth, history_window_fallback, early_game_stage=None):
+    async def track_build(
+        session,
+        user_text,
+        memory_depth,
+        history_window_fallback,
+        early_game_stage=None,
+        secret_reveal_directive="",
+    ):
         captured_stages.append(early_game_stage)
         return await original_build(
-            session, user_text, memory_depth, history_window_fallback, early_game_stage=early_game_stage
+            session,
+            user_text,
+            memory_depth,
+            history_window_fallback,
+            early_game_stage=early_game_stage,
+            secret_reveal_directive=secret_reveal_directive,
         )
 
     original_build = server._build_messages

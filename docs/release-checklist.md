@@ -27,7 +27,7 @@ export ADMIN_API_KEY=test-admin-key
 python -m pytest -m "not live" -q
 ```
 
-- [ ] Deterministic backend bundle passes (**205** tests as of 2026-06-20)
+- [ ] Deterministic backend bundle passes (**242** tests as of 2026-06-20)
 
 ### Frontend tests (matches CI)
 
