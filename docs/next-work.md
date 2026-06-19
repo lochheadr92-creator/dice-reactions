@@ -45,6 +45,19 @@ Practical backlog from confirmed repo gaps on the **`emergent`** branch. No spec
 
 ---
 
+## Completed (Secret Reveal Trigger v1)
+
+### NW-SECRET-01: Explicit confession reveal ✅
+
+| Field | Detail |
+|-------|--------|
+| **Resolution** | `backend/secrets.py` — deterministic confession detection, copy-on-write reveal before generation, internal directive, registry mutation strip |
+| **Tests** | `test_secret_reveal.py` ✅ (37 cases); onboarding concealment preserved |
+| **ADR** | ADR-017 |
+| **Follow-up** | Automatic/evidence/NPC reveal policies — out of v1 scope |
+
+---
+
 ## P1: Correctness and verification
 
 ### NW-P1-01: Live-server integration tests

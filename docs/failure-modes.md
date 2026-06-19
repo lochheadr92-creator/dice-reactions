@@ -306,6 +306,21 @@ For each mode: detection, prevention, recovery, and **current protection status*
 
 ---
 
+## FM-23: Onboarding secret leaked before player confession
+
+| Field | Detail |
+|-------|--------|
+| **Trigger** | Secret text or `secret_registry` reaches LLM `<prior_state>`, player API, or exports before deliberate reveal. |
+| **Effect** | Spoiler; immersion break; trust loss. |
+| **Detection** | `test_onboarding_hooks.py`, `test_secret_reveal.py`, player export audits. |
+| **Prevention** | `_prompt_safe_rolling` strips registry; `player_api` blocks `secret_registry`; reveal only via `secrets.prepare_turn_reveal` on explicit confession; model registry mutations stripped post-consolidation. |
+| **Recovery** | N/A for leaked sessions — prevention-only; admin raw export for operators. |
+| **Files** | `backend/secrets.py`, `backend/server.py`, `backend/player_api.py` |
+| **Tests** | `test_onboarding_hooks.py` ✅, `test_secret_reveal.py` ✅ |
+| **Status** | **Protected** (deterministic v1 — explicit confession only) |
+
+---
+
 ## FM-22: Pacing directive leak into player-visible persistence
 
 | Field | Detail |

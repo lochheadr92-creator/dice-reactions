@@ -292,3 +292,20 @@ Promote to ADR when implementation and tests exist.
 | **Files affected** | `backend/pacing.py`, `backend/server.py`, `backend/tests/test_early_game_pacing.py`, `docs/*` |
 | **Tests required** | `test_early_game_pacing.py` ✅; existing 83-test regression bundle ✅ |
 | **Evidence** | 118-test bundle passed 2026-06-20 on `emergent` |
+
+---
+
+## ADR-017: Secret Reveal Trigger v1 (explicit player confession only)
+
+| Field | Detail |
+|-------|--------|
+| **Date** | 2026-06-20 |
+| **Status** | Accepted |
+| **Context** | Onboarding secrets are stored unrevealed in `secret_registry` but had no deterministic reveal path. Automatic, semantic, or LLM-inferred reveals risk false positives and mechanic leaks. |
+| **Decision** | Add pure `secrets.py`. Reveal only on `explicit_player_confession` detected by narrow regex intent (with negation guards). Compute reveal once per request before `_generate_validated_turn`; persist only after successful generation via copy-on-write working rolling state. Inject non-persisted internal system directive after pacing directive. Strip any model-emitted `secret_registry` during consolidation. Legacy entries without `reveal_policy` default to explicit confession. |
+| **Alternatives considered** | LLM intent classification (reject — non-deterministic, extra provider risk); keyword match on secret text (reject — leaks content into matcher); timer/NPC/evidence triggers (reject — v1 scope); persisting directive in turns (reject — leak risk). |
+| **Consequences** | `story_action` uses generation-session copy; authoritative registry enforced post-consolidation; debug may record reveal index/mode but never secret text. |
+| **Risks** | False negatives on unusual confession phrasing; narrative quality of reactions remains provider-dependent; no automatic dramatic timing. |
+| **Files affected** | `backend/secrets.py`, `backend/server.py`, `backend/tests/test_secret_reveal.py`, `docs/*` |
+| **Tests required** | `test_secret_reveal.py` ✅; `test_onboarding_hooks.py` ✅; full deterministic bundle ✅ |
+| **Evidence** | 242 deterministic tests passed 2026-06-20 on `emergent` |

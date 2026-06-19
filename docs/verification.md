@@ -37,7 +37,7 @@ yarn test
 yarn typecheck
 ```
 
-**Passed 2026-06-20 on `emergent`:** **205** deterministic backend tests (includes P2 consequence/rumour verifier) + **17** frontend Jest tests + TypeScript clean.
+**Passed 2026-06-20 on `emergent`:** **242** deterministic backend tests (includes secret reveal, P2 verifier) + **17** frontend Jest tests + TypeScript clean.
 
 **Lint:** `yarn lint` passes locally (exit 0) but is **not** a required CI step in this increment — Expo lint subprocess emits a benign `yarnpkg` shim warning on Windows; no ESLint rule debt was found.
 
@@ -56,7 +56,7 @@ cd backend
 #   $env:DB_NAME="dice_reactions_ci"
 #   $env:ADMIN_API_KEY="test-admin-key"
 python -m pytest -m "not live" -q
-# 205 passed, 34 deselected (live)
+# 242 passed, 34 deselected (live)
 ```
 
 | File | What it covers |
@@ -95,6 +95,7 @@ yarn lint
 | `test_early_game_pacing.py` | pytest | ✅ Passed 2026-06-20 (offline, MongoDB) |
 | `test_http_integration.py` | pytest | ✅ Passed 2026-06-20 (TestClient + mocked LLM) |
 | `test_onboarding_hooks.py` | pytest | ✅ Passed 2026-06-20 (offline) |
+| `test_secret_reveal.py` | pytest | ✅ Passed 2026-06-20 (offline, explicit confession reveal) |
 | `test_provider_selection.py` | pytest | ✅ Passed 2026-06-20 (offline) |
 | `test_ci_network_safety.py` | pytest | ✅ Passed 2026-06-20 (gateway chokepoint guard) |
 | `test_custom_world_system.py` | pytest | **Mixed** — 3 unit guards ✅ in CI; 4 integration tests marked `@pytest.mark.live` |
@@ -165,6 +166,7 @@ Security coverage: `test_security.py` — ownership (10), admin auth (5), export
 - Onboarding hooks and secret concealment
 - Object permanence, immersion integrity, microfix regression scenarios
 - P2 delayed consequences and rumour propagation (`verify_p2_consequences_rumours.py`)
+- Secret reveal on explicit player confession (`test_secret_reveal.py`)
 - Hermetic HTTP integration (TestClient + mocked LLM)
 - Provider selection routing (no live calls — network-safety autouse fixture)
 - New Chronicle frontend: Quick Start, Guided Start, Advanced Builder, duplicate-submit, payload mapping, mode isolation, large font scale
@@ -178,10 +180,12 @@ Security coverage: `test_security.py` — ownership (10), admin auth (5), export
 - Browser rendering or mobile device behaviour
 - Custom World live integration (`test_custom_world_system.py` live tests)
 - Full `test_story_engine.py` API contract against real LLM output
+- Automatic secret reveal timing, NPC evidence discovery, or semantic confession inference
+- Natural provider prose quality when reacting to a confession
 
 ## Observations / regressions
 
-- No runtime-breaking regressions in **205** deterministic backend tests (2026-06-20)
+- No runtime-breaking regressions in **242** deterministic backend tests (2026-06-20)
 - Prior docs described `main` branch — missing gateway/relationship/HUD; corrected in reconciliation pass
 - Lint tooling not fully clean: `test_story_engine.py` flake8 `E741` (Docs-claimed)
 
