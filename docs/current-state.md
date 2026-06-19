@@ -69,6 +69,7 @@ This document is the canonical operational snapshot of the repository **as it ex
 |--------|--------|----------|
 | Story session CRUD | Implemented | Code (`server.py` routes) |
 | Early-Game Pacing Governor v1 | Implemented (deterministic structural Stage 1) | Code (`pacing.py`) + Tests (`test_early_game_pacing.py` ✅) |
+| Replayability Engine v1 | Implemented (deterministic — session `replayability_state`) | Code (`replayability.py`, `run_identity.py`, `opening_state.py`, `pressure_graph.py`, `consequence_echoes.py`) + Tests (`test_run_identity.py`, `test_opening_state.py`, `test_pressure_graph.py`, `test_consequence_echoes.py`, `test_replayability_integration.py` ✅) |
 | Turn generation pipeline | Implemented | Code |
 | Anti-Hallucination Gateway | Implemented | Code (`gateway.py`) + Tests (`test_anti_hallucination_gateway.py`, `test_gateway_e2e.py` ✅) |
 | LLM chokepoint (`invoke_llm`) | Implemented | Code — all `_generate_turn` / retry calls route through `gateway.invoke_llm` |
@@ -95,7 +96,7 @@ This document is the canonical operational snapshot of the repository **as it ex
 | Admin API key authentication | Implemented | Code (`security.require_admin`) + Tests (`test_security.py` ✅) |
 | Player-safe export | Implemented | Code — sanitised export; Tests (`test_security.py` ✅) |
 | Raw administrative export | Implemented | Code — `/export/raw` + admin key + ownership; Tests ✅ |
-| Reset session endpoint | Implemented | Code — deletes turns, clears rolling state |
+| Reset session endpoint | Implemented | Code — deletes turns, clears rolling state and `replayability_state` |
 | Frontend error mapping | Implemented | Code (`frontend/src/errors.ts`) |
 
 ---

@@ -284,6 +284,7 @@ def test_directive_identical_on_retry_message_construction():
         history_window_fallback,
         early_game_stage=None,
         secret_reveal_directive="",
+        replayability_directives=None,
     ):
         captured.append(secret_reveal_directive)
         return await original_build(
@@ -293,6 +294,7 @@ def test_directive_identical_on_retry_message_construction():
             history_window_fallback,
             early_game_stage=early_game_stage,
             secret_reveal_directive=secret_reveal_directive,
+            replayability_directives=replayability_directives,
         )
 
     server._build_messages = track_build
@@ -728,7 +730,15 @@ def test_retry_uses_same_directive_without_exposing_marker(client, mongo_env):
     captured_directives: List[str] = []
     original_build = server._build_messages
 
-    async def track_build(session, user_text, memory_depth, history_window_fallback, early_game_stage=None, secret_reveal_directive=""):
+    async def track_build(
+        session,
+        user_text,
+        memory_depth,
+        history_window_fallback,
+        early_game_stage=None,
+        secret_reveal_directive="",
+        replayability_directives=None,
+    ):
         captured_directives.append(secret_reveal_directive)
         return await original_build(
             session,
@@ -737,6 +747,7 @@ def test_retry_uses_same_directive_without_exposing_marker(client, mongo_env):
             history_window_fallback,
             early_game_stage=early_game_stage,
             secret_reveal_directive=secret_reveal_directive,
+            replayability_directives=replayability_directives,
         )
 
     async def leaky_then_clean(**kwargs):

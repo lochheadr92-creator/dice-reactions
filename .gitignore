@@ -93,3 +93,6 @@ credentials.json
 frontend/.metro-cache/
 
 mcps/
+
+# Local agent terminal session captures (generated tooling output)
+terminals/

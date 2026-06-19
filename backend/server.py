@@ -51,6 +51,7 @@ import relationships  # noqa: E402  — Relationship Calculus (Ch 29)
 import hud  # noqa: E402  — player-facing HUD shaping (status chips + Pressure)
 import pacing  # noqa: E402  — Early-Game Pacing Governor v1 (deterministic)
 import secrets  # noqa: E402  — Secret Reveal Trigger v1 (deterministic)
+import replayability  # noqa: E402  — Replayability Engine v1 (deterministic)
 from security import fetch_owned_session, require_admin, require_device_id  # noqa: E402
 from rate_limit import (  # noqa: E402
     _rollback_bucket_reservations,
@@ -597,6 +598,7 @@ class SessionRecord(BaseModel):
     fallback_chain: Optional[List[str]] = None
     model_switches: List[Dict[str, Any]] = Field(default_factory=list)
     cost_mode: str = "normal"  # "normal" | "low"
+    replayability_state: Optional[Dict[str, Any]] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -1926,6 +1928,7 @@ async def _build_messages(
     history_window_fallback: int,
     early_game_stage: Optional[int] = None,
     secret_reveal_directive: str = "",
+    replayability_directives: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, str]]:
     """Construct an OpenAI-style messages array.
 
@@ -1949,8 +1952,20 @@ async def _build_messages(
     if pacing_directive:
         messages.append({"role": "system", "content": pacing_directive})
 
+    rb_directives = replayability_directives or {}
+    include_opening = session.get("turn_count", 0) <= 0
+    if include_opening:
+        opening_body = (rb_directives.get("opening") or "").strip()
+        if opening_body:
+            messages.append({"role": "system", "content": opening_body})
+
     if secret_reveal_directive:
         messages.append({"role": "system", "content": secret_reveal_directive})
+
+    for rb_body in replayability.combine_directive_messages(
+        rb_directives, include_opening=False
+    ):
+        messages.append({"role": "system", "content": rb_body})
 
     rolling = session.get("rolling_state")
 
@@ -1997,6 +2012,7 @@ async def _generate_turn(
     user_text: str,
     early_game_stage: Optional[int] = None,
     secret_reveal_directive: str = "",
+    replayability_directives: Optional[Dict[str, str]] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """Centralised call: resolve admin settings + per-session mode, build messages, call aiService.
 
@@ -2064,6 +2080,7 @@ async def _generate_turn(
         history_window_fallback=history_window,
         early_game_stage=early_game_stage,
         secret_reveal_directive=secret_reveal_directive,
+        replayability_directives=replayability_directives,
     )
 
     # ---- Context Budget Governor v3.9 ----
@@ -2134,9 +2151,13 @@ _MECHANIC_WORD_RE = re.compile(
 _INTERNAL_SYSTEM_MARKERS = (
     secrets.DIRECTIVE_MARKER,
     pacing.PACING_DIRECTIVE_MARKER,
+    *replayability.DIRECTIVE_MARKERS,
 )
 _INTERNAL_DIRECTIVE_PROSE_RE = re.compile(
-    "|".join(secrets.DIRECTIVE_PROSE_PATTERNS),
+    "|".join(
+        list(secrets.DIRECTIVE_PROSE_PATTERNS)
+        + list(replayability.DIRECTIVE_PROSE_PATTERNS)
+    ),
     re.IGNORECASE,
 )
 _SOFT_META_PHRASE_RE = re.compile(
@@ -2369,6 +2390,7 @@ async def _generate_validated_turn(
     session: Dict[str, Any], user_text: str,
     player_action: Optional[str] = None,
     secret_reveal_directive: str = "",
+    replayability_directives: Optional[Dict[str, str]] = None,
 ) -> Tuple[ParsedTurn, str, Dict[str, Any]]:
     """Call the LLM, validate the parsed turn, and retry ONCE on failure.
 
@@ -2383,6 +2405,7 @@ async def _generate_validated_turn(
         user_text,
         early_game_stage=early_game_stage,
         secret_reveal_directive=secret_reveal_directive,
+        replayability_directives=replayability_directives,
     )
     parsed = parse_turn(raw)
     ok, reason, kind = _full_validate(
@@ -2434,6 +2457,7 @@ async def _generate_validated_turn(
             history_window_fallback=history_window,
             early_game_stage=early_game_stage,
             secret_reveal_directive=secret_reveal_directive,
+            replayability_directives=replayability_directives,
         )
         # Show the model exactly what it produced, then ask it to rewrite.
         messages.append({"role": "assistant", "content": raw[:6000]})
@@ -2812,6 +2836,7 @@ async def _rollback_story_action_persist(
                 "last_narrative_snippet",
                 "last_state",
                 "rolling_state",
+                "replayability_state",
                 "updated_at",
                 "debug_mode",
                 "rolling_state_updated_at",
@@ -2957,6 +2982,17 @@ async def _create_new_story(req: NewStoryRequest):
         else f"{effective_genre.title()} — {(effective_role or 'Wanderer').title()}"
     )
 
+    replayability_state, frozen_rb_directives = replayability.init_new_story(
+        genre=effective_genre,
+        role=effective_role,
+        tone=effective_tone,
+        difficulty=effective_difficulty,
+        scenario_id=req.scenario_id,
+        custom_premise=effective_premise,
+        custom_world_setup=custom_setup,
+        scenario=scenario,
+    )
+
     session = SessionRecord(
         device_id=req.device_id,
         genre=effective_genre,
@@ -2969,6 +3005,7 @@ async def _create_new_story(req: NewStoryRequest):
         title=title,
         mode=effective_mode,
         scenario_id=req.scenario_id,
+        replayability_state=replayability_state,
         # ---- session-locked AI routing snapshot ----
         active_model=settings.get("model") or DEFAULT_MODEL,
         fallback_chain=(
@@ -3035,7 +3072,9 @@ async def _create_new_story(req: NewStoryRequest):
 
     try:
         parsed, raw, meta = await _generate_validated_turn(
-            session.model_dump(), opening_prompt
+            session.model_dump(),
+            opening_prompt,
+            replayability_directives=frozen_rb_directives,
         )
     except AIServiceError:
         logger.exception("AI service failed during new_story")
@@ -3087,6 +3126,9 @@ async def _create_new_story(req: NewStoryRequest):
     )
     # HUD — drop objective guidance; set Danger/Momentum chips + Pressure line.
     guard_adjustments.extend(hud.shape_hud(parsed.state, merged_rolling))
+    guard_adjustments.extend(
+        replayability.enforce_authoritative(merged_rolling, replayability_state)
+    )
     if guard_adjustments:
         enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
     memory_depth = int(settings.get("memory_depth", DEFAULT_MEMORY_DEPTH))
@@ -3126,6 +3168,7 @@ async def _create_new_story(req: NewStoryRequest):
                 "last_state": parsed.state,
                 "rolling_state": merged_rolling or parsed.rolling_state,
                 "rolling_state_updated_at": datetime.now(timezone.utc),
+                "replayability_state": replayability_state,
                 "updated_at": datetime.now(timezone.utc),
             }},
         )
@@ -3138,6 +3181,7 @@ async def _create_new_story(req: NewStoryRequest):
         raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
 
     session_doc = session.model_dump(mode="json")
+    session_doc["replayability_state"] = replayability_state
     return {
         "session_id": session.id,
         "turn": build_player_turn(turn.model_dump(mode="json")),
@@ -3164,6 +3208,15 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
             req.action_text,
             next_turn_number,
         )
+
+        frozen_rb_directives: Optional[Dict[str, str]] = None
+        working_replayability = copy.deepcopy(session.get("replayability_state"))
+        rb_diag: Dict[str, Any] = {}
+        if replayability.replayability_active(session):
+            working_replayability, frozen_rb_directives, rb_diag, _rb_thresholds = (
+                replayability.prepare_action_turn(working_replayability, next_turn_number)
+            )
+
         gen_session = dict(session)
         gen_session["rolling_state"] = working_rolling
 
@@ -3173,6 +3226,7 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
                 user_text,
                 player_action=req.action_text,
                 secret_reveal_directive=secret_directive,
+                replayability_directives=frozen_rb_directives,
             )
         except AIServiceError:
             logger.exception("AI service failed during story_action")
@@ -3182,6 +3236,7 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
             raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
 
         secrets.merge_reveal_diagnostics(meta, reveal_diag)
+        replayability.merge_replayability_diagnostics(meta, rb_diag)
         guard_adjustments = _apply_state_supremacy(session, parsed, req.action_text)
         guard_adjustments.extend(_apply_object_permanence(parsed))
 
@@ -3234,6 +3289,21 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
             )
         )
         guard_adjustments.extend(hud.shape_hud(parsed.state, merged_rolling))
+        if replayability.replayability_active(session):
+            guard_adjustments.extend(
+                replayability.enforce_authoritative(merged_rolling, working_replayability)
+            )
+            qualifying_sources = replayability.collect_qualifying_echo_sources(
+                prior_rolling=prior_rolling,
+                merged_rolling=merged_rolling,
+                turn_number=next_turn_number,
+                guard_adjustments=guard_adjustments,
+            )
+            working_replayability = replayability.finalize_action_turn(
+                working_replayability,
+                qualifying_sources,
+                next_turn_number,
+            )
         if guard_adjustments:
             enriched_debug["state_guard_adjustments"] = "; ".join(guard_adjustments)
 
@@ -3277,6 +3347,7 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
             "last_narrative_snippet": session.get("last_narrative_snippet"),
             "last_state": copy.deepcopy(session.get("last_state")),
             "rolling_state": copy.deepcopy(session.get("rolling_state")),
+            "replayability_state": copy.deepcopy(session.get("replayability_state")),
             "updated_at": session.get("updated_at"),
             "debug_mode": session.get("debug_mode"),
             "rolling_state_updated_at": session.get("rolling_state_updated_at"),
@@ -3298,6 +3369,8 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
         elif parsed.rolling_state:
             update_set["rolling_state"] = parsed.rolling_state
             update_set["rolling_state_updated_at"] = datetime.now(timezone.utc)
+        if replayability.replayability_active(session) and working_replayability:
+            update_set["replayability_state"] = working_replayability
 
         await _persist_story_action_turn(
             session_id,
@@ -3392,6 +3465,7 @@ async def reset_session(session_id: str, device_id: str = Depends(require_device
             "last_narrative_snippet": "",
             "last_state": {},
             "rolling_state": None,
+            "replayability_state": None,
             "updated_at": datetime.now(timezone.utc),
         }},
     )

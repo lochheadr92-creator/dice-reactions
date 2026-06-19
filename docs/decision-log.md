@@ -326,3 +326,20 @@ Promote to ADR when implementation and tests exist.
 | **Files affected** | `backend/action_concurrency.py`, `backend/server.py`, `backend/tests/test_action_concurrency.py`, `docs/*` |
 | **Tests required** | `test_action_concurrency.py` ✅; `test_secret_reveal.py` regression ✅; full deterministic bundle ✅ |
 | **Evidence** | 306 deterministic tests passed 2026-06-20 on `emergent` |
+
+---
+
+## ADR-019: Replayability Engine v1 (session `replayability_state`)
+
+| Field | Detail |
+|-------|--------|
+| **Date** | 2026-06-20 |
+| **Status** | Accepted |
+| **Context** | Chronicles need deterministic run variation (identity, opening archetype, pressure foreground, delayed echoes) without storing engine truth in `rolling_state` or exposing it to players. |
+| **Decision** | Add pure modules: `run_identity.py` (narrative + **causal** closed enums; `has_secret` bool; difficulty → `severity_multiplier` only), `opening_state.py` (14 archetypes with **structured opening facts** + `pressure_origins`), `pressure_graph.py` (causal nodes: `kind`, `magnitude`, `trend`, `scope`, links; trend-based movement; foreground scoring with recency penalty; one-shot threshold crossings in `threshold_crossings`), `consequence_echoes.py` (schedule/mature/fire max 1/turn from **confirmed source events only**), orchestrated by `replayability.py`. Persist on `sessions.replayability_state` only. **No** `engine_events` log — canonical transitions live in `rolling_state` (delayed consequences, relationship vectors, faction ticks, destruction registry) and `pressure_graph.threshold_crossings`; replayability keeps bounded `transition_receipts` (IDs + receipt type) for idempotency only. Echo sources: `collect_qualifying_echo_sources` after guard pipeline; **never** player text / narrative parsing. `prepare_action_turn` before provider (tick, mature, fire, frozen directives); `finalize_action_turn` after guards. Policy A legacy skip. |
+| **Alternatives considered** | Store in `rolling_state` (reject — LLM merge risk); keyword echo scheduling from player text (reject — not state-as-truth); `engine_events` as second history (reject — duplicates rolling_state). |
+| **Consequences** | `SessionRecord.replayability_state`; rollback restores field; player serializers exclude field; raw admin export includes full session. |
+| **Risks** | Unsupported echo categories (theft/violence/promise) remain unsupported until structured guard outputs exist; qualitative surfacing remains provider-dependent; not a Living World Test. |
+| **Files affected** | `backend/replayability.py`, `backend/run_identity.py`, `backend/opening_state.py`, `backend/pressure_graph.py`, `backend/consequence_echoes.py`, `backend/server.py`, `backend/tests/test_*replayability*`, `docs/*`, `.gitignore` |
+| **Tests required** | Five replayability test modules ✅; full deterministic bundle ✅ |
+| **Evidence** | 390 deterministic tests passed 2026-06-20 on `emergent` (contract-correction pass) |

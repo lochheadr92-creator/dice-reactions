@@ -45,6 +45,19 @@ Practical backlog from confirmed repo gaps on the **`emergent`** branch. No spec
 
 ---
 
+## Completed (Replayability Engine v1)
+
+### NW-REPLAY-01: Session replayability_state + deterministic variation ✅
+
+| Field | Detail |
+|-------|--------|
+| **Resolution** | `backend/replayability.py` + `run_identity.py`, `opening_state.py`, `pressure_graph.py`, `consequence_echoes.py` — session document field only; Policy A legacy skip |
+| **Tests** | Five replayability modules ✅; targeted bundle **185**; full bundle **390** passed (contract-corrected) |
+| **ADR** | ADR-019 |
+| **Follow-up** | Richer structured-event sources from ledger/guards; Living World Test remains separate |
+
+---
+
 ## Completed (Session Action Concurrency Guard v1)
 
 ### NW-CONCURRENCY-01: Per-session action lease ✅

@@ -351,6 +351,21 @@ For each mode: detection, prevention, recovery, and **current protection status*
 
 ---
 
+## FM-20: Replayability state drift or leak
+
+| Field | Detail |
+|-------|--------|
+| **Trigger** | LLM emits `replayability_*` / `pressure_graph` keys in `rolling_state`; treating player text as echo source; duplicate `engine_events` history; legacy session mixed with new code paths. |
+| **Effect** | Engine truth in wrong layer; false echoes; player export or prompt pollution; inconsistent run identity across turns. |
+| **Detection** | `replayability.enforce_authoritative` + `strip_model_pressure_mutations`; player serializer excludes `replayability_state`; integration tests reject keyword echo sources. |
+| **Prevention** | Store replayability only on session document; echoes from `collect_qualifying_echo_sources` after guards only; `transition_receipts` idempotency (not event history); Policy A skip; strip rolling keys post-consolidation; `reset_session` clears field. |
+| **Recovery** | Guards strip illegal rolling keys; rollback restores `replayability_state` snapshot; session reset. |
+| **Files** | `replayability.py`, `server.py`, `player_api.py` |
+| **Tests** | `test_replayability_integration.py` ✅ |
+| **Status** | **Protected** (deterministic) |
+
+---
+
 ## FM-19: Stale documentation treated as runtime truth
 
 | Field | Detail |
