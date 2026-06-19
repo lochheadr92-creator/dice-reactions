@@ -4,6 +4,18 @@ Lightweight log of documentation and operational changes. One entry per meaningf
 
 ---
 
+## 2026-06-20 — Frontend Action Conflict Recovery v1 (three-stage increment)
+
+| Field | Detail |
+|-------|--------|
+| **Change** | Stage 1: reconciled docs — Advanced Builder extraction complete (`AdvancedBuilder.tsx`). Stage 2: added `frontend/src/api-error.ts` (`ApiError` with status/detail/body); `api.ts` throws typed errors; `friendlyError()` explicit 409 copy. Stage 3: play-screen 409 recovery — `action-conflict-sync.ts` (bounded read-only `getSession` polling), `chronicle-merge.ts` (`mergeChronicleTurns`), `play/[id].tsx` conflict sync + focus refresh; preserves typed input; no auto-resubmit. |
+| **Reason** | Frontend must handle Session Action Concurrency Guard HTTP **409** without losing player input, duplicating turns, showing raw JSON, or stuck loading state. |
+| **Files affected** | `frontend/src/api-error.ts`, `frontend/src/action-conflict-sync.ts`, `frontend/src/chronicle-merge.ts`, `frontend/src/api.ts`, `frontend/src/errors.ts`, `frontend/app/play/[id].tsx`, `frontend/__tests__/*`, `docs/*` |
+| **Tests run** | `node node_modules/jest/bin/jest.js --runInBand` → **41 passed**; `tsc --noEmit` → clean. Backend unchanged — no pytest run. |
+| **Remaining risks** | Multi-tab pre-submit races; idempotent replay; reset/delete/mode concurrency; full browser/device matrix |
+
+---
+
 ## 2026-06-20 — Session Action Concurrency Guard v1
 
 | Field | Detail |
@@ -13,7 +25,7 @@ Lightweight log of documentation and operational changes. One entry per meaningf
 | **Files affected** | `backend/action_concurrency.py`, `backend/server.py`, `backend/tests/test_action_concurrency.py`, `backend/tests/test_secret_reveal.py`, `docs/*` |
 | **Tests run** | `pytest tests/test_action_concurrency.py tests/test_secret_reveal.py tests/test_early_game_pacing.py -q` → **151 passed**; full `pytest -m "not live" -q` → **306 passed** |
 | **Decision-log entry** | ADR-018 |
-| **Remaining risks** | No concurrency guard on reset/delete/mode; no frontend 409 handling; no idempotent replay of completed actions |
+| **Remaining risks** | No concurrency guard on reset/delete/mode; no idempotent replay of completed actions (frontend 409 handling added in Frontend Action Conflict Recovery v1) |
 
 ---
 

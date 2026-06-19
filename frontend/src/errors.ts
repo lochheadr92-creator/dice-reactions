@@ -1,17 +1,16 @@
 /**
  * Convert raw fetch / OpenRouter error messages into short user-friendly strings.
- *
- * Examples of raw input we expect:
- *   "502: {\"detail\":\"Story engine error: OpenRouter request failed after 3 attempts: OpenRouter HTTP 429: ..."}"
- *   "502: {\"detail\":\"Story engine error: OpenRouter HTTP 402: {...Insufficient credits...}\"}"
- *   "TypeError: Network request failed"
- *
- * The output is a single sentence (optionally with a sub-hint) safe to drop into an Alert.
  */
 
-export function friendlyError(raw: unknown): { title: string; message: string } {
-  const text = typeof raw === "string" ? raw : (raw as any)?.message || String(raw);
+import { ApiError } from "./api-error";
 
+export const ACTION_CONFLICT_TITLE = "Chronicle already moving";
+export const ACTION_CONFLICT_MESSAGE =
+  "Another action is being resolved for this chronicle. Checking for the latest turn now.";
+export const ACTION_CONFLICT_EXHAUSTION_MESSAGE =
+  "The other action is still being resolved. Your text has been kept. Try again in a moment.";
+
+function friendlyFromText(text: string): { title: string; message: string } {
   // Network / transport
   if (/Network request failed|Failed to fetch|TypeError: NetworkError/i.test(text)) {
     return {
@@ -77,7 +76,28 @@ export function friendlyError(raw: unknown): { title: string; message: string } 
     };
   }
 
-  // Fallback — truncate long JSON
   const clean = text.replace(/\s+/g, " ").slice(0, 220);
   return { title: "Something went wrong", message: clean };
+}
+
+export function friendlyError(raw: unknown): { title: string; message: string } {
+  if (raw instanceof ApiError) {
+    if (raw.status === 409) {
+      return {
+        title: ACTION_CONFLICT_TITLE,
+        message: ACTION_CONFLICT_MESSAGE,
+      };
+    }
+    const text = `${raw.status}: ${raw.detail || raw.rawText || raw.message}`;
+    return friendlyFromText(text);
+  }
+
+  const text = typeof raw === "string" ? raw : (raw as { message?: string })?.message || String(raw);
+  if (/^409:|HTTP 409|status[^\d]*409/i.test(text)) {
+    return {
+      title: ACTION_CONFLICT_TITLE,
+      message: ACTION_CONFLICT_MESSAGE,
+    };
+  }
+  return friendlyFromText(text);
 }

@@ -1,4 +1,7 @@
 import { API } from "./theme";
+import { ApiError } from "./api-error";
+
+export { ApiError } from "./api-error";
 import type {
   WantValue,
   FearValue,
@@ -92,8 +95,7 @@ const DEVICE_ID_HEADER = "X-Device-Id";
 
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${res.status}: ${text}`);
+    throw await ApiError.fromResponse(res);
   }
   return res.json() as Promise<T>;
 }
@@ -199,7 +201,9 @@ export async function deleteSession(id: string, deviceId: string): Promise<void>
     method: "DELETE",
     headers: deviceHeaders(deviceId),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  if (!res.ok) {
+    throw await ApiError.fromResponse(res);
+  }
 }
 
 export type HealthResponse = {

@@ -37,7 +37,7 @@ yarn test
 yarn typecheck
 ```
 
-**Passed 2026-06-20 on `emergent`:** **306** deterministic backend tests (includes action concurrency, secret reveal, P2 verifier) + **17** frontend Jest tests + TypeScript clean.
+**Passed 2026-06-20 on `emergent`:** **306** deterministic backend tests (includes action concurrency, secret reveal, P2 verifier) + **41** frontend Jest tests + TypeScript clean (includes action conflict recovery increment).
 
 **Lint:** `yarn lint` passes locally (exit 0) but is **not** a required CI step in this increment — Expo lint subprocess emits a benign `yarnpkg` shim warning on Windows; no ESLint rule debt was found.
 
@@ -170,7 +170,9 @@ Security coverage: `test_security.py` — ownership (10), admin auth (5), export
 - Secret reveal on explicit player confession (`test_secret_reveal.py`)
 - Hermetic HTTP integration (TestClient + mocked LLM)
 - Provider selection routing (no live calls — network-safety autouse fixture)
-- New Chronicle frontend: Quick Start, Guided Start, Advanced Builder, duplicate-submit, payload mapping, mode isolation, large font scale
+- New Chronicle frontend: Quick Start, Guided Start, Advanced Builder extraction, duplicate-submit, payload mapping, mode isolation, large font scale
+- Frontend API errors: typed `ApiError`, 409 friendly copy, legacy 402/429/5xx mappings
+- Play-screen action conflict: 409 preserves input, read-only sync, turn merge dedupe, bounded polling, control recovery
 
 ## What CI does not prove
 

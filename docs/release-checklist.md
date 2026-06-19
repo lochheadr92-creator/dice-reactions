@@ -38,7 +38,7 @@ yarn test
 yarn typecheck
 ```
 
-- [ ] Jest New Chronicle suite passes (17 tests)
+- [ ] Jest frontend suite passes (**41** tests: New Chronicle, API errors, chronicle merge, play conflict recovery)
 - [ ] TypeScript passes
 - [ ] Lint passes (optional — not required in CI until Expo lint shim warning resolved cross-platform)
 

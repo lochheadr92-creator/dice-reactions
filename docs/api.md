@@ -112,6 +112,8 @@ Submit a player action for the next turn.
 
 No lock token, timestamps, internal field names, or player action text are included. The rejected request makes zero provider calls. Successful responses are unchanged.
 
+**Frontend behaviour on 409 (v1):** The play screen does not append a turn from the failed request, does not clear typed custom action, and does not automatically resubmit. It shows a short syncing state, calls read-only `GET /story/session/{id}` (via `getSession`) up to **four** reads with **three** ~1s delays between attempts (~3s bounded polling), merges turns by `turn.id`, and restores controls. Initial friendly copy: title **Chronicle already moving**, message **Checking for the latest turn now** (does not promise sync after polling stops). If no newer turn appears, exhaustion copy tells the player their text was kept and to try again shortly. No lock/lease/token terminology. See `frontend/src/api-error.ts`, `frontend/src/action-conflict-sync.ts`, `frontend/src/chronicle-merge.ts`.
+
 Turn shape (player-facing responses always omit internal fields):
 
 | Field | Type |
