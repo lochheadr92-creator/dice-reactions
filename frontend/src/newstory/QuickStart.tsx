@@ -4,11 +4,11 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONTS } from "../theme";
 import type { CustomWorldSetup } from "../api";
+import { ReviewSummary } from "./ReviewSummary";
 import {
   QUICK_WORLDS,
   QUICK_CHARACTERS,
@@ -23,22 +23,13 @@ import {
   type FearValue,
   type WhoMattersValue,
 } from "./options";
+import type { QuickStartSelections } from "./types";
 
 type QuickOption = {
   value: string;
   label: string;
   explanation: string;
   consequence: string;
-};
-
-export type QuickStartSelections = {
-  world?: QuickWorldValue;
-  resolvedWorldGenre?: string;
-  character?: QuickCharacterValue;
-  tone?: QuickToneValue;
-  want?: WantValue;
-  fear?: FearValue;
-  whoMatters?: WhoMattersValue;
 };
 
 type QuickStartRequest = {
@@ -342,71 +333,21 @@ export function QuickStart({
           </View>
         </View>
       ) : (
-        <View testID="quick-start-review-step">
-          <Text style={[styles.stepText, { fontSize: Math.max(12, Math.round(12 * safeFontScale)) }]} testID="quick-start-review-label">
-            Review
-          </Text>
-          <Text style={[styles.stepQuestion, { fontSize: Math.round(24 * safeFontScale) }]}>
-            Here’s the opening you’ve set up.
-          </Text>
-          <Text style={[styles.reviewSummary, { fontSize: Math.max(18, Math.round(18 * safeFontScale)) }]} testID="quick-start-review-summary">
-            {summary}
-          </Text>
-
-          <View style={styles.reviewList}>
-            {STEP_DEFINITIONS.map((step, index) => {
-              const selected = getOption(step.options, selections[step.key]);
-              return (
-                <View key={step.key} style={styles.reviewRow} testID={`quick-start-review-row-${step.key}`}>
-                  <View style={styles.reviewTextWrap}>
-                    <Text style={[styles.reviewLabel, { fontSize: Math.max(12, Math.round(12 * safeFontScale)) }]}>
-                      {step.label}
-                    </Text>
-                    <Text style={[styles.reviewValue, { fontSize: Math.round(17 * safeFontScale) }]} testID={`quick-start-review-value-${step.key}`}>
-                      {selected?.label}
-                    </Text>
-                  </View>
-                  <TouchableOpacity
-                    style={styles.reviewChangeButton}
-                    onPress={() => setStepIndex(index)}
-                    testID={`quick-start-change-${step.key}`}
-                  >
-                    <Text style={[styles.reviewChangeText, { fontSize: Math.max(12, Math.round(12 * safeFontScale)) }]}>Change</Text>
-                  </TouchableOpacity>
-                </View>
-              );
-            })}
-          </View>
-
-          <View style={styles.navRow}>
-            <TouchableOpacity
-              style={styles.secondaryButton}
-              onPress={goBack}
-              disabled={loading}
-              testID="quick-start-review-back-button"
-            >
-              <Text style={[styles.secondaryButtonText, { fontSize: bodySize }]}>Back</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.primaryButton, loading && styles.primaryButtonDisabled]}
-              onPress={onStart}
-              disabled={loading}
-              accessibilityRole="button"
-              accessibilityState={{ disabled: loading, busy: loading }}
-              accessibilityLabel={loading ? "Starting your chronicle" : "Start chronicle"}
-              testID="quick-start-start-button"
-            >
-              {loading ? (
-                <View style={styles.loadingRow} testID="quick-start-loading-state">
-                  <ActivityIndicator color={COLORS.background} />
-                  <Text style={[styles.primaryButtonText, { fontSize: bodySize, color: COLORS.background }]}>Starting your chronicle…</Text>
-                </View>
-              ) : (
-                <Text style={[styles.primaryButtonText, { fontSize: bodySize }]}>Start chronicle</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
+        <ReviewSummary
+          testIdPrefix="quick-start"
+          heading="Here’s the opening you’ve set up."
+          summary={summary}
+          rows={STEP_DEFINITIONS.map((step, index) => ({
+            key: step.key,
+            label: step.label,
+            value: getOption(step.options, selections[step.key])?.label,
+            onChange: () => setStepIndex(index),
+          }))}
+          fontScale={safeFontScale}
+          loading={loading}
+          onBack={goBack}
+          onStart={onStart}
+        />
       )}
     </View>
   );
@@ -560,56 +501,5 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.monoBold,
     color: COLORS.background,
     letterSpacing: 1.5,
-  },
-  reviewSummary: {
-    marginTop: 8,
-    marginBottom: 22,
-    fontFamily: FONTS.bodyItalic,
-    color: COLORS.textProse,
-    lineHeight: 26,
-  },
-  reviewList: {
-    gap: 12,
-  },
-  reviewRow: {
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.surface,
-    padding: 14,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  reviewTextWrap: {
-    flex: 1,
-  },
-  reviewLabel: {
-    fontFamily: FONTS.monoBold,
-    color: COLORS.textMuted,
-    letterSpacing: 1.5,
-    marginBottom: 4,
-  },
-  reviewValue: {
-    fontFamily: FONTS.headingBold,
-    color: COLORS.textPrimary,
-  },
-  reviewChangeButton: {
-    minWidth: 74,
-    minHeight: 44,
-    borderWidth: 1,
-    borderColor: COLORS.primary,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 10,
-  },
-  reviewChangeText: {
-    fontFamily: FONTS.monoBold,
-    color: COLORS.primary,
-    letterSpacing: 1.2,
-  },
-  loadingRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
   },
 });
