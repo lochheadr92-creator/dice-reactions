@@ -214,7 +214,7 @@ Derived from confirmed gaps (not speculative features):
 
 | Priority | Work | Evidence |
 |----------|------|----------|
-| P1 | Chronicle Creation Phase 4 — Advanced Builder extraction/refactor remains pending | `frontend/app/new-story.tsx` still hosts preserved legacy builder |
+| ~~P1 Chronicle Creation Phase 4 — Advanced Builder extraction~~ ✅ | `frontend/src/newstory/AdvancedBuilder.tsx` extracted; `new-story.tsx` orchestrates three modes | `frontend/__tests__/new-story.test.tsx` ✅ |
 | ~~P1 Secret reveal trigger~~ ✅ | Secret Reveal Trigger v1 — explicit confession only | `secrets.py` + `test_secret_reveal.py` ✅ |
 | ~~P1 Session action concurrency~~ ✅ | Session Action Concurrency Guard v1 — `story_action` only | `action_concurrency.py` + `test_action_concurrency.py` ✅ |
 | P2 | Live-server long-run stress (`qa_live_20turn_hostile.py`) and wider story-engine bundle | Not run in this Phase 3 pass |
@@ -262,7 +262,7 @@ A true **Living World Test** remains separate future work (see `next-work.md` NW
 - ACID cross-collection persistence (compensating rollback only).
 - Safety if MongoDB loses acknowledged writes.
 - Concurrency safety for reset/delete/mode endpoints.
-- Frontend handling of HTTP **409**.
+- ~~Frontend handling of HTTP **409**~~ ✅ (typed `ApiError`, read-only conflict sync, bounded polling — see Frontend Action Conflict Recovery v1 below).
 - Idempotent replay of the same action after a completed request.
 - Multi-region clock-skew resilience beyond the chosen expiry model.
 
@@ -279,7 +279,7 @@ A true **Living World Test** remains separate future work (see `next-work.md` NW
 - **Secret handling verified:** Quick Start does not collect or render any secret field. Existing Phase 1 protections still keep secret data out of `simulation_hooks`, prompt-visible `<prior_state>`, and player/session payloads. **Evidence:** `backend/tests/test_onboarding_hooks.py` (16 passed).
 - **Frontend tests added:** `frontend/__tests__/new-story.test.tsx` covers default mode, step flow, review summary, payload mapping, duplicate-submit protection, failure recovery, Advanced Builder accessibility, and font scaling. **Evidence:** Jest 10/10 passed.
 - **Manual regression passed:** Preview flow completed from `/new-story` to `/play/[id]`; no secret/admin/mechanic leakage observed; Settings font-scale remained functional. **Evidence:** Playwright screenshots + console run 2026-06-18.
-- **Known limitation:** Guided Start, Advanced extraction, art integration, and secret reveal mechanics are intentionally still out of scope for this pass.
+- **Known limitation:** Art integration and secret reveal mechanics were intentionally still out of scope for this pass. Advanced Builder extraction completed in a later increment (see Frontend Action Conflict Recovery v1).
 
 ---
 
@@ -293,7 +293,31 @@ A true **Living World Test** remains separate future work (see `next-work.md` NW
 - **Security / secrecy:** Guided Start does not request or render any secret field and does not expose admin/debug/engine terminology to normal players. **Evidence:** Code + backend tests + browser preview.
 - **Tests expanded:** `frontend/__tests__/new-story.test.tsx` now covers all three modes and Guided Start regressions. **Evidence:** Jest 17/17 passed.
 - **Manual regression passed:** Preview verified Quick Start, Guided Start, Advanced Builder access, play-screen navigation, and Settings XL font scale. No blank-route regression recurred. **Evidence:** Playwright screenshots + console run 2026-06-18.
-- **Known limitation:** Advanced Builder is still embedded in `frontend/app/new-story.tsx`; no Phase 4 extraction has been attempted here.
+- **Known limitation (superseded):** Advanced Builder was later extracted to `frontend/src/newstory/AdvancedBuilder.tsx`; `new-story.tsx` now holds orchestration only.
+
+---
+
+## Frontend Action Conflict Recovery v1 (2026-06-20)
+
+**What this increment proves (deterministic):**
+
+- Advanced Builder extraction status matches code (`AdvancedBuilder.tsx` imported by `new-story.tsx`; builder UI not inline).
+- Frontend throws typed `ApiError` with HTTP status and parsed `detail`; `friendlyError()` maps **409** to player-safe copy (no lock/lease/token terminology).
+- On **409**, the play screen does not append a failed turn, does not clear typed custom action, and does not automatically call `sendAction()` again.
+- Conflict recovery uses read-only `getSession()` via `syncAfterActionConflict()` (max 3 refresh attempts, ~1s apart); no provider calls during recovery.
+- Refreshed turns merge through `mergeChronicleTurns()` (dedupe by `turn.id`, prefer server copy, ascending `turn_number`).
+- Controls disable during submit and conflict sync; recover after sync success or bounded exhaustion; unmount cancels in-flight sync signal.
+- Lightweight read-only focus refresh merges session state without full loading screen or input loss.
+
+**What this increment does not prove:**
+
+- Multi-tab UI coordination before a request reaches the server.
+- Idempotent replay of a completed action.
+- Backend safety for reset/delete/mode races.
+- Browser rendering on every supported device.
+- Provider quality or offline action queuing.
+
+**Evidence:** `frontend/src/api-error.ts`, `frontend/src/action-conflict-sync.ts`, `frontend/src/chronicle-merge.ts`, `frontend/app/play/[id].tsx`, `frontend/__tests__/api-errors.test.ts`, `frontend/__tests__/chronicle-merge.test.ts`, `frontend/__tests__/play-action-conflict.test.tsx`, `frontend/__tests__/new-story.test.tsx`; Jest **41 passed**; TypeScript clean 2026-06-20.
 
 ---
 

@@ -54,7 +54,32 @@ Practical backlog from confirmed repo gaps on the **`emergent`** branch. No spec
 | **Resolution** | `backend/action_concurrency.py` — Mongo lease on session; acquire before provider; CAS persistence; HTTP **409** on conflict |
 | **Tests** | `test_action_concurrency.py` ✅ (33 cases); `test_secret_reveal.py` regression ✅ |
 | **ADR** | ADR-018 |
-| **Follow-up** | Reset/delete/mode concurrency audit; frontend 409 UX; repair plan if historical duplicate `(session_id, turn_number)` rows block unique index |
+| **Follow-up** | Reset/delete/mode concurrency audit; repair plan if historical duplicate `(session_id, turn_number)` rows block unique index |
+
+---
+
+## Completed (Frontend reliability increment — three stages)
+
+### NW-FE-01: Advanced Builder documentation reconciliation ✅
+
+| Field | Detail |
+|-------|--------|
+| **Resolution** | Confirmed `frontend/src/newstory/AdvancedBuilder.tsx` is extracted and used; `new-story.tsx` orchestrates Quick, Guided, and Advanced modes only |
+| **Tests** | `frontend/__tests__/new-story.test.tsx` ✅ |
+
+### NW-FE-02: Typed API errors + HTTP 409 friendly copy ✅
+
+| Field | Detail |
+|-------|--------|
+| **Resolution** | `frontend/src/api-error.ts` (`ApiError` class); `frontend/src/api.ts` throws typed errors; `friendlyError()` maps 409 to player-safe title/message |
+| **Tests** | `frontend/__tests__/api-errors.test.ts` ✅ |
+
+### NW-FE-03: Play-screen action-conflict recovery ✅
+
+| Field | Detail |
+|-------|--------|
+| **Resolution** | `syncAfterActionConflict()` read-only refresh; `mergeChronicleTurns()` dedupe; play screen preserves input, no auto-resubmit, bounded polling, focus refresh |
+| **Tests** | `frontend/__tests__/play-action-conflict.test.tsx` ✅, `frontend/__tests__/chronicle-merge.test.ts` ✅ |
 
 ---
 

@@ -17,9 +17,24 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { COLORS, FONTS } from "../../src/theme";
-import { getSession, sendAction, deleteSession, exportSession, resetSession, setSessionMode, Turn, SessionSummary } from "../../src/api";
+import {
+  ApiError,
+  getSession,
+  sendAction,
+  deleteSession,
+  exportSession,
+  resetSession,
+  setSessionMode,
+  Turn,
+  SessionSummary,
+} from "../../src/api";
+import { syncAfterActionConflict } from "../../src/action-conflict-sync";
+import { mergeChronicleTurns, maxTurnNumber } from "../../src/chronicle-merge";
 import { getDeviceId, getSettings as getAppSettings } from "../../src/storage";
-import { friendlyError } from "../../src/errors";
+import {
+  friendlyError,
+  ACTION_CONFLICT_EXHAUSTION_MESSAGE,
+} from "../../src/errors";
 import { sanitizeParagraphs, sanitizeChoices } from "../../src/sanitize";
 import { Share } from "react-native";
 
@@ -71,6 +86,8 @@ export default function PlayScreen() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [syncingConflict, setSyncingConflict] = useState(false);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [customAction, setCustomAction] = useState("");
   const [showLedger, setShowLedger] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
@@ -87,9 +104,37 @@ export default function PlayScreen() {
   const pendingScrollRef = useRef<null | boolean>(null); // null = no scroll, boolean = animated?
   const latestTurnYRef = useRef(0);
   const deviceIdRef = useRef("");
+  const submitGenerationRef = useRef(0);
+  const conflictSyncGenerationRef = useRef(0);
+  const conflictSyncSignalRef = useRef({ cancelled: false });
+  const sessionEpochRef = useRef(0);
+  const focusRefreshGenerationRef = useRef(0);
+  const mountedRef = useRef(true);
+  const actionBusy = submitting || syncingConflict;
 
-  // Refresh local display preferences (developer unlock + text size) whenever
-  // this screen regains focus, so changes made in Settings apply immediately.
+  const refreshSessionReadOnly = useCallback(async () => {
+    if (!sessionId || !deviceIdRef.current) return;
+    const refreshGen = ++focusRefreshGenerationRef.current;
+    const epoch = sessionEpochRef.current;
+    const sid = sessionId;
+    try {
+      const res = await getSession(sid, deviceIdRef.current);
+      if (
+        !mountedRef.current ||
+        refreshGen !== focusRefreshGenerationRef.current ||
+        epoch !== sessionEpochRef.current ||
+        sid !== sessionId
+      ) {
+        return;
+      }
+      setSession(res.session);
+      setTurns((prev) => mergeChronicleTurns(prev, res.turns));
+    } catch {
+      // Read-only refresh failures are non-fatal.
+    }
+  }, [sessionId]);
+
+  // Refresh display preferences and lightly sync chronicle state on focus.
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
@@ -106,11 +151,14 @@ export default function PlayScreen() {
             setFontScale(1);
           }
         }
+        if (!cancelled && deviceIdRef.current && sessionId) {
+          await refreshSessionReadOnly();
+        }
       })();
       return () => {
         cancelled = true;
       };
-    }, [])
+    }, [sessionId, refreshSessionReadOnly])
   );
 
   const load = useCallback(async () => {
@@ -135,9 +183,100 @@ export default function PlayScreen() {
     load();
   }, [load]);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      conflictSyncSignalRef.current.cancelled = true;
+    };
+  }, []);
+
+  const isInitialSessionRef = useRef(true);
+  useEffect(() => {
+    if (isInitialSessionRef.current) {
+      isInitialSessionRef.current = false;
+      return;
+    }
+    sessionEpochRef.current += 1;
+    focusRefreshGenerationRef.current += 1;
+    conflictSyncSignalRef.current.cancelled = true;
+    conflictSyncGenerationRef.current += 1;
+    setSyncingConflict(false);
+    setSubmitting(false);
+    setActionNotice(null);
+    setLoading(true);
+    setTurns([]);
+    setSession(null);
+  }, [sessionId]);
+
+  const runConflictSync = async (generation: number, baselineMaxTurn: number) => {
+    conflictSyncSignalRef.current.cancelled = true;
+    const signal = { cancelled: false };
+    conflictSyncSignalRef.current = signal;
+    const syncGen = ++conflictSyncGenerationRef.current;
+    const sid = sessionId;
+    const epoch = sessionEpochRef.current;
+
+    const shouldApply = () =>
+      mountedRef.current &&
+      syncGen === conflictSyncGenerationRef.current &&
+      generation === submitGenerationRef.current &&
+      !signal.cancelled &&
+      sid === sessionId &&
+      epoch === sessionEpochRef.current;
+
+    setSubmitting(false);
+    setSyncingConflict(true);
+    setActionNotice("Syncing latest turn…");
+
+    try {
+      const deviceId = deviceIdRef.current || (await getDeviceId());
+      deviceIdRef.current = deviceId;
+      const result = await syncAfterActionConflict({
+        getSession,
+        sessionId: sid,
+        deviceId,
+        baselineMaxTurnNumber: baselineMaxTurn,
+        signal,
+      });
+
+      if (!shouldApply()) {
+        return;
+      }
+
+      setSession(result.session);
+      setTurns((prev) => mergeChronicleTurns(prev, result.turns));
+
+      if (result.foundNewerTurn) {
+        pendingScrollRef.current = true;
+        setActionNotice(null);
+      } else {
+        setActionNotice(ACTION_CONFLICT_EXHAUSTION_MESSAGE);
+      }
+    } catch {
+      if (shouldApply()) {
+        setActionNotice(
+          "Could not sync the latest turn. Your text has been preserved — try again."
+        );
+      }
+    } finally {
+      if (syncGen === conflictSyncGenerationRef.current && mountedRef.current) {
+        setSyncingConflict(false);
+      }
+    }
+  };
+
   const submit = async (text: string) => {
-    if (!text.trim() || submitting) return;
+    if (!text.trim() || actionBusy) return;
+
+    const generation = submitGenerationRef.current + 1;
+    submitGenerationRef.current = generation;
+    conflictSyncSignalRef.current.cancelled = true;
+
+    const baselineMaxTurn = maxTurnNumber(turns);
     setSubmitting(true);
+    setActionNotice(null);
+
     try {
       const deviceId = deviceIdRef.current || (await getDeviceId());
       deviceIdRef.current = deviceId;
@@ -147,16 +286,28 @@ export default function PlayScreen() {
         action_text: text.trim(),
         debug_mode: debugMode,
       });
+
+      if (generation !== submitGenerationRef.current) return;
+
+      focusRefreshGenerationRef.current += 1;
       setTurns((prev) => [...prev, res.turn]);
-      // Request a scroll to the TOP of this newly generated turn (animated).
       pendingScrollRef.current = true;
       setCustomAction("");
-    } catch (e: any) {
+    } catch (e: unknown) {
+      if (generation !== submitGenerationRef.current) return;
+
+      if (ApiError.isConflict(e)) {
+        await runConflictSync(generation, baselineMaxTurn);
+        return;
+      }
+
       const { title, message } = friendlyError(e);
       if (Platform.OS === "web") alert(`${title}\n\n${message}`);
       else Alert.alert(title, message);
     } finally {
-      setSubmitting(false);
+      if (generation === submitGenerationRef.current) {
+        setSubmitting(false);
+      }
     }
   };
 
@@ -342,7 +493,7 @@ export default function PlayScreen() {
                   key={c.label}
                   style={styles.choiceCard}
                   onPress={() => submit(c.text)}
-                  disabled={submitting}
+                  disabled={actionBusy}
                   testID={`choice-${c.label}`}
                   activeOpacity={0.7}
                 >
@@ -360,6 +511,19 @@ export default function PlayScreen() {
             </View>
           )}
 
+          {syncingConflict && (
+            <View style={styles.thinkingRow} testID="syncing-indicator">
+              <ActivityIndicator color={COLORS.primary} size="small" />
+              <Text style={styles.thinkingText}>syncing chronicle…</Text>
+            </View>
+          )}
+
+          {actionNotice ? (
+            <View style={styles.actionNoticeRow} testID="action-notice">
+              <Text style={styles.actionNoticeText}>{actionNotice}</Text>
+            </View>
+          ) : null}
+
           <View style={{ height: 24 }} />
         </ScrollView>
 
@@ -372,15 +536,15 @@ export default function PlayScreen() {
             placeholder="or type your own action…"
             placeholderTextColor={COLORS.textMuted}
             style={styles.actionInput}
-            editable={!submitting}
+            editable={!actionBusy}
             onSubmitEditing={() => submit(customAction)}
             returnKeyType="send"
             testID="custom-action-input"
           />
           <TouchableOpacity
             onPress={() => submit(customAction)}
-            disabled={!customAction.trim() || submitting}
-            style={[styles.sendBtn, (!customAction.trim() || submitting) && styles.sendBtnDisabled]}
+            disabled={!customAction.trim() || actionBusy}
+            style={[styles.sendBtn, (!customAction.trim() || actionBusy) && styles.sendBtnDisabled]}
             testID="send-action-btn"
           >
             <Ionicons name="arrow-forward" size={16} color={COLORS.background} />
@@ -727,6 +891,17 @@ const styles = StyleSheet.create({
     color: COLORS.textMuted,
     fontSize: 13,
     letterSpacing: 1,
+  },
+  actionNoticeRow: {
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+  },
+  actionNoticeText: {
+    fontFamily: FONTS.body,
+    color: COLORS.textSecondary,
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: "center",
   },
   inputBar: {
     flexDirection: "row",

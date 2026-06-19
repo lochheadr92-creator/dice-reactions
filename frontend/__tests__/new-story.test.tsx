@@ -2,6 +2,7 @@ import React from "react";
 import { Alert } from "react-native";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react-native";
 import NewStoryScreen from "../app/new-story";
+import { AdvancedBuilder } from "../src/newstory/AdvancedBuilder";
 
 const mockReplace = jest.fn();
 const mockBack = jest.fn();
@@ -91,6 +92,12 @@ async function completeGuidedStart() {
   fireEvent.press(screen.getByTestId("guided-start-next-button"));
   await screen.findByTestId("guided-start-review-step");
 }
+
+describe("Advanced Builder extraction", () => {
+  it("exposes AdvancedBuilder as a separate component module", () => {
+    expect(typeof AdvancedBuilder).toBe("function");
+  });
+});
 
 describe("NewStoryScreen Quick Start", () => {
   beforeEach(() => {
@@ -274,6 +281,35 @@ describe("NewStoryScreen Quick Start", () => {
     expect(screen.getByTestId("role-input")).toBeTruthy();
     expect(screen.getByTestId("begin-story-btn")).toBeTruthy();
     expect(screen.queryByTestId("mode-advanced")).toBeNull();
+  });
+
+  it("maps Advanced Builder payload through the unchanged newStory contract", async () => {
+    mockNewStory.mockResolvedValueOnce({
+      session_id: "advanced-123",
+      turn: { id: "turn-advanced" },
+      session: { id: "advanced-123" },
+    });
+    await renderScreen();
+
+    fireEvent.press(screen.getByTestId("creation-flow-advanced"));
+    await waitFor(() => {
+      expect(screen.getByTestId("advanced-builder-panel")).toBeTruthy();
+    });
+    fireEvent.press(screen.getByTestId("scenario-modern-mystery"));
+    fireEvent.changeText(screen.getByTestId("role-input"), "investigator");
+    fireEvent.press(screen.getByTestId("begin-story-btn"));
+
+    await waitFor(() => {
+      expect(mockNewStory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          device_id: "device-123",
+          genre: "detective",
+          role: "investigator",
+          scenario_id: "modern-mystery",
+          mode: "advanced",
+        })
+      );
+    });
   });
 
   it("still renders and advances at large font scale", async () => {
