@@ -790,7 +790,13 @@ def _short_text(value: Any, limit: int = 900) -> str:
 # only. `_PROMPT_HIDDEN_SETUP_KEYS` are stripped from the turn-1 custom-setup
 # prompt block; `_PROMPT_HIDDEN_ROLLING_KEYS` are stripped from <prior_state>.
 _PROMPT_HIDDEN_SETUP_KEYS = frozenset({"secret"})
-_PROMPT_HIDDEN_ROLLING_KEYS = frozenset({"secret_registry"})
+_PROMPT_HIDDEN_ROLLING_KEYS = frozenset({
+    "secret_registry",
+    "engine_world_events",
+    "npc_move_receipts",
+    "npc_agendas",
+    "arc_diversity",
+})
 
 
 def _humanize_hook(value: Any) -> str:
@@ -3213,9 +3219,13 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
         working_replayability = copy.deepcopy(session.get("replayability_state"))
         rb_diag: Dict[str, Any] = {}
         if replayability.replayability_active(session):
-            working_replayability, frozen_rb_directives, rb_diag, _rb_thresholds = (
-                replayability.prepare_action_turn(working_replayability, next_turn_number)
+            working_replayability, frozen_rb_directives, rb_diag, _rb_thresholds, cast_rolling = (
+                replayability.prepare_action_turn(
+                    working_replayability, next_turn_number, rolling_state=working_rolling
+                )
             )
+            if cast_rolling:
+                working_rolling = cast_rolling
 
         gen_session = dict(session)
         gen_session["rolling_state"] = working_rolling
@@ -3288,6 +3298,14 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
                 parsed, prior_rolling, merged_rolling, req.action_text, next_turn_number
             )
         )
+        merged_after_calculus = copy.deepcopy(merged_rolling)
+        if replayability.replayability_active(session):
+            working_replayability, lc_adjustments = replayability.finalize_living_cast_relationships(
+                working_replayability,
+                merged_rolling,
+                next_turn_number,
+            )
+            guard_adjustments.extend(lc_adjustments)
         guard_adjustments.extend(hud.shape_hud(parsed.state, merged_rolling))
         if replayability.replayability_active(session):
             guard_adjustments.extend(
@@ -3295,7 +3313,7 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
             )
             qualifying_sources = replayability.collect_qualifying_echo_sources(
                 prior_rolling=prior_rolling,
-                merged_rolling=merged_rolling,
+                merged_rolling=merged_after_calculus,
                 turn_number=next_turn_number,
                 guard_adjustments=guard_adjustments,
             )
