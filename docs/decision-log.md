@@ -343,3 +343,29 @@ Promote to ADR when implementation and tests exist.
 | **Files affected** | `backend/replayability.py`, `backend/run_identity.py`, `backend/opening_state.py`, `backend/pressure_graph.py`, `backend/consequence_echoes.py`, `backend/server.py`, `backend/tests/test_*replayability*`, `docs/*`, `.gitignore` |
 | **Tests required** | Five replayability test modules ✅; full deterministic bundle ✅ |
 | **Evidence** | 390 deterministic tests passed 2026-06-20 on `emergent` (contract-correction pass) |
+
+---
+
+## ADR-020: Living Cast Engine v1 (NPC agendas + world moves + arc diversity)
+
+| Field | Detail |
+|-------|--------|
+| **Date** | 2026-06-20 |
+| **Status** | Accepted — **provisional integrated local substitute on `recovery/living-cast-working-tree` only** (unmerged, not deployed, not covered by emergent CI, not merge-ready) |
+| **Branch** | `recovery/living-cast-working-tree` @ `4dadb3f` — **absent on `emergent` HEAD** @ `d8b9caf` |
+| **Context** | NPCs only reacted when the player addressed them. Chronicles needed deterministic independent world movement, persistent NPC priorities, and narrative variety without extra provider calls or LLM-owned simulation truth. PRD Ch 25 (Actor Resolution) and Ch 27 (Utility AI) modules are not present in the repo. |
+| **Decision** | Add three pure modules: `npc_agendas.py` (engine-owned agendas in `replayability_state["npc_agendas"]`; closed enums; **canonical `npc_id` stable across run seeds**; agenda selection uses `run_seed + npc_id + namespace`; evolve from structured events only), `npc_world_moves.py` (bounded move catalog; **local** tier eligibility + utility scoring — not PRD Ch 25/27; explicit move targets; real effects on relationship vectors, faction ticks, pressure graph; **bounded transition receipts** in `replayability_state["npc_move_receipts"]` — not rolling_state; `[NPC_WORLD_MOVE_V1]` directive), `arc_diversity.py` (engine beat history; primary emphasis only). Orchestrate in `replayability.prepare_action_turn` **before** provider: tick agendas → select/commit ≤1 move with targets → apply effects → append receipt → schedule qualifying echoes → select primary beat → freeze directives. Policy A legacy skip inherited. **No canonical event-sourcing module exists** — receipts are idempotency/transition records, not world-event history. |
+| **Why engine-owned agendas** | Agendas must survive model merge and must not leak to players; `rolling_state` is LLM-merged each turn. |
+| **Why local scoring/tier policy (not Utility AI / Actor Resolution)** | PRD Ch 25/27 full Bible contracts are absent — only PRD tracker summaries exist for Chapters 22–32; Living Cast v1 uses bounded **local substitutes** until canonical systems land. |
+| **Why canonical NPC IDs exclude run seed** | Run seed varies agenda priorities, not actor identity; same scenario NPC must keep the same `npc_id` across chronicles. |
+| **Why moves require real state effects and explicit targets** | State-as-truth: no invented gather/defect outcomes; ineligible when no authoritative target exists. |
+| **Why arc diversity tracks engine beats** | Model prose cannot be classified reliably; variety governs directive emphasis only — not truth. |
+| **Why critical consequences override variety** | Urgent pressure and fired echoes must not be suppressed for cosmetic rotation. |
+| **Why echoes reference receipt IDs** | `npc_move_receipts` + `transition_receipts` dedupe; no rolling_state event log; no player-text sources. |
+| **Alternatives considered** | LLM-chosen NPC actions (reject); agendas in `rolling_state` (reject); offline background sim (reject — v1 scope); inventory transfers without ledger API (reject). |
+| **Consequences** | `npc_move_receipts` on session document only; `engine_world_events` removed from rolling_state; player serializers omit Living Cast fields; reset clears receipts with replayability; directive order: pacing → opening (t1) → secret → world → pressure → echo; `investigate` not a universal fallback. |
+| **v1 proves** | NPCs may act during player turns; agendas persist/evolve from structured events; moves alter state before narration; runs diverge by seed; low-urgency beat repetition penalized; qualifying move events schedule echoes; no extra provider calls. |
+| **v1 does not prove** | Offline/real-time sim; every NPC every turn; semantic free-text; full social sim; arbitrary inventory; every move echoes; perfect variety; live provider quality. |
+| **Files affected** | `npc_agendas.py`, `npc_world_moves.py`, `arc_diversity.py`, `replayability.py`, `consequence_echoes.py`, `server.py`, Living Cast test modules, `docs/*` |
+| **Tests required** | Recovery branch: `test_npc_agendas.py`, `test_npc_world_moves.py`, `test_arc_diversity.py`, `test_living_cast_integration.py` ✅ locally — **not covered by emergent CI** |
+| **Evidence** | Recovery branch local pytest passes 2026-06-20; **not verified on `emergent` HEAD**; golden-path blockers remain (pressure authority, relationship provenance) |

@@ -27,7 +27,9 @@ export ADMIN_API_KEY=test-admin-key
 python -m pytest -m "not live" -q
 ```
 
-- [ ] Deterministic backend bundle passes (**390** tests as of 2026-06-20)
+- [ ] Deterministic backend bundle passes on **`emergent` HEAD** (**390** tests as of 2026-06-20 — Living Cast tests are **not** on `emergent`)
+- [ ] Living Cast bounded-state audit (`test_living_cast_bounded_state.py`) — **recovery branch only**; not required for `emergent` merge until LC lands
+- [ ] Full capped `replayability_state` ≤ 64 KiB — **recovery branch only** when Living Cast present
 
 ### Frontend tests (matches CI)
 

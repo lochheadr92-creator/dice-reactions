@@ -351,6 +351,40 @@ For each mode: detection, prevention, recovery, and **current protection status*
 
 ---
 
+## FM-25: Replayability state unbounded growth
+
+**Scope:** `recovery/living-cast-working-tree` only — Living Cast modules are **not on `emergent` HEAD**; unmerged, not deployed.
+
+| Field | Detail |
+|-------|--------|
+| **Trigger** | Agendas, receipts, echoes, or beat history append without cap enforcement; echo references pin full move receipts indefinitely. |
+| **Effect** | Session document grows without bound; Mongo payload bloat; nondeterministic eviction. |
+| **Detection** | `living_cast_state_metrics`; `test_living_cast_bounded_state.py`; `REPLAYABILITY_STATE_BUDGET_BYTES` assertion. |
+| **Prevention** | Documented hard caps on every slice; `enforce_npc_move_receipt_cap` (compress then drop); echo `source_provenance` copied at schedule (receipts not pinned); relationship threshold receipts separate from move bundles. |
+| **Recovery** | Cap functions are deterministic and idempotent; reset clears `replayability_state`. |
+| **Files** | `living_cast_bounded_fixtures.py`, `npc_world_moves.py`, `consequence_echoes.py`, `replayability.py`, `arc_diversity.py`, `npc_agendas.py` |
+| **Tests** | `test_living_cast_bounded_state.py` ✅ |
+| **Status** | **Protected** (deterministic, measured at cap) |
+
+---
+
+## FM-24: NPC agenda or world-move leak
+
+**Scope:** `recovery/living-cast-working-tree` only — provisional integrated local substitute; **not covered by emergent CI**.
+
+| Field | Detail |
+|-------|--------|
+| **Trigger** | LLM emits `npc_agendas`, `arc_diversity`, `npc_move_receipts`, or `[NPC_WORLD_MOVE_V1]` into player-visible fields; model rewrites selected move or agenda progress. |
+| **Effect** | Hidden simulation exposed; player sees engine terminology; contradictory independent NPC actions. |
+| **Detection** | `enforce_authoritative` + `strip_model_agenda_mutations`; `_scrub_meta_from_text` marker rejection; player serializer excludes `replayability_state`; prompt `_prompt_safe_rolling` hides injected receipt/event keys. |
+| **Prevention** | Agendas/receipts on session document only; move computed once pre-provider and frozen on retry; explicit targets required; no move when infeasible; directive uses template IDs not receipt internals. |
+| **Recovery** | Strip illegal rolling keys; restore authoritative `replayability_state`; rollback turn on CAS failure (no move persist). |
+| **Files** | `npc_agendas.py`, `npc_world_moves.py`, `replayability.py`, `server.py` |
+| **Tests** | `test_npc_world_moves.py`, `test_living_cast_integration.py` ✅ |
+| **Status** | **Protected** (deterministic) |
+
+---
+
 ## FM-20: Replayability state drift or leak
 
 | Field | Detail |

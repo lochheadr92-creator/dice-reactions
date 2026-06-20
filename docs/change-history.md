@@ -4,6 +4,18 @@ Lightweight log of documentation and operational changes. One entry per meaningf
 
 ---
 
+## 2026-06-20 — Bible implementation status truth correction (`emergent` docs)
+
+| Field | Detail |
+|-------|--------|
+| **Change** | Corrected `/docs/*` overclaims: Living Cast is **not** on `emergent` HEAD; exists only on unmerged `recovery/living-cast-working-tree` as a **provisional integrated local substitute**; bounded receipts are **LOCAL SUBSTITUTE** (not canonical event sourcing); full event sourcing **DEFERRED**; Chapters 1–21 have full Bible text; Chapters 22–32 are PRD tracker summaries only; Chapter 26 is a PRD extension bundled with Chapter 20; weighted verified-contract coverage **38.1%** on `emergent` HEAD and **37.4%** on recovery (audit formula — not feature quality); pressure authority and relationship provenance remain **unresolved**; feature development **frozen**; golden-path blockers remain. |
+| **Reason** | Prior doc pass falsely treated recovery-branch Living Cast work as shipped on `emergent` and inflated coverage. |
+| **Files affected** | `docs/change-history.md`, `docs/current-state.md`, `docs/decision-log.md`, `docs/failure-modes.md`, `docs/feature-status.md`, `docs/next-work.md`, `docs/release-checklist.md`, `docs/story-engine.md`, `docs/verification.md` |
+| **Branch** | `emergent` @ `d8b9caf` — documentation only; no runtime changes |
+| **Recovery reference** | `recovery/living-cast-working-tree` @ `4dadb3f` — Living Cast modules and tests live here; **not deployed**, **not covered by emergent CI**, **not merge-ready** |
+
+---
+
 ## 2026-06-20 — Replayability Engine v1 (contract-correction pass)
 
 | Field | Detail |

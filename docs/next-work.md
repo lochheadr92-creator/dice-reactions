@@ -47,6 +47,19 @@ Practical backlog from confirmed repo gaps on the **`emergent`** branch. No spec
 
 ## Completed (Replayability Engine v1)
 
+### NW-LIVING-CAST-01: Living Cast Engine v1 (provisional — recovery branch only)
+
+| Field | Detail |
+|-------|--------|
+| **Status** | **Provisional integrated local substitute** on `recovery/living-cast-working-tree` @ `4dadb3f` — **unmerged**, **not deployed**, **not covered by emergent CI**, **not merge-ready** |
+| **Resolution** | Recovery branch: `npc_agendas.py`, `npc_world_moves.py`, `arc_diversity.py` orchestrated in `replayability.py`; ≤1 deterministic NPC move per turn before narration; Policy A legacy skip; world execution `TURN_COUPLED_AUTONOMY_ONLY` |
+| **Tests** | Recovery branch local pytest only — **not on `emergent` HEAD** |
+| **ADR** | ADR-020 (recovery scope) |
+| **Blockers** | Pressure authority unresolved; relationship provenance unresolved; golden-path blockers remain |
+| **Follow-up** | Pressure authority remediation; relationship provenance remediation; full PRD Ch 25/27 modules (Bible contracts absent — PRD summaries only for Ch 22–32) |
+
+---
+
 ### NW-REPLAY-01: Session replayability_state + deterministic variation ✅
 
 | Field | Detail |

@@ -15,7 +15,36 @@ This document is the canonical operational snapshot of the repository **as it ex
 | **Docs-claimed** | Stated in `memory/PRD.md`, `AGENTS.md`, or prior `/docs` files but not independently re-verified in this pass |
 | **Unknown** | Not determinable from available evidence |
 
-**Planning vs runtime:** `memory/PRD.md` is the planning and Source-of-Truth conformance tracker — not runtime truth. Treat its verification dates and chapter checklists as **Docs-claimed** until re-run against code.
+**Planning vs runtime:** `memory/PRD.md` is the planning and Source-of-Truth conformance tracker — not runtime truth. Treat its verification dates and chapter checklists as **Docs-claimed** until re-run against code. The PRD contains duplicate Chapter 29 entries with contradictory completion status — treat the chapter matrix in this pass as authoritative over stale PRD rows.
+
+---
+
+## Bible implementation reality (2026-06-20 audit)
+
+| Item | `emergent` HEAD | `recovery/living-cast-working-tree` |
+|------|-----------------|-------------------------------------|
+| Git ref | `d8b9caf4d00812850e9edeacf3b73b144a848429` | `4dadb3feb3737b28a4e5fbb1ef71aa0d56b365a5` |
+| Merge status | Canonical runtime branch | **Unmerged** — not deployed |
+| CI coverage | Deterministic CI on `emergent` only | **Not covered by emergent CI** |
+| Living Cast | **Absent** — no `npc_agendas.py`, `npc_world_moves.py`, `arc_diversity.py` | **Provisional integrated local substitute** |
+| Actor Resolution / Utility AI | **Not present** (PRD Ch 25 / Ch 27) | **Local substitutes** in `npc_world_moves.py` only |
+| World execution mode | `TURN_COUPLED_AUTONOMY_ONLY` | Same (turn-coupled; no offline sim) |
+| Event sourcing | Turn log only on `emergent` HEAD | **LOCAL SUBSTITUTE** — bounded transition receipts provide idempotency and causal pointers but do not provide canonical reconstruction or durable complete event history; **DEFERRED** — full contract unavailable beyond PRD summary |
+| Pressure authority | **Unresolved** — duplicate sources (`replayability_state.pressure_graph` vs `rolling_state.active_pressures`) | Same blocker until remediation lands |
+| Relationship provenance | **Unresolved** — vectors mutated from player intent + generated prose | Same blocker; blocks merge |
+| Feature development | **Frozen** | Recovery work is provisional; not merge-ready |
+| Golden-path blockers | Pressure authority duplication; relationship provenance | Same |
+
+**Bible text in repository:** Chapters 1–21 full text in `memory/DESIGN_BIBLE.txt`. Chapters 22–32 have **PRD tracker summaries only** — full Chapter 22–32 conformance is **unverified**. Chapter 26 is a **PRD extension associated with Chapter 20**, not a recovered standalone Bible chapter.
+
+**Weighted verified-contract coverage (audit formula; not feature quality):**
+
+| Branch | Calculation | Result |
+|--------|-------------|--------|
+| `emergent` HEAD | 16 PARTIAL × 0.5 = 8.0 → 8.0 / 21 | **38.1%** |
+| `recovery/living-cast-working-tree` | 15 PARTIAL × 0.5 + 1 LOCAL SUBSTITUTE × 0.35 = 7.85 → 7.85 / 21 | **37.4%** |
+
+Do **not** report 39.8%. The chapter matrix remains authoritative.
 
 ---
 
@@ -124,10 +153,10 @@ These appear in `memory/PRD.md` or design vocabulary but **have no implementing 
 
 | System | Status | Evidence |
 |--------|--------|----------|
-| Utility AI | Planned (PRD Ch 27) — not present | **Code search:** no module |
-| Actor resolution / actor caps | Planned (PRD Ch 25) — not present | **Code search:** no dedicated module |
+| Utility AI | Planned (PRD Ch 27) — not present on `emergent` HEAD | **Code search:** no module on `emergent`; recovery branch has **local substitute** only in `npc_world_moves.py` (unmerged) |
+| Actor resolution / actor caps | Planned (PRD Ch 25) — not present on `emergent` HEAD | **Code search:** no dedicated module on `emergent`; recovery branch has **local substitute** tier policy only (unmerged) |
 | Gravity / retention governance (beyond context budget) | Planned — partial ad-hoc only | Only `enforce_context_budget` and `consolidate_rolling_state` exist |
-| Formal event sourcing | Partial — turn log only | Turns `insert_one`; session `rolling_state` overwritten; no rebuild |
+| Formal event sourcing | **DEFERRED** — full contract unavailable beyond PRD summary; turn log only on `emergent` HEAD | Turns `insert_one`; session `rolling_state` overwritten; no rebuild. Recovery branch: **LOCAL SUBSTITUTE** — bounded receipts provide idempotency and causal pointers but not canonical reconstruction or durable complete event history |
 | Historical scoring equivalence | **N/A** — never existed in this repo | `git log -S` empty; no ranking subsystem |
 | NaN / infinity input protection for rankings | **N/A** — never existed in this repo | No ranking subsystem |
 | Vector retrieval / RAG | Not present | History replay from MongoDB turns only |

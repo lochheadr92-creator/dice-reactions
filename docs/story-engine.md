@@ -2,7 +2,7 @@
 
 The story engine lives primarily in `backend/server.py` with supporting modules `gateway.py`, `relationships.py`, `hud.py`, `memory.py`, `ai_service.py`, `ai_config.py`, `scenarios.py`, `pacing.py`, `secrets.py`, and `replayability.py` (+ `run_identity.py`, `opening_state.py`, `pressure_graph.py`, `consequence_echoes.py`).
 
-**Branch:** `emergent` — gateway, relationship calculus, and HUD modules are runtime truth here; absent on `main`.
+**Branch:** `emergent` HEAD @ `d8b9caf` — gateway, relationship calculus, HUD, and replayability modules are runtime truth here; absent on `main`. Living Cast modules (`npc_agendas.py`, `npc_world_moves.py`, `arc_diversity.py`) exist only on unmerged `recovery/living-cast-working-tree` — see [Recovery branch appendix](#recovery-branch-appendix-living-cast-provisional).
 
 ## Turn output format
 
@@ -30,6 +30,8 @@ Before each call, `_build_messages` may prepend internal system directives (non-
 3. Secret reveal continuity (`secrets.build_revealed_secret_directive`)
 4. Replayability pressure foreground (`pressure_graph.build_pressure_directive`)
 5. Replayability consequence echo (`consequence_echoes.build_echo_directive`)
+
+On `recovery/living-cast-working-tree` only, directive 4 may be `arc_diversity.build_world_development_directive` (with `[NPC_WORLD_MOVE_V1]`), shifting pressure/echo omission rules — not on `emergent` HEAD.
 
 Then replay/history and, in the final user message:
 - `gateway.build_immutable_truth_block(rolling)` — established object/injury/death facts
@@ -115,11 +117,13 @@ Turn 1 (`new_story`) skips state supremacy and gateway STRIP (no prior rolling s
 | `pressure_graph.py` | Causal nodes (`magnitude`, `trend`, `kind`, links); trend-only movement; foreground scoring; `threshold_crossings` |
 | `consequence_echoes.py` | Schedule from confirmed source events (`source_event_id`); mature; fire max 1/turn |
 
-**Canonical events:** `rolling_state` structures (delayed consequences, relationship vectors, faction ticks, destruction registry) plus `pressure_graph.threshold_crossings`. Replayability stores `transition_receipts` (idempotency only) — not a second event history.
+**Canonical transitions:** `rolling_state` structures (delayed consequences, relationship vectors, faction ticks, destruction registry) plus `pressure_graph.threshold_crossings`. Replayability stores `transition_receipts` (idempotency only) — **LOCAL SUBSTITUTE** bounded receipts on the recovery branch are not canonical event sourcing; full event sourcing remains **DEFERRED** (PRD Ch 22 summary only).
 
-**Echo sources (v1):** pressure threshold crossed; delayed consequence fired; relationship threshold (`betrayal_risk`/`collapsed`); faction hostility tick; destruction confirmed; opening unresolved tension. Raw player text, narrative, and choices are **never** parsed.
+**Pressure authority (unresolved on `emergent` HEAD):** `replayability_state.pressure_graph` and `rolling_state.active_pressures` both exist — duplicate authority; golden-path blocker.
 
-**Turn flow:**
+**Echo sources (v1 on `emergent` HEAD):** pressure threshold crossed; delayed consequence fired; relationship threshold (`betrayal_risk`/`collapsed`); faction hostility tick; destruction confirmed; opening unresolved tension. Raw player text, narrative, and choices are **never** parsed.
+
+**Turn flow (`emergent` HEAD):**
 
 - `_create_new_story`: `init_new_story` → persist `replayability_state` → frozen directives → enforce after consolidation
 - `story_action`: `prepare_action_turn` **before** provider (tick pressure, mature/fire echo, frozen directives on retry) → guards → `collect_qualifying_echo_sources` → `finalize_action_turn` → persist
@@ -270,11 +274,24 @@ When `developer_mode` is false (default in code):
 
 Frontend `sanitize.ts` adds a presentation-only filter on paragraphs and choices regardless of API sanitization.
 
-## Planned / not present
+## Planned / not present on `emergent` HEAD
 
 | System | Status |
 |--------|--------|
-| Utility AI | Planned (PRD Ch 27) — not in repo |
-| Actor resolution | Planned (PRD Ch 25) — not in repo |
-| Formal event sourcing | Partial — turn log only; no rebuild |
+| Utility AI | Planned (PRD Ch 27 summary only) — not on `emergent` HEAD; recovery has **local substitute** in `npc_world_moves.py` (unmerged) |
+| Actor resolution | Planned (PRD Ch 25 summary only) — not on `emergent` HEAD; recovery has **local substitute** tier policy (unmerged) |
+| Formal event sourcing | **DEFERRED** — full contract unavailable beyond PRD summary; turn log only on `emergent` HEAD |
+| Living Cast | **Provisional integrated local substitute** on `recovery/living-cast-working-tree` only — unmerged, not deployed |
 | Scoring / NaN ranking guards | N/A — never existed in this repo |
+
+---
+
+## Recovery branch appendix (Living Cast — provisional)
+
+**Branch:** `recovery/living-cast-working-tree` @ `4dadb3f` — **unmerged**, **not deployed**, **not covered by emergent CI**, **not merge-ready**.
+
+Living Cast adds `npc_agendas.py`, `npc_world_moves.py`, `arc_diversity.py` orchestrated in `replayability.prepare_action_turn` with world execution mode `TURN_COUPLED_AUTONOMY_ONLY`. Actor Resolution and Utility AI are **local substitutes** — not full PRD Ch 25/27 modules (Bible full text ends at Chapter 21; Chapters 22–32 are PRD tracker summaries only).
+
+Bounded `npc_move_receipts` and `transition_receipts` are **LOCAL SUBSTITUTE** — they provide idempotency and causal pointers but do not provide canonical reconstruction or durable complete event history.
+
+**Blockers before merge:** pressure authority unresolved; relationship provenance unresolved (vectors mutated from player intent + generated prose); golden-path blockers remain. Feature development remains frozen.
