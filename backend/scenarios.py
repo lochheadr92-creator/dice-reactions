@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from living_cast_live_gate import is_live_gate_enabled
+
 SCENARIOS: List[Dict[str, Any]] = [
     {
         "id": "suburban-collapse",
@@ -161,4 +163,10 @@ def get_scenarios() -> List[Dict[str, Any]]:
 
 
 def get_scenario(scenario_id: str) -> Dict[str, Any] | None:
+    if scenario_id == "living-cast-proof":
+        if not is_live_gate_enabled():
+            return None
+        from living_cast_seeded_scenario import LIVING_CAST_PROOF_SCENARIO
+
+        return LIVING_CAST_PROOF_SCENARIO
     return next((s for s in SCENARIOS if s["id"] == scenario_id), None)

@@ -25,8 +25,9 @@ This module never calls the LLM and never imports ``server``.
 
 from __future__ import annotations
 
+import hashlib
 import re as _re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from memory import _normalize_object_name  # reused only for stable hyphen/token cleanup
 
@@ -337,3 +338,105 @@ def build_relationship_block(rolling: Optional[Dict[str, Any]]) -> str:
         + "\n".join(lines[:12])
         + "\n</relationships>"
     )
+
+
+# ---------------------------------------------------------------------------
+# Living Cast relationship finalize — applied once after legacy calculus.
+# ---------------------------------------------------------------------------
+RELATIONSHIP_THRESHOLD_STATES = frozenset({"betrayal_risk", "collapsed"})
+
+
+def _applied_delta(effect: Mapping[str, Any]) -> Dict[str, int]:
+    delta = effect.get("delta")
+    if isinstance(delta, dict):
+        return {d: int(delta.get(d) or 0) for d in DIMENSIONS if d in delta}
+    dim = str(effect.get("dimension") or "")
+    if dim in DIMENSIONS:
+        return {dim: int(effect.get("delta") or 0)}
+    return {}
+
+
+def apply_living_cast_relationship_effects(
+    merged_rolling: Dict[str, Any],
+    effects: List[Mapping[str, Any]],
+    *,
+    turn_number: int,
+) -> Tuple[List[str], List[Dict[str, Any]]]:
+    """
+    Apply deferred Living Cast relationship deltas exactly once.
+
+    Order: authoritative post-calculus vector → apply frozen deltas → clamp →
+    derive state once. Returns (adjustments, threshold_receipts).
+    """
+    adjustments: List[str] = []
+    threshold_receipts: List[Dict[str, Any]] = []
+    if not isinstance(merged_rolling, dict) or not effects:
+        return adjustments, threshold_receipts
+
+    vectors = merged_rolling.setdefault("relationship_vectors", [])
+    by_name = {
+        str(v.get("name", "")).strip().lower(): v
+        for v in vectors
+        if isinstance(v, dict) and v.get("name")
+    }
+
+    for raw in effects:
+        if not isinstance(raw, dict):
+            continue
+        if str(raw.get("effect_type") or "") != "relationship_delta":
+            continue
+        name = str(raw.get("target_name") or raw.get("target_id") or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        vec = by_name.get(key)
+        if not vec:
+            vec = _new_vector(name, turn_number)
+            vectors.append(vec)
+            by_name[key] = vec
+
+        before_state = _derive_state({d: _clamp(d, int(vec.get(d) or 0)) for d in DIMENSIONS})
+        before_vals = {d: int(vec.get(d) or 0) for d in DIMENSIONS}
+
+        delta = raw.get("delta")
+        if isinstance(delta, dict):
+            for dim, val in delta.items():
+                if dim in DIMENSIONS:
+                    vec[dim] = _clamp(dim, int(vec.get(dim) or 0) + int(val or 0))
+        else:
+            dim = str(raw.get("dimension") or "")
+            if dim in DIMENSIONS:
+                vec[dim] = _clamp(dim, int(vec.get(dim) or 0) + int(raw.get("delta") or 0))
+
+        for d in DIMENSIONS:
+            vec[d] = _clamp(d, vec.get(d, 0))
+        vec["state"] = _derive_state(vec)
+        vec["last_turn"] = turn_number
+        raw["before"] = before_vals
+        raw["after"] = {d: int(vec.get(d) or 0) for d in DIMENSIONS}
+
+        after_state = vec["state"]
+        adjustments.append(f"lc_rel:{name}:{raw.get('effect_id', '')}")
+
+        if (
+            after_state in RELATIONSHIP_THRESHOLD_STATES
+            and after_state != before_state
+        ):
+            digest = hashlib.sha256(
+                f"{raw.get('effect_id')}:{name}:{after_state}:{turn_number}".encode()
+            ).hexdigest()
+            threshold_receipts.append(
+                {
+                    "receipt_id": f"rel-fx-{digest[:12]}",
+                    "receipt_type": "living_cast_relationship_threshold",
+                    "turn": turn_number,
+                    "npc_name": name,
+                    "before_state": before_state,
+                    "after_state": after_state,
+                    "source_effect_id": str(raw.get("effect_id") or ""),
+                    "dimension_deltas": _applied_delta(raw),
+                }
+            )
+
+    _sync_stance(merged_rolling, vectors)
+    return adjustments, threshold_receipts

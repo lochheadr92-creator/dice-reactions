@@ -4,8 +4,10 @@ Replayability Engine v1 — orchestration, state container, directives, enforcem
 Session document field ``replayability_state`` (NOT rolling_state).
 Legacy sessions without the field skip replayability processing (Policy A).
 
-Canonical event history lives in rolling_state structures and pressure
-``threshold_crossings`` receipts — not in a second replayability event log.
+Canonical transitions live in rolling_state structures (relationship vectors,
+faction ticks, delayed consequences) and pressure ``threshold_crossings``.
+NPC move transition receipts live in ``replayability_state`` only — not
+rolling_state and not a canonical event-sourcing log.
 """
 
 from __future__ import annotations
@@ -15,13 +17,22 @@ import re
 import uuid
 from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
+import arc_diversity as arc
 import consequence_echoes as echoes
+import living_cast_provenance as provenance
+import npc_agendas as agendas
+import npc_world_moves as world_moves
 import opening_state
 import pressure_graph
+import relationships
 from run_identity import derive_run_identity, is_closed_enum_identity
 
 REPLAYABILITY_VERSION = 1
 TRANSITION_RECEIPTS_MAX = 32
+RELATIONSHIP_EFFECT_RECEIPTS_MAX = 32
+# Documented hard budget for full replayability_state at simultaneous caps.
+# Measured capped fixture ~53 KiB; 64 KiB leaves ~21% headroom without truncation.
+REPLAYABILITY_STATE_BUDGET_BYTES = 65_536
 
 # Keys the LLM must never own in rolling_state.
 ROLLING_REPLAYABILITY_KEYS = frozenset({
@@ -34,20 +45,29 @@ ROLLING_REPLAYABILITY_KEYS = frozenset({
     "consequence_echoes",
     "transition_receipts",
     "engine_events",
+    "npc_agendas",
+    "arc_diversity",
+    "pending_npc_move",
+    "engine_world_events",
+    "npc_move_receipts",
 })
 
 DIRECTIVE_MARKERS = (
     opening_state.OPENING_DIRECTIVE_MARKER,
     pressure_graph.PRESSURE_DIRECTIVE_MARKER,
     echoes.ECHO_DIRECTIVE_MARKER,
+    world_moves.NPC_WORLD_MOVE_MARKER,
 )
 
 DIRECTIVE_PROSE_PATTERNS = (
     r"INTERNAL\s+—\s+replayability\s+opening\s+contract",
     r"INTERNAL\s+—\s+foreground\s+pressure",
     r"INTERNAL\s+—\s+consequence\s+echo",
+    r"INTERNAL\s+—\s+world\s+development",
+    r"INTERNAL\s+—\s+primary\s+world\s+development",
     r"Immediate\s+problem:",
     r"Primary\s+pressure\s+kind:",
+    r"Primary\s+beat:",
 )
 
 RELATIONSHIP_ECHO_STATES = frozenset({"betrayal_risk", "collapsed"})
@@ -69,6 +89,12 @@ def empty_replayability_state() -> Dict[str, Any]:
         "pressure_graph": pressure_graph.copy_pressure_graph(None),
         "consequence_echoes": echoes.init_consequence_echoes(),
         "transition_receipts": [],
+        "npc_agendas": agendas.init_npc_agendas(),
+        "arc_diversity": arc.init_arc_diversity(),
+        "frozen_npc_move": None,
+        "npc_move_receipts": [],
+        "relationship_effect_receipts": [],
+        "lc_relationship_applied_receipt_id": None,
     }
 
 
@@ -147,6 +173,7 @@ def init_new_story(
     custom_world_setup: Optional[Dict[str, Any]],
     scenario: Optional[Mapping[str, Any]] = None,
     run_seed: Optional[str] = None,
+    npc_seed_records: Optional[List[Mapping[str, Any]]] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, str]]:
     """
     Create replayability_state and frozen directives for turn 1.
@@ -178,7 +205,44 @@ def init_new_story(
         "pressure_graph": pg,
         "consequence_echoes": echo_state,
         "transition_receipts": [],
+        "npc_agendas": agendas.init_npc_agendas(),
+        "arc_diversity": arc.init_arc_diversity(),
+        "frozen_npc_move": None,
+        "npc_move_receipts": [],
+        "relationship_effect_receipts": [],
+        "lc_relationship_applied_receipt_id": None,
     }
+
+    effective_scenario_id = str(scenario_id or (scenario or {}).get("id") or "")
+    seed_npcs: List[Mapping[str, Any]] = []
+    if npc_seed_records:
+        for idx, row in enumerate(npc_seed_records):
+            if isinstance(row, dict):
+                entry = dict(row)
+                entry.setdefault("source_type", "seed_record")
+                entry.setdefault("source_slot", idx)
+                if effective_scenario_id:
+                    entry.setdefault("scenario_id", effective_scenario_id)
+                seed_npcs.append(entry)
+    if scenario:
+        for idx, row in enumerate(scenario.get("key_npcs") or []):
+            if isinstance(row, dict) and row.get("name"):
+                seed_npcs.append(
+                    {
+                        "name": row["name"],
+                        "role": row.get("role"),
+                        "source_type": "scenario",
+                        "source_slot": idx,
+                        "scenario_id": effective_scenario_id,
+                    }
+                )
+    if seed_npcs:
+        state["npc_agendas"] = agendas.seed_agendas_from_npcs(
+            seed,
+            seed_npcs,
+            identity=identity,
+            scenario_id=effective_scenario_id,
+        )
 
     opening_source = _opening_unresolved_source(opening, seed)
     echoes.schedule_from_structured_events(
@@ -194,8 +258,17 @@ def init_new_story(
         turn_number=1,
     )
 
+    arc.record_beat(
+        state["arc_diversity"],
+        turn_number=1,
+        kind="opening",
+        subkind=str(opening.get("archetype_id") or "opening"),
+        urgency=70,
+    )
+
     directives = {
         "opening": opening_state.build_opening_directive(opening, identity, scenario=scenario),
+        "world": "",
         "pressure": pressure_graph.build_pressure_directive(pg),
         "echo": "",
     }
@@ -205,7 +278,8 @@ def init_new_story(
 def prepare_action_turn(
     replayability_state: Optional[Mapping[str, Any]],
     turn_number: int,
-) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, Any], List[Dict[str, Any]]]:
+    rolling_state: Optional[Mapping[str, Any]] = None,
+) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, Any], List[Dict[str, Any]], Dict[str, Any]]:
     """
     Tick pressure, mature echoes, fire at most one echo, build directives.
 
@@ -214,12 +288,16 @@ def prepare_action_turn(
     """
     diagnostics: Dict[str, Any] = {}
     if not isinstance(replayability_state, dict) or not replayability_state.get("run_seed"):
-        return {}, {"opening": "", "pressure": "", "echo": ""}, diagnostics, []
+        return {}, {"opening": "", "world": "", "pressure": "", "echo": ""}, diagnostics, [], {}
 
     state = copy.deepcopy(replayability_state)
+    run_seed = str(state.get("run_seed") or "")
     identity = state.get("identity") or {}
     pg = state.setdefault("pressure_graph", pressure_graph.copy_pressure_graph(None))
     echo_state = state.setdefault("consequence_echoes", echoes.init_consequence_echoes())
+    agendas_state = state.setdefault("npc_agendas", agendas.init_npc_agendas())
+    arc_state = state.setdefault("arc_diversity", arc.init_arc_diversity())
+    working_rolling = copy.deepcopy(rolling_state) if isinstance(rolling_state, dict) else {}
 
     threshold_fired = pressure_graph.tick_pressure_graph(pg, turn_number, identity=identity)
     if threshold_fired:
@@ -262,12 +340,108 @@ def prepare_action_turn(
 
     pressure_graph.select_foreground(pg, identity=identity, turn_number=turn_number)
 
+    agendas.tick_eligible_agendas(agendas_state, turn_number)
+    committed_move: Optional[Dict[str, Any]] = None
+    move, _candidates = world_moves.select_npc_move(
+        run_seed, agendas_state, working_rolling, state, identity, turn_number
+    )
+    if move:
+        agenda = agendas.get_agenda_by_npc_id(agendas_state, str(move.get("npc_id") or ""))
+        if agenda and agendas.get_agenda_by_agenda_id(agendas_state, str(move.get("agenda_id") or "")):
+            working_rolling, prepared = world_moves.commit_npc_move(
+                move, agenda, working_rolling, state, run_seed, turn_number
+            )
+            if not prepared:
+                committed_move = None
+            else:
+                committed_move = prepared
+                state["frozen_npc_move"] = prepared
+                diagnostics["npc_move_kind"] = move.get("move_kind")
+                diagnostics["npc_move_receipt_emitted"] = True
+                _append_transition_receipt(
+                    state,
+                    source_event_id=str(move.get("receipt_id")),
+                    receipt_type="npc_move_committed",
+                    turn_number=turn_number,
+                )
+                echo_src = world_moves.move_to_echo_source(move)
+                if echo_src and provenance.validate_provenance(echo_src):
+                    processed = echoes.processed_source_event_ids(echo_state)
+                    added = echoes.schedule_from_structured_events(
+                        echo_state, [echo_src], turn_number, processed_source_ids=processed
+                    )
+                    if added:
+                        _append_transition_receipt(
+                            state,
+                            source_event_id=echo_src["source_event_id"],
+                            receipt_type="echo_scheduled",
+                            turn_number=turn_number,
+                        )
+
+    pressure_body = pressure_graph.build_pressure_directive(pg)
+    echo_body = echoes.build_echo_directive(echo_state, fired_this_turn=fired_echo if did_fire else None)
+    move_body = world_moves.build_move_directive(committed_move) if committed_move else ""
+
+    beat_candidates: List[Dict[str, Any]] = []
+    if committed_move:
+        beat_candidates.append(
+            {
+                "kind": "npc_move",
+                "subkind": str(committed_move.get("move_kind") or ""),
+                "urgency": 75 if committed_move.get("move_kind") == "defect" else 55,
+                "directive": move_body,
+            }
+        )
+    if fired_echo and did_fire:
+        beat_candidates.append(
+            {
+                "kind": "echo",
+                "subkind": str(fired_echo.get("kind") or "echo"),
+                "urgency": 85,
+                "directive": echo_body,
+            }
+        )
+    fg_id = pg.get("foreground_node_id")
+    if fg_id:
+        for node in pg.get("nodes") or []:
+            if isinstance(node, dict) and node.get("id") == fg_id:
+                beat_candidates.append(
+                    {
+                        "kind": "pressure",
+                        "subkind": str(node.get("kind") or "pressure"),
+                        "urgency": int(node.get("magnitude") or 40),
+                        "directive": pressure_body,
+                    }
+                )
+                break
+
+    primary = arc.select_primary_beat(beat_candidates, arc_state, identity=identity)
+    supporting: Dict[str, str] = {}
+    if primary:
+        arc.record_beat(
+            arc_state,
+            turn_number=turn_number,
+            kind=str(primary.get("kind") or ""),
+            subkind=str(primary.get("subkind") or ""),
+            urgency=int(primary.get("urgency") or 50),
+        )
+    pk = str((primary or {}).get("kind") or "")
+    if pressure_body and pk != "pressure":
+        supporting["pressure"] = pressure_body
+    if echo_body and did_fire and pk != "echo":
+        supporting["echo"] = echo_body
+
+    world_directive = arc.build_world_development_directive(primary, supporting)
+    if primary and primary.get("directive") and pk == "npc_move":
+        world_directive = str(primary.get("directive") or world_directive)
+
     directives = {
         "opening": "",
-        "pressure": pressure_graph.build_pressure_directive(pg),
-        "echo": echoes.build_echo_directive(echo_state, fired_this_turn=fired_echo if did_fire else None),
+        "world": world_directive,
+        "pressure": pressure_body if pk == "pressure" else "",
+        "echo": echo_body if pk == "echo" and did_fire else "",
     }
-    return state, directives, diagnostics, threshold_fired
+    return state, directives, diagnostics, threshold_fired, working_rolling
 
 
 def collect_qualifying_echo_sources(
@@ -365,6 +539,138 @@ def collect_qualifying_echo_sources(
     return sources[:6]
 
 
+def evolve_agendas_from_sources(
+    replayability_state: Dict[str, Any],
+    sources: List[Mapping[str, Any]],
+    turn_number: int,
+) -> None:
+    agendas_state = replayability_state.setdefault("npc_agendas", agendas.init_npc_agendas())
+    validated = provenance.filter_provenance_sources(sources, turn_number)
+    for agenda in agendas_state.get("active") or []:
+        if not isinstance(agenda, dict):
+            continue
+        for src in validated:
+            agendas.evolve_agenda_from_structured_event(agenda, src, turn_number)
+
+
+def _append_relationship_effect_receipt(
+    state: Dict[str, Any],
+    receipt: Mapping[str, Any],
+) -> bool:
+    receipts = state.setdefault("relationship_effect_receipts", [])
+    rid = receipt.get("receipt_id")
+    if rid and any(isinstance(r, dict) and r.get("receipt_id") == rid for r in receipts):
+        return False
+    receipts.append(dict(receipt))
+    if len(receipts) > RELATIONSHIP_EFFECT_RECEIPTS_MAX:
+        state["relationship_effect_receipts"] = receipts[-RELATIONSHIP_EFFECT_RECEIPTS_MAX:]
+    return True
+
+
+def finalize_living_cast_relationships(
+    replayability_state: Dict[str, Any],
+    merged_rolling: Dict[str, Any],
+    turn_number: int,
+) -> Tuple[Dict[str, Any], List[str]]:
+    """
+    Apply frozen Living Cast relationship effects once after legacy calculus.
+
+    Authoritative order tail:
+      4. apply frozen LC relationship deltas exactly once
+      5-6. clamp + derive state (inside relationships module)
+      7. LC threshold effect receipts from LC before/after only
+    """
+    state = copy.deepcopy(replayability_state)
+    frozen = state.get("frozen_npc_move")
+    if not isinstance(frozen, dict):
+        return state, []
+
+    receipt_id = str(frozen.get("receipt_id") or "")
+    if receipt_id and state.get("lc_relationship_applied_receipt_id") == receipt_id:
+        return state, []
+
+    effects = frozen.get("effects") or (frozen.get("receipt") or {}).get("effects") or []
+    rel_effects = [
+        e for e in effects
+        if isinstance(e, dict) and e.get("defer_finalize")
+    ]
+    if not rel_effects:
+        if receipt_id:
+            state["lc_relationship_applied_receipt_id"] = receipt_id
+        return state, []
+
+    adjustments, threshold_receipts = relationships.apply_living_cast_relationship_effects(
+        merged_rolling,
+        rel_effects,
+        turn_number=turn_number,
+    )
+    for receipt in threshold_receipts:
+        _append_relationship_effect_receipt(state, receipt)
+    if receipt_id:
+        state["lc_relationship_applied_receipt_id"] = receipt_id
+    state["frozen_npc_move"] = None
+    return state, adjustments
+
+
+def serialize_state_json(value: Any) -> bytes:
+    """Production JSON serialization policy for replayability_state sizing."""
+    import json
+
+    return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def replayability_state_byte_size(replayability_state: Optional[Mapping[str, Any]]) -> int:
+    if not isinstance(replayability_state, dict):
+        return 0
+    return len(serialize_state_json(replayability_state))
+
+
+def living_cast_state_metrics(
+    replayability_state: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Serialized UTF-8 byte sizes with fixture counts.
+
+    Uses compact JSON (``,`` separators, sorted keys) matching session persistence.
+    """
+    if not isinstance(replayability_state, dict):
+        return {}
+    agendas_state = replayability_state.get("npc_agendas") or {}
+    active = agendas_state.get("active") or []
+    archived = agendas_state.get("archived") or []
+    move_receipts = replayability_state.get("npc_move_receipts") or []
+    rel_receipts = replayability_state.get("relationship_effect_receipts") or []
+    arc_state = replayability_state.get("arc_diversity") or {}
+    arc_beats = arc_state.get("recent_beats") or []
+    echo_state = replayability_state.get("consequence_echoes") or {}
+    pressure = replayability_state.get("pressure_graph") or {}
+
+    slices = {
+        "active_agendas": (active, len(active)),
+        "archived_agendas": (archived, len(archived)),
+        "npc_move_receipts": (move_receipts, len(move_receipts)),
+        "relationship_effect_receipts": (rel_receipts, len(rel_receipts)),
+        "arc_diversity_beats": (arc_beats, len(arc_beats)),
+        "pressure_graph": (pressure, len(pressure.get("nodes") or [])),
+        "consequence_echoes": (
+            echo_state,
+            len(echo_state.get("scheduled") or [])
+            + len(echo_state.get("pending") or [])
+            + len(echo_state.get("fired") or []),
+        ),
+        "full_replayability_state": (replayability_state, 1),
+    }
+    metrics: Dict[str, Any] = {}
+    for key, (val, count) in slices.items():
+        metrics[key] = {
+            "count": count,
+            "bytes": len(serialize_state_json(val)),
+        }
+    metrics["budget_bytes"] = REPLAYABILITY_STATE_BUDGET_BYTES
+    metrics["within_budget"] = metrics["full_replayability_state"]["bytes"] <= REPLAYABILITY_STATE_BUDGET_BYTES
+    return metrics
+
+
 def finalize_action_turn(
     replayability_state: Dict[str, Any],
     qualifying_sources: List[Mapping[str, Any]],
@@ -373,10 +679,11 @@ def finalize_action_turn(
     """Schedule echoes from post-guard structured sources; idempotent receipts only."""
     state = copy.deepcopy(replayability_state)
     echo_state = state.setdefault("consequence_echoes", echoes.init_consequence_echoes())
+    validated = provenance.filter_provenance_sources(qualifying_sources, turn_number)
     processed = echoes.processed_source_event_ids(echo_state)
     added = echoes.schedule_from_structured_events(
         echo_state,
-        qualifying_sources,
+        validated,
         turn_number,
         processed_source_ids=processed,
     )
@@ -389,6 +696,7 @@ def finalize_action_turn(
                 receipt_type="echo_scheduled",
                 turn_number=turn_number,
             )
+    evolve_agendas_from_sources(state, qualifying_sources, turn_number)
     return state
 
 
@@ -429,6 +737,7 @@ def enforce_authoritative(
             )
             del merged_rolling["pressure_graph"]
             adjustments.append("rolling_pressure_graph_stripped")
+        adjustments.extend(agendas.strip_model_agenda_mutations(merged_rolling, authoritative_replayability))
         if not is_closed_enum_identity((authoritative_replayability or {}).get("identity")):
             adjustments.append("replayability_identity_invalid_ignored")
     return adjustments
@@ -441,12 +750,15 @@ def replayability_active(session: Mapping[str, Any]) -> bool:
 
 
 def combine_directive_messages(directives: Mapping[str, str], *, include_opening: bool) -> List[str]:
-    """Ordered directive bodies for _build_messages."""
+    """Ordered directive bodies for _build_messages after secret reveal."""
     parts: List[str] = []
     if include_opening:
         opening = (directives.get("opening") or "").strip()
         if opening:
             parts.append(opening)
+    world = (directives.get("world") or "").strip()
+    if world:
+        parts.append(world)
     pressure = (directives.get("pressure") or "").strip()
     if pressure:
         parts.append(pressure)
