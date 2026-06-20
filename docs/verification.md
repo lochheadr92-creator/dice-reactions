@@ -37,7 +37,23 @@ yarn test
 yarn typecheck
 ```
 
-**Passed 2026-06-20 on `emergent`:** **390** deterministic backend tests (includes contract-corrected replayability engine v1, action concurrency, secret reveal, P2 verifier) + **41** frontend Jest tests + TypeScript clean (includes action conflict recovery increment).
+**Passed 2026-06-20 on `emergent` HEAD @ `d8b9caf`:** **390** deterministic backend tests (replayability engine v1, action concurrency, secret reveal, P2 verifier) + **41** frontend Jest tests + TypeScript clean. **Living Cast tests are not on `emergent` HEAD** — they exist only on unmerged `recovery/living-cast-working-tree` and are **not covered by emergent CI**.
+
+**Recovery branch only (`recovery/living-cast-working-tree` @ `4dadb3f` — provisional, unmerged, not deployed):**
+
+```bash
+cd backend
+python -m pytest \
+  tests/test_living_cast_bounded_state.py \
+  tests/test_living_cast_finalize.py \
+  tests/test_npc_agendas.py \
+  tests/test_npc_world_moves.py \
+  tests/test_arc_diversity.py \
+  tests/test_living_cast_integration.py \
+  -q
+```
+
+Bounded-state audit, seeded live-gate preflight, and manual `living-cast-proof` scenario apply to the recovery branch only. See [living-cast-live-gate.md](./living-cast-live-gate.md). Live gate remains blocked until merge remediation completes.
 
 **Lint:** `yarn lint` passes locally (exit 0) but is **not** a required CI step in this increment — Expo lint subprocess emits a benign `yarnpkg` shim warning on Windows; no ESLint rule debt was found.
 
@@ -193,7 +209,7 @@ Security coverage: `test_security.py` — ownership (10), admin auth (5), export
 
 ## Observations / regressions
 
-- No runtime-breaking regressions in **394** deterministic backend tests (2026-06-20)
+- No runtime-breaking regressions in **390** deterministic backend tests on `emergent` HEAD (2026-06-20)
 - Prior docs described `main` branch — missing gateway/relationship/HUD; corrected in reconciliation pass
 - Lint tooling not fully clean: `test_story_engine.py` flake8 `E741` (Docs-claimed)
 
