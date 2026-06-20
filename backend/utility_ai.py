@@ -19,8 +19,13 @@ from engine_determinism import (
     stable_hash,
 )
 from foundation_snapshot import FoundationTurnSnapshot
+from utility_dimensions import (
+    DimensionScore,
+    compute_dimension_scores,
+    dimension_scores_to_aggregate_map,
+)
 
-UTILITY_AI_SCHEMA_VERSION = 1
+UTILITY_AI_SCHEMA_VERSION = 2
 DECISION_VERSION = 1
 
 # Appendix A.4 base weights (Ch 27.4.2)
@@ -118,6 +123,43 @@ def hash_stable_action(actor_id: str, action_kind: str) -> int:
     return int(digest[:8], 16)
 
 
+def build_canonical_dimension_bundle(
+    snapshot: FoundationTurnSnapshot,
+    *,
+    actor_id: str,
+    action_kind: str,
+    target_kind: str,
+    aligned_goals: frozenset[str],
+    relationship_deltas: Mapping[str, int],
+) -> Dict[str, Any]:
+    scores = compute_dimension_scores(
+        snapshot,
+        actor_id=actor_id,
+        action_kind=action_kind,
+        target_kind=target_kind,
+        aligned_goals=aligned_goals,
+        relationship_deltas=relationship_deltas,
+    )
+    numeric, authorised, blockers = dimension_scores_to_aggregate_map(scores)
+    return {
+        "dimension_scores": numeric,
+        "dimension_score_records": [ _score_record(row) for row in scores ],
+        "replacement_authorised": authorised,
+        "blocker_codes": blockers,
+    }
+
+
+def _score_record(row: DimensionScore) -> Dict[str, Any]:
+    return {
+        "dimension": row.dimension.value,
+        "value": row.value,
+        "source_status": row.source_status.value,
+        "source_ids": list(row.source_ids),
+        "canon_rule_id": row.canon_rule_id,
+        "blocker_code": row.blocker_code,
+    }
+
+
 def select_action(
     candidates: Sequence[Mapping[str, Any]],
     *,
@@ -125,12 +167,6 @@ def select_action(
     actor_resolution: Mapping[str, Any],
     seed_draw_start: int = 0,
 ) -> Dict[str, Any]:
-    """
-    Rank candidates with canonical utility, noise, and tie handling.
-
-    Candidates must include:
-      actor_id, action_kind, target_kind, target_id, dimension_scores, optional context
-    """
     acting_ids = set(actor_resolution.get("acting_actor_ids") or [])
     feasible: List[Dict[str, Any]] = []
     for raw in candidates:
@@ -142,6 +178,7 @@ def select_action(
         target_id = str(raw.get("target_id") or "")
         if not action_kind or not target_kind or not target_id:
             continue
+        dimension_scores = dict(raw.get("dimension_scores") or {})
         weights = compute_dimension_weights(
             pressure_intensity=float(raw.get("pressure_intensity", 0.0)),
             stress=float(raw.get("stress", 0.0)),
@@ -151,7 +188,7 @@ def select_action(
             trauma_intensity=float(raw.get("trauma_intensity", 0.0)),
             starving=bool(raw.get("starving")),
         )
-        base_utility = compute_utility_score(raw.get("dimension_scores") or {}, weights)
+        base_utility = compute_utility_score(dimension_scores, weights)
         c_hash = candidate_set_hash(
             actor_id=actor_id,
             action_kind=action_kind,
@@ -177,7 +214,9 @@ def select_action(
                 "base_utility": base_utility,
                 "noisy_utility": noisy,
                 "weights": weights,
-                "dimension_scores": dict(raw.get("dimension_scores") or {}),
+                "dimension_scores": dimension_scores,
+                "dimension_score_records": list(raw.get("dimension_score_records") or []),
+                "replacement_authorised": bool(raw.get("replacement_authorised")),
                 "personality_order": list(raw.get("personality_order") or []),
                 "candidate_set_hash": c_hash,
                 "seed_material": seed_material,
@@ -193,11 +232,7 @@ def select_action(
         }
 
     max_utility = max(row["noisy_utility"] for row in feasible)
-    tied = [
-        row
-        for row in feasible
-        if abs(row["noisy_utility"] - max_utility) <= TIE_WINDOW
-    ]
+    tied = [row for row in feasible if abs(row["noisy_utility"] - max_utility) <= TIE_WINDOW]
     if len(tied) == 1:
         winner = tied[0]
     else:
@@ -228,6 +263,7 @@ def select_action(
             "target_id": winner["target_id"],
             "base_utility": winner["base_utility"],
             "noisy_utility": winner["noisy_utility"],
+            "replacement_authorised": winner.get("replacement_authorised"),
         },
         "selected_actor_id": winner["actor_id"],
         "selected_action_kind": winner["action_kind"],
@@ -243,6 +279,7 @@ def select_action(
                 "target_id": row["target_id"],
                 "base_utility": row["base_utility"],
                 "noisy_utility": row["noisy_utility"],
+                "replacement_authorised": row.get("replacement_authorised"),
             }
             for row in sorted(
                 feasible,
@@ -266,18 +303,19 @@ def candidates_from_agendas(
     replayability_state: Mapping[str, Any],
     run_seed: str,
 ) -> List[Dict[str, Any]]:
-    """Bridge domain catalogue — uses npc_world_moves target resolution, not score_move."""
     import npc_agendas as agenda_mod
     import npc_world_moves as world_moves
 
     out: List[Dict[str, Any]] = []
     agendas_state = replayability_state.get("npc_agendas") or {}
-    for agenda in agendas_state.get("agendas") or []:
+    agenda_rows = agendas_state.get("agendas") or agendas_state.get("active") or []
+    for agenda in agenda_rows:
         if not isinstance(agenda, dict):
             continue
         npc_id = str(agenda.get("npc_id") or "")
         display_name = str(agenda.get("display_name") or "")
         tier = world_moves.resolve_actor_tier(npc_id, display_name, rolling_state, snapshot.turn_sequence)
+        inputs = _utility_inputs_for_actor(snapshot, npc_id)
         for move_kind in world_moves.MOVE_KINDS:
             target = world_moves.resolve_move_target(
                 move_kind, agenda, rolling_state, replayability_state
@@ -285,18 +323,32 @@ def candidates_from_agendas(
             if not target:
                 continue
             target_type, target_id = target
-            vec, _ = agenda_mod.resolve_relationship_vector(npc_id, agenda, rolling_state)
-            dimension_scores = _heuristic_dimension_scores(move_kind, target_type, agenda, vec)
+            rel_deltas = world_moves._relationship_deltas_for_move(move_kind, target_type)
+            bundle = build_canonical_dimension_bundle(
+                snapshot,
+                actor_id=npc_id,
+                action_kind=move_kind,
+                target_kind=target_type,
+                aligned_goals=world_moves.MOVE_GOAL_ALIGN.get(move_kind, frozenset()),
+                relationship_deltas=rel_deltas,
+            )
             out.append(
                 {
                     "actor_id": npc_id,
                     "action_kind": move_kind,
                     "target_kind": target_type,
                     "target_id": target_id,
-                    "dimension_scores": dimension_scores,
-                    "goal_priority": 7.0 if agenda.get("goal_kind") in world_moves.MOVE_GOAL_ALIGN.get(move_kind, ()) else 3.0,
-                    "pressure_intensity": 0.4,
-                    "stress": float(agenda.get("stress") or 20.0),
+                    "dimension_scores": bundle["dimension_scores"],
+                    "dimension_score_records": bundle["dimension_score_records"],
+                    "replacement_authorised": bundle["replacement_authorised"],
+                    "blocker_codes": bundle["blocker_codes"],
+                    "goal_priority": 10.0 if agenda.get("goal_kind") in world_moves.MOVE_GOAL_ALIGN.get(move_kind, ()) else 3.0,
+                    "pressure_intensity": float(inputs.get("highest_pressure_intensity") or 0.0),
+                    "stress": float(inputs.get("stress_level") or 0.0),
+                    "relationship_importance": float(inputs.get("relationship_importance") or 5.0),
+                    "resource_scarcity": float(inputs.get("resource_scarcity") or 0.0),
+                    "trauma_intensity": _max_trauma(inputs.get("memory_signatures") or ()),
+                    "starving": bool(inputs.get("starving")),
                     "personality_order": _personality_order(run_seed, npc_id),
                     "provisional_tier": tier,
                 }
@@ -304,36 +356,27 @@ def candidates_from_agendas(
     return out
 
 
-def _heuristic_dimension_scores(
-    move_kind: str,
-    target_type: str,
-    agenda: Mapping[str, Any],
-    relationship: Optional[Mapping[str, Any]],
-) -> Dict[str, float]:
-    goal = str(agenda.get("goal_kind") or "")
-    scores = {
-        "survival": 40.0,
-        "goal_progression": 70.0 if goal else 30.0,
-        "pressure_relief": 45.0,
-        "stress_reduction": 35.0,
-        "relationship_impact": 40.0,
-        "resource_gain_loss": 30.0,
-        "memory_avoidance": 50.0,
-    }
-    if move_kind == "withdraw":
-        scores["survival"] = 80.0
-        scores["memory_avoidance"] = 85.0
-    if move_kind == "protect" and target_type == "player":
-        scores["relationship_impact"] = 75.0
-    if relationship and move_kind == "pressure":
-        scores["relationship_impact"] = min(100.0, float(relationship.get("resentment", 0)) / 2.0)
-    return scores
+def _utility_inputs_for_actor(snapshot: FoundationTurnSnapshot, actor_id: str) -> Dict[str, Any]:
+    for ref in snapshot.utility_input_refs:
+        if ref.get("actor_id") == actor_id:
+            return dict(ref)
+    return {}
+
+
+def _max_trauma(signatures: Sequence[Mapping[str, Any]]) -> float:
+    peak = 0.0
+    for sig in signatures:
+        if isinstance(sig, dict) and sig.get("negative"):
+            peak = max(peak, float(sig.get("trauma_intensity", 0.0)))
+    return peak
 
 
 def _personality_order(run_seed: str, actor_id: str) -> List[str]:
     from run_identity import select_from_namespace
 
-    options = tuple(sorted(list(__import__("npc_world_moves").MOVE_KINDS)))
+    import npc_world_moves as world_moves
+
+    options = tuple(sorted(list(world_moves.MOVE_KINDS)))
     primary = select_from_namespace(run_seed, f"personality:{actor_id}", options)
     rest = [opt for opt in options if opt != primary]
     return [primary, *rest]

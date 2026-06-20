@@ -30,9 +30,17 @@ Memory retrieval runs in shadow mode unless `developer_mode` enables telemetry c
 
 `server.py` model-facing directive construction unchanged in this increment.
 
+## Acceptance harness
+
+`backend/tests/foundation_acceptance/` — `HARNESS_STRUCTURE_READY`. Executable ledger v1.0.0. No production replacement.
+
+## Utility dimension contract
+
+`backend/utility_dimensions.py` — Ch 27.4.1 formulas; fail-closed on missing inputs. D_SEL `PLACEHOLDER_BLOCKED` for production agendas.
+
 ## Test status
 
-570 non-live tests passed (34 live deselected).
+598 non-live tests passed (34 live deselected).
 
 ## Next increment
 
