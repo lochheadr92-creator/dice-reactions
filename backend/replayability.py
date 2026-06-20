@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
 import arc_diversity as arc
 import consequence_echoes as echoes
+import foundation_integration
 import living_cast_provenance as provenance
 import npc_agendas as agendas
 import npc_world_moves as world_moves
@@ -441,6 +442,21 @@ def prepare_action_turn(
         "pressure": pressure_body if pk == "pressure" else "",
         "echo": echo_body if pk == "echo" and did_fire else "",
     }
+
+    try:
+        foundation_bundle, foundation_diag = foundation_integration.evaluate_foundation_turn(
+            run_seed=run_seed,
+            turn_sequence=turn_number,
+            rolling_state=working_rolling,
+            replayability_state=state,
+            prior_foundation_state=state.get("foundation_prepared_v1"),
+            developer_mode=False,
+        )
+        diagnostics.update(foundation_diag)
+        state = foundation_integration.apply_prepared_to_replayability_state(state, foundation_bundle)
+    except Exception as exc:
+        diagnostics["foundation_eval_error"] = str(exc)[:200]
+
     return state, directives, diagnostics, threshold_fired, working_rolling
 
 
