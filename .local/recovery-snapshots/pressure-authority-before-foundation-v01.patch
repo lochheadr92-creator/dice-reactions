@@ -1,0 +1,399 @@
+diff --git a/backend/hud.py b/backend/hud.py
+index d27d6fd..3ea8538 100644
+--- a/backend/hud.py
++++ b/backend/hud.py
+@@ -20,7 +20,9 @@ It never calls the LLM.
+ from __future__ import annotations
+ 
+ import re as _re
+-from typing import Any, Dict, List, Optional
++from typing import Any, Dict, List, Mapping, Optional
++
++import pressure_graph
+ 
+ DANGER_VALUES = {"none", "low", "elevated", "high", "critical"}
+ MOMENTUM_VALUES = {"surging", "steady", "stalling", "declining", "lost"}
+@@ -67,8 +69,13 @@ def _clean_phrase(text: str) -> str:
+     return _re.sub(r"\s+", " ", str(text or "")).strip().rstrip(".")
+ 
+ 
+-def derive_pressure(state: Dict[str, Any], rolling: Dict[str, Any],
+-                    llm_pressure: Optional[str]) -> str:
++def derive_pressure(
++    state: Dict[str, Any],
++    rolling: Dict[str, Any],
++    llm_pressure: Optional[str],
++    *,
++    engine_pressure_graph: Optional[Mapping[str, Any]] = None,
++) -> str:
+     """Return the single most-immediate, non-prescriptive pressure phrase."""
+     health = str(state.get("Health", "")).lower()
+     worst = _worst_injury(rolling)
+@@ -79,12 +86,27 @@ def derive_pressure(state: Dict[str, Any], rolling: Dict[str, Any],
+     if health == "badly wounded" and worst:
+         return f"{worst.capitalize()} worsening"
+ 
+-    # 2. Model-authored phrase — only if grounded AND not an instruction.
++    engine_phrase = ""
++    if isinstance(engine_pressure_graph, dict):
++        engine_phrase = pressure_graph.derive_engine_pressure_phrase(engine_pressure_graph)
++
++    # 2. Engine-owned foreground phrase when replayability pressure graph is present.
++    if engine_phrase:
++        phrase = _clean_phrase(llm_pressure)
++        if (
++            phrase
++            and len(phrase) <= 64
++            and not _PRESCRIPTIVE_RE.search(phrase)
++        ):
++            return phrase
++        return engine_phrase
++
++    # 3. Model-authored phrase — only if grounded AND not an instruction (legacy path).
+     phrase = _clean_phrase(llm_pressure)
+     if phrase and len(phrase) <= 64 and not _PRESCRIPTIVE_RE.search(phrase):
+         return phrase
+ 
+-    # 3. Engine-derived fallbacks, most immediate first.
++    # 4. Engine-derived fallbacks, most immediate first.
+     threats = rolling.get("active_threats") or rolling.get("unresolved_threats") or []
+     if threats:
+         return "Unseen threat closing in"
+@@ -123,7 +145,12 @@ def _derive_danger(state: Dict[str, Any], rolling: Dict[str, Any]) -> str:
+     return "none"
+ 
+ 
+-def shape_hud(state: Optional[Dict[str, Any]], rolling: Optional[Dict[str, Any]]) -> List[str]:
++def shape_hud(
++    state: Optional[Dict[str, Any]],
++    rolling: Optional[Dict[str, Any]],
++    *,
++    engine_pressure_graph: Optional[Mapping[str, Any]] = None,
++) -> List[str]:
+     """Mutate `state` in place: drop Objective, ensure DNG/MOM, set PRS.
+ 
+     Returns adjustment strings for the developer diagnostics panel.
+@@ -151,7 +178,12 @@ def shape_hud(state: Optional[Dict[str, Any]], rolling: Optional[Dict[str, Any]]
+     state["Momentum"] = momentum if momentum in MOMENTUM_VALUES else "steady"
+ 
+     # 4. Pressure line (single most-immediate, non-prescriptive).
+-    pressure = derive_pressure(state, rolling, state.get("Pressure"))
++    pressure = derive_pressure(
++        state,
++        rolling,
++        state.get("Pressure"),
++        engine_pressure_graph=engine_pressure_graph,
++    )
+     if pressure:
+         state["Pressure"] = pressure
+     else:
+diff --git a/backend/memory.py b/backend/memory.py
+index 270bf18..7d39388 100644
+--- a/backend/memory.py
++++ b/backend/memory.py
+@@ -51,6 +51,9 @@ PROTECTED_LIST_KEYS = (
+ )
+ 
+ # Keys where the model is authoritative each turn (it actively prunes them).
++# active_pressures: legacy sessions only. Replayability-enabled sessions derive
++# active_pressures from session.replayability_state.pressure_graph after merge
++# (see replayability.enforce_pressure_authority).
+ AUTHORITATIVE_LIST_KEYS = (
+     "topic_ledger",
+     "recent_choice_signatures",
+diff --git a/backend/opening_state.py b/backend/opening_state.py
+index fc5ae06..4d6fe95 100644
+--- a/backend/opening_state.py
++++ b/backend/opening_state.py
+@@ -348,7 +348,8 @@ def build_opening_directive(
+         f"- Primary pressure kind: {identity.get('primary_pressure_kind', 'resource')}",
+         f"- Scarcity axis: {identity.get('scarcity_axis', 'time')}",
+         "- Open in medias res; connect first choices to these facts immediately.",
+-        "- Store visible pressure in state Pressure and rolling_state.active_pressures.",
++        "- Store visible pressure in state Pressure; engine pressure_graph owns truth "
++        "(active_pressures is a derived compatibility projection when replayability is active).",
+         "- Preserve any curated scenario seed as canonical; do not replace it.",
+     ]
+ 
+diff --git a/backend/pacing.py b/backend/pacing.py
+index df45b73..179f493 100644
+--- a/backend/pacing.py
++++ b/backend/pacing.py
+@@ -186,21 +186,36 @@ def build_early_game_directive(
+     return ""
+ 
+ 
+-def validate_opening_structure(parsed: Any) -> Optional[str]:
++def _replayability_pressure_projection_ready(replayability_state: Optional[Dict[str, Any]]) -> bool:
++    if not isinstance(replayability_state, dict) or not replayability_state.get("run_seed"):
++        return False
++    import pressure_graph as _pressure_graph
++
++    pg = replayability_state.get("pressure_graph") or {}
++    return bool(_pressure_graph.derive_active_pressures_compatibility(pg))
++
++
++def validate_opening_structure(
++    parsed: Any,
++    replayability_state: Optional[Dict[str, Any]] = None,
++) -> Optional[str]:
+     """Stage-1 structural validation. Returns error reason or None if acceptable."""
++    engine_projection_ready = _replayability_pressure_projection_ready(replayability_state)
++
+     pressure = _pressure_value(getattr(parsed, "state", None) or {})
+-    if not pressure:
++    if not pressure and not engine_projection_ready:
+         return "missing Pressure in state"
+-    if pressure.lower() in _BLANK_PRESSURE_VALUES:
++    if pressure and pressure.lower() in _BLANK_PRESSURE_VALUES and not engine_projection_ready:
+         return f"blank or placeholder Pressure: {pressure!r}"
+ 
+     rolling = getattr(parsed, "rolling_state", None)
+     if not isinstance(rolling, dict):
+         return "missing rolling_state"
+ 
+-    active = rolling.get("active_pressures")
+-    if not isinstance(active, list) or not any(_non_empty_string(x) for x in active):
+-        return "missing active_pressures"
++    if not engine_projection_ready:
++        active = rolling.get("active_pressures")
++        if not isinstance(active, list) or not any(_non_empty_string(x) for x in active):
++            return "missing active_pressures"
+ 
+     objectives = rolling.get("objectives") if isinstance(rolling.get("objectives"), list) else []
+     unresolved = rolling.get("unresolved") if isinstance(rolling.get("unresolved"), list) else []
+diff --git a/backend/pressure_graph.py b/backend/pressure_graph.py
+index 9719214..d61f18c 100644
+--- a/backend/pressure_graph.py
++++ b/backend/pressure_graph.py
+@@ -30,9 +30,16 @@ ORIGIN_TYPES = (
+ )
+ 
+ TICK_MAGNITUDE_DELTA = 4
++GATHER_RESOURCE_DELTA = -3
++FORTIFY_ENVIRONMENTAL_DELTA = -4
+ RECENCY_PENALTY = 18
+ FOREGROUND_RECENCY_TURNS = 2
+ 
++# Bounded compatibility projection fields — presentation only, not simulation truth.
++PROJECTION_SAFE_FIELDS = frozenset({
++    "pressure_id", "label", "kind", "urgency_band", "foreground",
++})
++
+ 
+ def stable_pressure_id(run_seed: str, kind: str, origin_type: str, origin_id: str, slot: str) -> str:
+     digest = hashlib.sha256(
+@@ -45,6 +52,102 @@ def _clamp_magnitude(value: int) -> int:
+     return max(0, min(100, int(value)))
+ 
+ 
++def magnitude_to_urgency_band(magnitude: int) -> str:
++    mag = _clamp_magnitude(magnitude)
++    if mag >= 80:
++        return "critical"
++    if mag >= 60:
++        return "high"
++    if mag >= 35:
++        return "elevated"
++    return "low"
++
++
++def get_foreground_node(graph: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
++    fg_id = graph.get("foreground_node_id")
++    if not fg_id:
++        return None
++    for node in graph.get("nodes") or []:
++        if (
++            isinstance(node, dict)
++            and node.get("id") == fg_id
++            and node.get("status") == "active"
++        ):
++            return node
++    return None
++
++
++def derive_pressure_projections(graph: Mapping[str, Any]) -> List[Dict[str, Any]]:
++    """Deterministic bounded projections from engine nodes — compatibility/presentation only."""
++    fg_id = graph.get("foreground_node_id")
++    projections: List[Dict[str, Any]] = []
++    for node in _active_nodes(graph):
++        projections.append({
++            "pressure_id": str(node.get("id") or ""),
++            "label": str(node.get("label") or node.get("kind") or "pressure").strip()[:80],
++            "kind": str(node.get("kind") or ""),
++            "urgency_band": magnitude_to_urgency_band(int(node.get("magnitude") or 0)),
++            "foreground": node.get("id") == fg_id,
++        })
++    projections.sort(key=lambda row: (not row["foreground"], row["pressure_id"]))
++    return projections
++
++
++def derive_active_pressures_compatibility(graph: Mapping[str, Any]) -> List[str]:
++    """Bounded string list for pacing prompts — derived from engine authority."""
++    labels: List[str] = []
++    for projection in derive_pressure_projections(graph):
++        label = str(projection.get("label") or "").strip()
++        if label and label not in labels:
++            labels.append(label)
++        if len(labels) >= 3:
++            break
++    return labels
++
++
++def sync_active_pressures_projection(
++    rolling: Dict[str, Any],
++    graph: Mapping[str, Any],
++) -> List[str]:
++    """Replace model-authored active_pressures with engine-derived compatibility projection."""
++    derived = derive_active_pressures_compatibility(graph)
++    adjustments: List[str] = []
++    if rolling.get("active_pressures") != derived:
++        rolling["active_pressures"] = derived
++        adjustments.append("active_pressures_derived_from_engine")
++    return adjustments
++
++
++def derive_engine_pressure_phrase(graph: Mapping[str, Any]) -> str:
++    """Presentation phrase from foreground engine node — model may not select a different pressure."""
++    node = get_foreground_node(graph)
++    if not node:
++        active = _active_nodes(graph)
++        if not active:
++            return ""
++        node = max(active, key=lambda n: int(n.get("magnitude") or 0))
++    label = str(node.get("label") or node.get("kind") or "").strip().replace("_", " ")
++    if not label:
++        return ""
++    trend = int(node.get("trend") or 0)
++    if trend > 0:
++        return f"{label} intensifying"[:64]
++    if trend < 0:
++        return f"{label} easing"[:64]
++    return label[:64]
++
++
++def apply_gather_to_node(node: Dict[str, Any]) -> None:
++    """Gather reduces targeted resource pressure magnitude."""
++    node["magnitude"] = _clamp_magnitude(int(node.get("magnitude") or 0) + GATHER_RESOURCE_DELTA)
++
++
++def apply_fortify_to_node(node: Dict[str, Any]) -> None:
++    """Fortify reduces or stabilises environmental threat pressure."""
++    node["magnitude"] = _clamp_magnitude(int(node.get("magnitude") or 0) + FORTIFY_ENVIRONMENTAL_DELTA)
++    node["trend"] = min(0, int(node.get("trend") or 0))
++
++
+ def _new_node(
+     node_id: str,
+     *,
+@@ -411,7 +514,8 @@ def build_pressure_directive(graph: Mapping[str, Any]) -> str:
+         PRESSURE_DIRECTIVE_MARKER,
+         "INTERNAL — foreground pressure (engine guidance; do not expose graph labels):",
+         f"- Surface '{label}' through sensory detail this turn ({trend_word} pressure).",
+-        "- Maintain at least one active_pressures entry aligned with this foreground.",
++        "- Engine owns pressure selection and urgency; prose may phrase the foreground only.",
++        "- Do not add, remove, reassign, or resolve authoritative pressure nodes.",
+         "- Do not invent a wholly new crisis unrelated to established state.",
+     ]
+     recent = (graph.get("threshold_crossings") or [])[-1:]
+diff --git a/backend/replayability.py b/backend/replayability.py
+index 9b4c6c8..da0dd4c 100644
+--- a/backend/replayability.py
++++ b/backend/replayability.py
+@@ -717,6 +717,24 @@ def strip_replayability_from_rolling(merged_rolling: Dict[str, Any]) -> List[str
+     return stripped
+ 
+ 
++def enforce_pressure_authority(
++    merged_rolling: Dict[str, Any],
++    authoritative_replayability: Optional[Mapping[str, Any]],
++) -> List[str]:
++    """
++    Replayability-enabled sessions: session.replayability_state.pressure_graph is canonical.
++
++    rolling_state.active_pressures is a derived compatibility projection only.
++    Legacy sessions without replayability_state keep prior active_pressures behaviour.
++    """
++    if not isinstance(authoritative_replayability, dict):
++        return []
++    auth_pg = authoritative_replayability.get("pressure_graph")
++    if not isinstance(auth_pg, dict):
++        return []
++    return pressure_graph.sync_active_pressures_projection(merged_rolling, auth_pg)
++
++
+ def enforce_authoritative(
+     merged_rolling: Dict[str, Any],
+     authoritative_replayability: Optional[Mapping[str, Any]],
+@@ -737,6 +755,7 @@ def enforce_authoritative(
+             )
+             del merged_rolling["pressure_graph"]
+             adjustments.append("rolling_pressure_graph_stripped")
++        adjustments.extend(enforce_pressure_authority(merged_rolling, authoritative_replayability))
+         adjustments.extend(agendas.strip_model_agenda_mutations(merged_rolling, authoritative_replayability))
+         if not is_closed_enum_identity((authoritative_replayability or {}).get("identity")):
+             adjustments.append("replayability_identity_invalid_ignored")
+diff --git a/backend/server.py b/backend/server.py
+index 52191f7b..9a86b5c 100644
+--- a/backend/server.py
++++ b/backend/server.py
+@@ -2381,7 +2381,10 @@ def _full_validate(
+     if not ok:
+         return False, reason, "format"
+     if early_game_stage == 1:
+-        pacing_reason = pacing.validate_opening_structure(parsed)
++        pacing_reason = pacing.validate_opening_structure(
++            parsed,
++            replayability_state=session.get("replayability_state"),
++        )
+         if pacing_reason:
+             return False, pacing_reason, "pacing"
+     contradictions = gateway.detect_prose_contradictions(
+@@ -3131,7 +3134,15 @@ async def _create_new_story(req: NewStoryRequest):
+         relationships.update_relationship_calculus(parsed, None, merged_rolling, None, 1)
+     )
+     # HUD — drop objective guidance; set Danger/Momentum chips + Pressure line.
+-    guard_adjustments.extend(hud.shape_hud(parsed.state, merged_rolling))
++    guard_adjustments.extend(
++        hud.shape_hud(
++            parsed.state,
++            merged_rolling,
++            engine_pressure_graph=(replayability_state or {}).get("pressure_graph")
++            if replayability.replayability_active({"replayability_state": replayability_state})
++            else None,
++        )
++    )
+     guard_adjustments.extend(
+         replayability.enforce_authoritative(merged_rolling, replayability_state)
+     )
+@@ -3306,7 +3317,15 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
+                 next_turn_number,
+             )
+             guard_adjustments.extend(lc_adjustments)
+-        guard_adjustments.extend(hud.shape_hud(parsed.state, merged_rolling))
++        guard_adjustments.extend(
++            hud.shape_hud(
++                parsed.state,
++                merged_rolling,
++                engine_pressure_graph=(working_replayability or {}).get("pressure_graph")
++                if replayability.replayability_active(session)
++                else None,
++            )
++        )
+         if replayability.replayability_active(session):
+             guard_adjustments.extend(
+                 replayability.enforce_authoritative(merged_rolling, working_replayability)
+diff --git a/recovery/PROVISIONAL_CHECKPOINT.md b/recovery/PROVISIONAL_CHECKPOINT.md
+index 82620b7..11ab88e 100644
+--- a/recovery/PROVISIONAL_CHECKPOINT.md
++++ b/recovery/PROVISIONAL_CHECKPOINT.md
+@@ -5,4 +5,6 @@
+ 
+ This checkpoint preserves the uncommitted Living Cast integration (local substitutes for PRD Ch 25/27, bounded receipts not canonical event sourcing) for archaeology and golden-path remediation work.
+ 
+-Do not treat this branch as deployed or Bible-complete.
+\ No newline at end of file
++Do not treat this branch as deployed or Bible-complete.
++
++**Pressure authority (2026-06-20):** `replayability_state.pressure_graph` is canonical for replayability-enabled sessions; `active_pressures` is derived presentation only. See `docs/pressure-authority.md`. Correction remains unmerged; relationship provenance still blocks merge.
+\ No newline at end of file
