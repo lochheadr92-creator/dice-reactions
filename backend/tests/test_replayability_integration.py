@@ -23,6 +23,7 @@ import sys
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import gateway  # noqa: E402
+import npc_world_moves as world_moves  # noqa: E402
 import opening_state  # noqa: E402
 import player_api  # noqa: E402
 import pressure_graph  # noqa: E402
@@ -111,16 +112,16 @@ def test_prepare_action_turn_ticks_pressure_and_returns_directives():
         genre="horror", role="survivor", tone="dark", difficulty="hard",
         scenario_id=None, custom_premise=None, custom_world_setup=None, run_seed=FIXED_SEED,
     )
-    updated, directives, diag, _ = replayability.prepare_action_turn(state, 2)
+    updated, directives, diag, _, _ = replayability.prepare_action_turn(state, 2)
     assert updated["pressure_graph"]["tick"] >= 1
     assert directives["opening"] == ""
     assert directives["pressure"]
 
 
 def test_prepare_action_turn_passthrough_without_state():
-    updated, directives, diag, _ = replayability.prepare_action_turn(None, 2)
+    updated, directives, diag, _, _ = replayability.prepare_action_turn(None, 2)
     assert updated == {}
-    assert directives == {"opening": "", "pressure": "", "echo": ""}
+    assert directives == {"opening": "", "world": "", "pressure": "", "echo": ""}
     assert diag == {}
 
 
@@ -203,7 +204,7 @@ def test_pressure_threshold_references_canonical_event_id():
     node["trend"] = 1
     node["magnitude"] = 68
     node["threshold"] = 70
-    updated, _, _, thresholds = replayability.prepare_action_turn(state, 2)
+    updated, _, _, thresholds, _ = replayability.prepare_action_turn(state, 2)
     assert thresholds
     assert thresholds[0]["event_id"]
     scheduled = updated["consequence_echoes"]["scheduled"]
@@ -231,6 +232,7 @@ def test_build_messages_order_pacing_opening_secret_pressure_echo():
         }
         rb = {
             "opening": opening_state.OPENING_DIRECTIVE_MARKER + "\nOPEN",
+            "world": world_moves.NPC_WORLD_MOVE_MARKER + "\nWORLD",
             "pressure": pressure_graph.PRESSURE_DIRECTIVE_MARKER + "\nPRESS",
             "echo": "[REPLAYABILITY_ECHO_V1]\nECHO",
         }
@@ -248,10 +250,11 @@ def test_build_messages_order_pacing_opening_secret_pressure_echo():
         pacing_idx = next(i for i, c in enumerate(system) if "[CHRONICLE_CONTINUITY]" in c)
         opening_idx = next(i for i, c in enumerate(system) if opening_state.OPENING_DIRECTIVE_MARKER in c)
         secret_idx = next(i for i, c in enumerate(system) if "[SECRET_REVEAL_DIRECTIVE_V1]" in c)
+        world_idx = next(i for i, c in enumerate(system) if world_moves.NPC_WORLD_MOVE_MARKER in c)
         pressure_idx = next(i for i, c in enumerate(system) if pressure_graph.PRESSURE_DIRECTIVE_MARKER in c)
         echo_idx = next(i for i, c in enumerate(system) if "[REPLAYABILITY_ECHO_V1]" in c)
         assert pacing_idx < opening_idx < secret_idx
-        assert secret_idx < pressure_idx < echo_idx
+        assert secret_idx < world_idx < pressure_idx < echo_idx
 
     _run_db(run())
 
