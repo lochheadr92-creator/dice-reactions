@@ -52,6 +52,7 @@ import hud  # noqa: E402  — player-facing HUD shaping (status chips + Pressure
 import pacing  # noqa: E402  — Early-Game Pacing Governor v1 (deterministic)
 import secrets  # noqa: E402  — Secret Reveal Trigger v1 (deterministic)
 import replayability  # noqa: E402  — Replayability Engine v1 (deterministic)
+import stress  # noqa: E402  — Ch 14 Stress substrate v1 (deterministic)
 from security import fetch_owned_session, require_admin, require_device_id  # noqa: E402
 from rate_limit import (  # noqa: E402
     _rollback_bucket_reservations,
@@ -3265,6 +3266,15 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
             secrets.enforce_authoritative_registry(
                 merged_rolling,
                 working_rolling.get("secret_registry"),
+            )
+        )
+
+        # Ch 14 P1 — actor_stress is engine-owned; restore it after the merge so
+        # the LLM can never clobber accumulated stress (mirrors secret_registry).
+        guard_adjustments.extend(
+            stress.enforce_authoritative_stress(
+                merged_rolling,
+                working_rolling.get("actor_stress"),
             )
         )
 
