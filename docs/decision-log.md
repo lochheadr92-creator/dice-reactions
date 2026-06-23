@@ -405,3 +405,23 @@ Promote to ADR when implementation and tests exist.
 | **Files affected** | `backend/stress.py`, `backend/utility_ai.py`, `backend/tests/test_stress_behaviour.py`, `docs/adr-022-stress-behaviour-bands.md`, canon-delta / feature-status / failure-mode / current-state docs |
 | **Verification** | Both touched files compile; focused non-live bundle 139 passed + 1 pre-existing unrelated failure (`test_prompt_fingerprint` server.py commit-range vs `9da1ae2`); `test_stress_behaviour.py` 66 passed; determinism/hash-boundary green. Turn-path tests needing fastapi+MongoDB not run in this sandbox. |
 | **Authority note** | Proposal only. Runtime code + passing tests on `emergent` remain controlling; this unmerged branch does not override them. |
+
+
+
+---
+
+## ADR-023: Pressure authority — `pressure_graph` canonical, `active_pressures` derived
+
+| Field | Detail |
+|-------|--------|
+| **Date** | Proposed 2026-06-24 |
+| **Status** | Proposed — decision recorded; implementation deferred (documentation-only ADR). On `emergent` via a dedicated docs branch; not part of the Ch 14 stress PR #3. |
+| **Context** | Pressure has two competing sources: engine-owned causal `replayability_state.pressure_graph` (sole source for stress / Utility AI / snapshot identity) and LLM-authored prose `rolling_state.active_pressures` (pacing gate, persisted, not causal, not player-facing). The latter is a narrative-derived pressure authority — violates "State is truth, narrative is output". |
+| **Decision** | `pressure_graph` is the single canonical pressure authority. `active_pressures` becomes a derived, engine-owned, read-only projection of the `pressure_graph` foreground; model-emitted values are stripped/overwritten in consolidation. The `active_pressures` key is preserved for compatibility and snapshot `rolling_keys` stability. No pressure authority may come from narrative/prose/LLM output. |
+| **Amends** | ADR-019 (Replayability / `pressure_graph`), ADR-016 (Early-Game Pacing / `active_pressures` validation). |
+| **Determinism** | `active_pressures` values are not in `source_state_hash`; key retained so `rolling_keys` and snapshot identity are unchanged. Projection must be pure/deterministic over `pressure_graph`. Causal paths already read only `pressure_graph`. |
+| **Migration** | (1) ADR; (2) engine `project_active_pressures` + strip/overwrite in consolidation; (3) repoint pacing Stage-1 to engine pressure; (4) drop LLM `active_pressures` prompt obligation. Steps 2-3 core; Step 4 prompt-only follow-up. |
+| **Files (impl task)** | `replayability.py`, `pressure_graph.py`, `pacing.py`, `server.py`, `memory.py`, `opening_state.py`; tests `test_early_game_pacing.py` (+ regression). No change to `foundation_snapshot.py`, `stress.py`, `utility_ai.py`, `hud.py`, frontend. |
+| **T2** | Live turn-path verification sequencing is owner-directed; current decision is to run the T2 static turn-path trace before implementing ADR-023. Status stays `TURN_INTEGRATION_UNVERIFIED`; this ADR does not promote it. |
+| **Non-goals** | No P3; no relationship provenance remediation; no full event sourcing; no unrelated doc reconciliation; no code/test changes (documentation only). |
+| **Full ADR** | `docs/adr-023-pressure-authority.md` |
