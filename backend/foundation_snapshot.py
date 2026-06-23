@@ -49,6 +49,12 @@ class FoundationTurnSnapshot:
             "pressure_graph": replay.get("pressure_graph") or {},
             "rolling_keys": sorted(rolling.keys()),
         }
+        stress_commit = _actor_stress_commitment(rolling)
+        if stress_commit is not None:
+            # Commit authoritative stress values into snapshot identity so the
+            # hash proves WHICH stress produced the output (provenance, not just
+            # determinism): catches corrupted persistence / changed derivation.
+            hash_material["actor_stress"] = stress_commit
         source_hash = stable_hash("foundation_snapshot", hash_material)
         return FoundationTurnSnapshot(
             schema_version=FOUNDATION_SNAPSHOT_SCHEMA_VERSION,
@@ -141,6 +147,42 @@ def _build_actor_registry(rolling: Mapping[str, Any]) -> list:
     return sorted(registry.values(), key=lambda row: row["actor_id"])
 
 
+def _actor_stress_commitment(rolling: Mapping[str, Any]) -> Optional[Dict[str, Dict[str, Any]]]:
+    """Canonical authoritative stress values for snapshot hash commitment.
+
+    Returns None when there are no authoritative stress values (key absent, empty
+    dict, or only None-valued entries), so the digest contributes nothing in those
+    cases. NOTE: legacy hash identity holds only when ``actor_stress`` is absent
+    ENTIRELY — an empty/inert ``actor_stress`` key still changes ``rolling_keys``
+    (pre-existing behaviour), which is independent of this digest.
+    """
+    raw = rolling.get("actor_stress")
+    if not isinstance(raw, dict) or not raw:
+        return None
+    commit: Dict[str, Dict[str, Any]] = {}
+    for sid, row in raw.items():
+        if isinstance(row, dict) and row.get("stress_level") is not None:
+            commit[str(sid)] = {
+                "stress_level": float(row.get("stress_level")),
+                "capacity": float(row["capacity"]) if row.get("capacity") is not None else None,
+            }
+    return commit or None
+
+
+def build_actor_registry(rolling: Mapping[str, Any]) -> list:
+    """Public alias for the authoritative actor registry build.
+
+    Used by the stress subsystem (stress.update_actor_stress) so it keys
+    per-actor stress by the exact same actor_id this snapshot uses.
+    """
+    return _build_actor_registry(rolling)
+
+
+def highest_pressure_intensity(pressure_graph: Mapping[str, Any]) -> Optional[float]:
+    """Public alias for the canonical highest active pressure intensity (0-1)."""
+    return _highest_pressure_intensity(pressure_graph)
+
+
 def _actor_id_from_name(name: str) -> str:
     from engine_determinism import stable_hash
 
@@ -181,7 +223,7 @@ def _utility_input_refs(
     replay: Mapping[str, Any],
     registry: Sequence[Mapping[str, Any]],
 ) -> list:
-    """Bounded authoritative utility inputs per actor — no narrative prose."""
+    """Bounded authoritative utility inputs per actor - no narrative prose."""
     refs: list = []
     agendas = {
         str(row.get("npc_id") or ""): row
@@ -200,6 +242,12 @@ def _utility_input_refs(
         rel_by_actor[actor_id] = vec
     highest_pressure = _highest_pressure_intensity(replay.get("pressure_graph") or {})
     resource_scarcity = _resource_scarcity(replay.get("pressure_graph") or {})
+    stress_by_actor: Dict[str, Any] = {}
+    raw_stress = rolling.get("actor_stress")
+    if isinstance(raw_stress, dict):
+        for sid, srow in raw_stress.items():
+            if isinstance(srow, dict) and srow.get("stress_level") is not None:
+                stress_by_actor[str(sid)] = float(srow.get("stress_level"))
     memory_by_name = {
         str(row.get("name") or "").strip().lower(): _memory_signatures(row)
         for row in rolling.get("npc_memory") or []
@@ -224,6 +272,7 @@ def _utility_input_refs(
                 "highest_pressure_intensity": highest_pressure,
                 "resource_scarcity": resource_scarcity,
                 "relationship_importance": importance,
+                "stress_level": stress_by_actor.get(actor_id),
                 "memory_signatures": memory_by_name.get(name_key, ()),
             }
         )
