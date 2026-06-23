@@ -662,3 +662,62 @@ agent_communication:
       developer diagnostics) retained and functional. Admin controls correctly removed. Text-size
       persistence verified. Prose fontSize wiring confirmed via code inspection (runtime blocked
       by story availability, not a defect). No security regressions detected.
+
+  - agent: "main"
+    message: |
+      CATCH-UP ENTRY (2026-06-21). This log was stale: its previous last entry is 2026-06-19
+      and predates the foundation systems v0.1 / Utility AI / memory-retrieval code drop dated
+      2026-06-20 (git: commit 8899930 "Save current progress" on
+      reimplementation/foundation-systems-v01, merged into emergent as b4e5fcc; both pushed to
+      origin). The entries below were reconstructed by reading the code, not from prior log
+      history.
+
+      VERIFIED (ran it, sandbox): pytest on the foundation scoring/determinism/retrieval unit
+      suite = 24 passed in 0.58s. Files:
+        tests/test_utility_ai.py, tests/test_utility_dimensions.py,
+        tests/test_engine_determinism.py, tests/test_foundation_integration.py,
+        tests/test_memory_retrieval.py.
+      So the canonical scoring path (compute_dimension_scores -> compute_utility_score ->
+      select_action in utility_ai.py/utility_dimensions.py, plus
+      memory_retrieval.evaluate_memory_retrieval) is green at the unit level.
+
+      NOT VERIFIED (environment caveat): the remaining ~17 backend suites (those importing
+      server.py / pymongo / motor) could not be COLLECTED in this sandbox due to a
+      pyOpenSSL/OpenSSL version mismatch (AttributeError: module 'lib' has no attribute
+      'X509_V_FLAG_NOTIFY_POLICY') — an environment fault, not a code defect. Full-suite green
+      is therefore UNPROVEN here and must be re-run in a clean/pinned env before any green claim.
+
+      ARCHITECTURE STATUS — Foundation systems v0.1 (Actor -> Gravity -> Utility -> Retrieval)
+      is wired into the live turn but runs in SHADOW MODE and is inert. Live path:
+      server.py:3223 -> replayability.prepare_action_turn ->
+      foundation_integration.evaluate_foundation_turn (replayability.py:447) ->
+      utility_ai.candidates_from_agendas + select_action -> compute_utility_score /
+      compute_dimension_scores. Evidence it does not yet drive behavior:
+        (a) the whole eval is wrapped in a swallow-all try/except (replayability.py:457 ->
+            diagnostics["foundation_eval_error"]); a scoring failure never affects the turn.
+        (b) output staged to state["foundation_prepared_v1"]; the only reader is the next turn's
+            own prior_foundation_state (replayability.py:452).
+        (c) utility.selected is computed but consumed by zero modules.
+        (d) retrieval runs shadow_mode=True (foundation_integration.py:74).
+
+      DOCS: CLAUDE.md corrected (2026-06-21) — removed the stale score_candidate / "P0 fuzz" /
+      "float-equivalence proof" blocker language (no such function/test exists in the repo) and
+      replaced it with the real scoring path + accurate shadow-mode status.
+
+      NEXT MILESTONE (Ch 27 Utility AI -> load-bearing): define the real consumer of
+      utility.selected, justify or remove the swallow-all try/except, and flip shadow_mode.
+      This is a scoring-path change; numeric-equivalence proof (tolerance + deltas) required
+      before the flip.
+  - agent: "main"
+    message: |
+      P1 CH 14 TURN-INTEGRATION VERIFICATION COMPLETE (2026-06-22).
+      Compile gate: stress.py, foundation_snapshot.py, replayability.py, and server.py all
+      compile on Python 3.12. Focused stress/foundation/utility/determinism suite: 69 passed.
+      Turn-path integration: 2 passed (stress reaches the foundation snapshot and model
+      consolidation cannot clobber engine-owned actor_stress). Full backend collection:
+      628 passed; the remaining 34 failures/errors were live HTTP tests with no service at
+      localhost:8000, not stress regressions. Stress-free snapshot hash matches pre-P1 commit
+      b4e5fcc exactly: 7d2825b108b1da752b9fcfbdd10b9916295179d85eb3e9a0b047dfa7c4535134.
+      Ledger promoted to TURN_INTEGRATION_VERIFIED / UTILITY_STRESS_INPUT_COMPLETE.
+      OPEN BEFORE P2: confirm whether the interpretation set remains agenda-bearing alive
+      actors or widens to scene-present actors without agendas.

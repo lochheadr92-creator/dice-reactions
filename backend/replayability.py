@@ -26,6 +26,7 @@ import npc_world_moves as world_moves
 import opening_state
 import pressure_graph
 import relationships
+import stress
 from run_identity import derive_run_identity, is_closed_enum_identity
 
 REPLAYABILITY_VERSION = 1
@@ -442,6 +443,23 @@ def prepare_action_turn(
         "pressure": pressure_body if pk == "pressure" else "",
         "echo": echo_body if pk == "echo" and did_fire else "",
     }
+
+    # Ch 14 P1 — authoritative per-actor stress update. Runs before the
+    # foundation snapshot is built so stress_level flows into utility inputs.
+    # Pure/deterministic; intentionally NOT inside the foundation swallow-all
+    # try/except — a stress failure is a real determinism bug we must surface.
+    agendas_by_actor = {
+        str(row.get("npc_id") or ""): row
+        for row in (agendas_state.get("agendas") or agendas_state.get("active") or [])
+        if isinstance(row, dict) and row.get("npc_id")
+    }
+    stress.update_actor_stress(
+        working_rolling,
+        pg,
+        run_seed=run_seed,
+        turn_sequence=turn_number,
+        agendas_by_actor=agendas_by_actor,
+    )
 
     try:
         foundation_bundle, foundation_diag = foundation_integration.evaluate_foundation_turn(
