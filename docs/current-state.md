@@ -1,10 +1,12 @@
 # Current State Snapshot
 
-**Generated:** 2026-06-20 (reconciled against `emergent` runtime)
+**Generated:** 2026-06-24 (reconciled against `emergent` runtime @ `5c042fb`)
 **Repository:** `dice-reactions` (FastAPI backend + Expo frontend)
 **Git branch:** `emergent` (canonical runtime branch for this documentation pass)
 
 This document is the canonical operational snapshot of the repository **as it exists now** on the `emergent` branch. Claims are tagged by evidence source.
+
+**Operational source authority:** runtime code and passing tests on `emergent` outrank this snapshot, followed by `system-doctrine.md`, `failure-modes.md`, `feature-status.md`, `decision-log.md` and accepted ADRs, verification evidence, then agent summaries and chat handoffs. Feature branches remain proposals until merged. Agent summaries and old PR descriptions cannot promote a feature or override runtime/test evidence.
 
 **Evidence tags used throughout:**
 
@@ -19,15 +21,15 @@ This document is the canonical operational snapshot of the repository **as it ex
 
 ---
 
-## Bible implementation reality (2026-06-20 audit)
+## Bible implementation reality (2026-06-24 reconciliation)
 
 | Item | `emergent` HEAD | `recovery/living-cast-working-tree` |
 |------|-----------------|-------------------------------------|
-| Git ref | `d8b9caf4d00812850e9edeacf3b73b144a848429` | `4dadb3feb3737b28a4e5fbb1ef71aa0d56b365a5` |
+| Git ref | `5c042fbd090b0e2519b3096a9a9bd90233231331` | `4dadb3feb3737b28a4e5fbb1ef71aa0d56b365a5` |
 | Merge status | Canonical runtime branch | **Unmerged** — not deployed |
 | CI coverage | Deterministic CI on `emergent` only | **Not covered by emergent CI** |
 | Living Cast | **Absent** — no `npc_agendas.py`, `npc_world_moves.py`, `arc_diversity.py` | **Provisional integrated local substitute** |
-| Actor Resolution / Utility AI | **Not present** (PRD Ch 25 / Ch 27) | **Local substitutes** in `npc_world_moves.py` only |
+| Actor Resolution / Utility AI | Foundation Utility AI exists in **shadow mode**; P1 stress input is complete, but selection does not drive live NPC actions. Full Actor Resolution remains incomplete. | **Local substitutes** in `npc_world_moves.py` only |
 | World execution mode | `TURN_COUPLED_AUTONOMY_ONLY` | Same (turn-coupled; no offline sim) |
 | Event sourcing | Turn log only on `emergent` HEAD | **LOCAL SUBSTITUTE** — bounded transition receipts provide idempotency and causal pointers but do not provide canonical reconstruction or durable complete event history; **DEFERRED** — full contract unavailable beyond PRD summary |
 | Pressure authority | **Unresolved** — duplicate sources (`replayability_state.pressure_graph` vs `rolling_state.active_pressures`) | Same blocker until remediation lands |
@@ -99,6 +101,8 @@ Do **not** report 39.8%. The chapter matrix remains authoritative.
 | Story session CRUD | Implemented | Code (`server.py` routes) |
 | Early-Game Pacing Governor v1 | Implemented (deterministic structural Stage 1) | Code (`pacing.py`) + Tests (`test_early_game_pacing.py` ✅) |
 | Replayability Engine v1 | Implemented (deterministic — session `replayability_state`) | Code (`replayability.py`, `run_identity.py`, `opening_state.py`, `pressure_graph.py`, `consequence_echoes.py`) + Tests (`test_run_identity.py`, `test_opening_state.py`, `test_pressure_graph.py`, `test_consequence_echoes.py`, `test_replayability_integration.py` ✅) |
+| P1 actor stress substrate | **Canonical — `TURN_INTEGRATION_VERIFIED` / `UTILITY_STRESS_INPUT_COMPLETE`** | Code (`stress.py`, `foundation_snapshot.py`, `replayability.py`, `server.py`) + Tests (`test_stress.py`, `test_stress_integration.py`) |
+| Foundation Utility AI | Implemented in **shadow mode only**; not authorised to drive live NPC actions | Code (`utility_ai.py`, `utility_dimensions.py`, `foundation_integration.py`) + Tests (foundation acceptance / utility suites) |
 | Turn generation pipeline | Implemented | Code |
 | Anti-Hallucination Gateway | Implemented | Code (`gateway.py`) + Tests (`test_anti_hallucination_gateway.py`, `test_gateway_e2e.py` ✅) |
 | LLM chokepoint (`invoke_llm`) | Implemented | Code — all `_generate_turn` / retry calls route through `gateway.invoke_llm` |
@@ -130,6 +134,14 @@ Do **not** report 39.8%. The chapter matrix remains authoritative.
 
 ---
 
+### P1 stress canonical status
+
+P1 stress is canonical on `emergent` as of merge commit `5c042fb`, with runtime status **`TURN_INTEGRATION_VERIFIED`** and Utility input status **`UTILITY_STRESS_INPUT_COMPLETE`**. Actor stress is deterministic, persisted in `rolling_state["actor_stress"]`, and engine-owned across model consolidation. When authoritative stress values are present, stress and capacity are committed into foundation snapshot identity.
+
+The accepted P1 update scope is **living actors with active agendas only**. Widening to all scene-present actors is deferred to a separate future design decision. Utility AI remains shadow-mode: its selected action is staged for diagnostics/state preparation and is not authorised to drive live NPC actions.
+
+---
+
 ## Partially implemented systems
 
 | System | What exists | What is missing / weak | Evidence |
@@ -153,7 +165,7 @@ These appear in `memory/PRD.md` or design vocabulary but **have no implementing 
 
 | System | Status | Evidence |
 |--------|--------|----------|
-| Utility AI | Planned (PRD Ch 27) — not present on `emergent` HEAD | **Code search:** no module on `emergent`; recovery branch has **local substitute** only in `npc_world_moves.py` (unmerged) |
+| Utility AI live activation | Foundation scoring and selection exist, with authoritative stress input complete, but remain **shadow-mode** and do not drive live NPC actions | Code: `foundation_integration.py` calls retrieval with `shadow_mode=True`; prepared selection is staged under `foundation_prepared_v1` |
 | Actor resolution / actor caps | Planned (PRD Ch 25) — not present on `emergent` HEAD | **Code search:** no dedicated module on `emergent`; recovery branch has **local substitute** tier policy only (unmerged) |
 | Gravity / retention governance (beyond context budget) | Planned — partial ad-hoc only | Only `enforce_context_budget` and `consolidate_rolling_state` exist |
 | Formal event sourcing | **DEFERRED** — full contract unavailable beyond PRD summary; turn log only on `emergent` HEAD | Turns `insert_one`; session `rolling_state` overwritten; no rebuild. Recovery branch: **LOCAL SUBSTITUTE** — bounded receipts provide idempotency and causal pointers but not canonical reconstruction or durable complete event history |
