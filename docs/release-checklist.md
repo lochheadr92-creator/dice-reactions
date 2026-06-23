@@ -103,6 +103,17 @@ Workflow: `.github/workflows/deterministic-ci.yml`
 - [ ] `feature-status.md` rows updated
 - [ ] `change-history.md` entry added
 - [ ] ADR in `decision-log.md` if architecture changed
+- [ ] Claims were reconciled against runtime code and passing tests on canonical `emergent`; agent summaries and old PR descriptions were not treated as authority
+
+### P1 stress publication baseline
+
+Current canonical baseline on `emergent` is **`TURN_INTEGRATION_VERIFIED` / `UTILITY_STRESS_INPUT_COMPLETE`**. Actor stress is deterministic, persisted, engine-owned, and committed into foundation snapshot identity when present.
+
+- [ ] Stress updates remain scoped to living actors with active agendas
+- [ ] Any proposal to include all scene-present actors is handled as a separate design decision
+- [ ] If stress runtime code changed, rerun compile, focused P1/foundation/utility/determinism tests, turn-path integration, and snapshot hash comparison
+- [ ] Utility AI remains shadow-mode and does not drive live NPC actions unless a separate activation decision and proof have landed
+- [ ] P1 is described as canonical only after its runtime commit is merged into `emergent`
 
 ### Migration / index review
 

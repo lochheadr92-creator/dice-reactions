@@ -201,7 +201,7 @@ These topics appear in `memory/PRD.md` or design briefs but **lack sufficient co
 |-------|---------|
 | Actor caps / actor resolution | No resolver module; NPCs are LLM-authored lists (PRD Ch 25 ❌) |
 | NPC↔NPC relationship edges | Only NPC→player vectors implemented |
-| Deterministic utility AI | Not present (PRD Ch 27) |
+| Deterministic utility AI | Foundation implementation exists in shadow mode; live/load-bearing activation remains a separate decision |
 | Gravity-based memory retention | Only context budget + rolling merge |
 | Formal event sourcing | Turn log only (see ADR-003) |
 
@@ -369,3 +369,20 @@ Promote to ADR when implementation and tests exist.
 | **Files affected** | `npc_agendas.py`, `npc_world_moves.py`, `arc_diversity.py`, `replayability.py`, `consequence_echoes.py`, `server.py`, Living Cast test modules, `docs/*` |
 | **Tests required** | Recovery branch: `test_npc_agendas.py`, `test_npc_world_moves.py`, `test_arc_diversity.py`, `test_living_cast_integration.py` ✅ locally — **not covered by emergent CI** |
 | **Evidence** | Recovery branch local pytest passes 2026-06-20; **not verified on `emergent` HEAD**; golden-path blockers remain (pressure authority, relationship provenance) |
+
+---
+
+## ADR-021: Chapter 14 P1 stress substrate
+
+| Field | Detail |
+|-------|--------|
+| **Date** | Accepted on `emergent` 2026-06-24 via PR #1 / merge commit `5c042fb` |
+| **Status** | Accepted — **`TURN_INTEGRATION_VERIFIED` / `UTILITY_STRESS_INPUT_COMPLETE`** |
+| **Context** | Foundation Utility AI required an authoritative accumulated `stress_level`; model-authored or stateless stress would violate state authority and Chapter 14 accumulation. |
+| **Decision** | Persist deterministic per-actor stress in `rolling_state["actor_stress"]`; derive seeded capacity; update only living actors carrying active agendas; reassert engine ownership after model consolidation; emit stress into foundation utility inputs. |
+| **Identity boundary** | When authoritative stress values are present, their stress and capacity values are committed into foundation snapshot identity. Stress-absent fixtures preserve the pre-P1 hash. |
+| **Scope** | P1 remains limited to living actors with active agendas. Widening updates to every scene-present actor is deferred to a separate future design decision. |
+| **Utility consequence** | The authoritative stress input is complete, but Utility AI remains shadow-mode and is not authorised to drive live NPC actions. Activation requires a separate decision and proof. |
+| **Files affected** | `backend/stress.py`, `backend/foundation_snapshot.py`, `backend/replayability.py`, `backend/server.py`, focused tests, ADR/runbook/canon-delta evidence |
+| **Verification** | Four touched backend files compiled; focused suite 69 passed; turn-path integration 2 passed; stress-free hash matched pre-P1; deterministic GitHub CI passed. |
+| **Authority note** | Runtime code and passing tests on `emergent` are controlling evidence. Agent summaries, old PR descriptions, and unmerged branches do not override them. |
