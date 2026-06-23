@@ -388,3 +388,33 @@ From `memory/PRD.md` (planning tracker — not runtime truth):
 - Backend regression `30 passed` — **Docs-claimed**, superseded locally by **47 passed** deterministic bundle on `emergent`
 
 Treat PRD verification dates as historical planning reports, not current CI truth.
+
+
+## Chapter 14 P2 stress behavioural bands (PROPOSED — unmerged, 2026-06-24)
+
+**Status: proposal on branch `codex/ch14-stress-behaviour` (base `02646ab`). Not
+on `emergent`, not merged, shadow-only. Per FM-19, treat as a proposal until
+merged — it does not change the canonical snapshot above.**
+
+P2 derives a behavioural band from the authoritative P1 `stress_level` and uses
+it to modify canonical Ch 27 Utility AI weights (goal-narrowing), applied exactly
+once in `utility_ai.select_action`. Four bands (CALM/ELEVATED/STRAINED/OVERLOADED
+at 25/50/75; lower-inclusive, OVERLOADED includes 100). The `stress_reduction`
+weight stays x1.0 (Ch 27.4.2 already scales by stress/100).
+
+Fail-closed: missing/invalid stress is never CALM — no band, identity modifiers,
+`stress_input_valid=False`, `replacement_authorised` forced False, explicit
+blocker code; candidate visible in shadow but never an authorised replacement.
+
+Determinism/hash: candidate identity, `candidate_set_hash`, noise seed, and
+tie-breaking unchanged; P2 diagnostics excluded from `state_hash`; CALM/invalid
+byte-identical to pre-P2. P1 accumulation/scope/off-screen and snapshot identity
+unchanged. Utility AI stays shadow-only. P3/P4 deferred.
+
+**Verification (truthful):** `stress.py`+`utility_ai.py` compile; focused
+non-live bundle 139 passed + 1 pre-existing unrelated failure
+(`test_prompt_fingerprint` server.py commit-range vs `9da1ae2`);
+`test_stress_behaviour.py` 66 passed. Turn-path tests needing fastapi+MongoDB not
+run in this sandbox. Evidence: `decision-log.md` (ADR-022),
+`adr-022-stress-behaviour-bands.md`, `foundation-canon-deltas.md`,
+`failure-modes.md` (FM-27).

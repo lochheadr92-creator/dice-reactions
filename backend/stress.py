@@ -20,6 +20,8 @@ capacity is a seeded derivation via engine_determinism (no new RNG source).
 from __future__ import annotations
 
 import copy
+import math
+from enum import Enum
 from typing import Any, Dict, List, Mapping, Optional
 
 from engine_determinism import (
@@ -57,6 +59,75 @@ STRESS_GENERATION_SCALE: float = 100.0
 STRESS_THREAT_WEIGHT_BASE: float = 1.0
 STRESS_THREAT_WEIGHT_FEAR_BONUS: float = 0.25
 
+
+# --- P2 designed extensions: behavioural bands + goal narrowing ------------
+# Chapter 14 is qualitative and supplies no numerical cut-points or modifiers.
+# Every value below is therefore a DESIGNED_EXTENSION recorded in ADR-022 and
+# docs/foundation-canon-deltas.md. Bands are derived on read; they are never
+# persisted or accepted from model output.
+class StressBand(str, Enum):
+    CALM = "CALM"
+    ELEVATED = "ELEVATED"
+    STRAINED = "STRAINED"
+    OVERLOADED = "OVERLOADED"
+
+
+# Evaluated high-to-low. Lower bounds are inclusive; upper bounds are exclusive,
+# except OVERLOADED includes the canonical maximum of 100.
+STRESS_BAND_THRESHOLDS = (
+    (75.0, StressBand.OVERLOADED),
+    (50.0, StressBand.STRAINED),
+    (25.0, StressBand.ELEVATED),
+    (0.0, StressBand.CALM),
+)
+
+# Multipliers apply exactly once on top of the canonical Ch 27 dynamic weights.
+# stress_reduction intentionally remains 1.0 because Ch 27 already scales it by
+# stress/100; changing it here would double-count authoritative stress.
+STRESS_WEIGHT_MODIFIERS: Dict[StressBand, Dict[str, float]] = {
+    StressBand.CALM: {
+        "survival": 1.0,
+        "goal_progression": 1.0,
+        "pressure_relief": 1.0,
+        "stress_reduction": 1.0,
+        "relationship_impact": 1.0,
+        "resource_gain_loss": 1.0,
+        "memory_avoidance": 1.0,
+    },
+    StressBand.ELEVATED: {
+        "survival": 1.10,
+        "goal_progression": 0.85,
+        "pressure_relief": 1.10,
+        "stress_reduction": 1.0,
+        "relationship_impact": 0.95,
+        "resource_gain_loss": 1.0,
+        "memory_avoidance": 1.0,
+    },
+    StressBand.STRAINED: {
+        "survival": 1.25,
+        "goal_progression": 0.60,
+        "pressure_relief": 1.30,
+        "stress_reduction": 1.0,
+        "relationship_impact": 0.80,
+        "resource_gain_loss": 0.85,
+        "memory_avoidance": 1.10,
+    },
+    StressBand.OVERLOADED: {
+        "survival": 1.60,
+        "goal_progression": 0.30,
+        "pressure_relief": 1.50,
+        "stress_reduction": 1.0,
+        "relationship_impact": 0.50,
+        "resource_gain_loss": 0.60,
+        "memory_avoidance": 1.25,
+    },
+}
+
+MISSING_STRESS_LEVEL = "MISSING_STRESS_LEVEL"
+INVALID_STRESS_LEVEL = "INVALID_STRESS_LEVEL"
+NONFINITE_STRESS_LEVEL = "NONFINITE_STRESS_LEVEL"
+OUT_OF_RANGE_STRESS_LEVEL = "OUT_OF_RANGE_STRESS_LEVEL"
+
 # Subsystem labels for seed material (kept stable — changing them re-seeds runs).
 _CAPACITY_SUBSYSTEM = "stress_capacity"
 _CAPACITY_TURN_SEQUENCE = 0  # fixed: capacity is a run-stable trait, not per-turn
@@ -66,6 +137,57 @@ def clamp_stress(value: float) -> float:
     """Clamp to the canonical 0–100 stress axis; reject non-finite first."""
     reject_non_finite(value)
     return max(STRESS_MIN, min(STRESS_MAX, value))
+
+
+def _invalid_behaviour(blocker_code: str) -> Dict[str, Any]:
+    """Fail-closed result: no band, identity (×1.0) modifiers, explicit blocker.
+
+    Identity modifiers are returned so a caller that blindly multiplies weights
+    leaves them unchanged — but ``valid`` is False and ``band`` is None, so an
+    invalid input can never be mistaken for CALM nor authorise a replacement.
+    """
+    return {
+        "valid": False,
+        "stress_level": None,
+        "band": None,
+        "modifiers": dict(STRESS_WEIGHT_MODIFIERS[StressBand.CALM]),
+        "blocker_code": blocker_code,
+    }
+
+
+def evaluate_stress_behaviour(stress_level: Any) -> Dict[str, Any]:
+    """Fail-closed P2 behavioural profile derived from authoritative stress.
+
+    Invalid inputs are deliberately NOT clamped into a valid band. They receive
+    no band, identity modifiers, and an explicit blocker so Utility AI cannot
+    mistake corrupt state for CALM or award an OVERLOADED bonus. Distinct blocker
+    codes separate missing / invalid-type / non-finite / out-of-range causes.
+    """
+    if stress_level is None:
+        return _invalid_behaviour(MISSING_STRESS_LEVEL)
+    # bool is an int subclass and numeric strings coerce via float(); both are
+    # rejected as invalid-type rather than silently classified, so only genuine
+    # numeric authoritative state can produce a band.
+    if isinstance(stress_level, bool) or not isinstance(stress_level, (int, float)):
+        return _invalid_behaviour(INVALID_STRESS_LEVEL)
+    try:
+        level = float(stress_level)
+    except (TypeError, ValueError, OverflowError):
+        return _invalid_behaviour(INVALID_STRESS_LEVEL)
+    if not math.isfinite(level):
+        return _invalid_behaviour(NONFINITE_STRESS_LEVEL)
+    if level < STRESS_MIN or level > STRESS_MAX:
+        return _invalid_behaviour(OUT_OF_RANGE_STRESS_LEVEL)
+    for threshold, band in STRESS_BAND_THRESHOLDS:
+        if level >= threshold:
+            return {
+                "valid": True,
+                "stress_level": level,
+                "band": band.value,
+                "modifiers": dict(STRESS_WEIGHT_MODIFIERS[band]),
+                "blocker_code": None,
+            }
+    raise AssertionError("canonical stress range was not classified")
 
 
 def capacity_for(run_seed: str, actor_id: str) -> float:
