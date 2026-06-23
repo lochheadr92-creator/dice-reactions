@@ -118,3 +118,70 @@ and consolidation-clobber tests are 2 passed. The full backend collection record
 `localhost:8000`. Baseline hash equivalence confirmed vs `b4e5fcc`.
 
 `UTILITY_CANON_CONTRACT_COMPLETE` applies only to fixtures with complete authoritative inputs (see `utility_oracle_complete_v1`).
+
+
+## Chapter 14 — Stress behavioural bands (P2, ADR-022) — designed extensions
+
+**Status: proposed, unmerged (draft PR on `codex/ch14-stress-behaviour`, base
+`02646ab`). Shadow-only; no production replacement authorised.**
+
+Canon Ch 14 is non-numerical; every cut-point and modifier below is a
+`DESIGNED_EXTENSION` (ADR-022), not a canon transcription. Bands are derived on
+read in `stress.evaluate_stress_behaviour`; they are never persisted or accepted
+from model output. This **supersedes the 6-band proposal** in the ADR-021
+"Proposed constants" table — P2 ratifies a 4-band model; the Critical/Collapse
+archetype end moves to P3.
+
+Thresholds (lower bound inclusive, upper exclusive; OVERLOADED includes 100):
+
+| Band | Range |
+|------|-------|
+| CALM | 0 <= stress < 25 |
+| ELEVATED | 25 <= stress < 50 |
+| STRAINED | 50 <= stress < 75 |
+| OVERLOADED | 75 <= stress <= 100 |
+
+Weight modifiers (applied exactly once on top of canonical Ch 27 dynamic weights,
+in `utility_ai.select_action` after `compute_dimension_weights`):
+
+| Dimension | CALM | ELEVATED | STRAINED | OVERLOADED |
+|-----------|------|----------|----------|------------|
+| survival | 1.00 | 1.10 | 1.25 | 1.60 |
+| goal_progression | 1.00 | 0.85 | 0.60 | 0.30 |
+| pressure_relief | 1.00 | 1.10 | 1.30 | 1.50 |
+| stress_reduction | 1.00 | 1.00 | 1.00 | 1.00 |
+| relationship_impact | 1.00 | 0.95 | 0.80 | 0.50 |
+| resource_gain_loss | 1.00 | 1.00 | 0.85 | 0.60 |
+| memory_avoidance | 1.00 | 1.00 | 1.10 | 1.25 |
+
+`stress_reduction` stays x1.0 in every band: Ch 27.4.2 already scales it by
+`stress/100`; a band multiplier would double-count. Higher bands narrow toward
+survival/relief and away from goals (goal-narrowing 14.24/14.27), but the band
+never selects an action; selection stays weighted-utility argmax + seeded noise.
+
+**Fail-closed.** Missing/invalid authoritative stress is never CALM: no band,
+identity (x1.0) modifiers, `stress_input_valid = False`, `replacement_authorised`
+forced False, candidate visible in shadow `score_table` but never an authorised
+replacement, no maximum/emergency bonus. Blocker codes: `MISSING_STRESS_LEVEL`
+(preserved from P1), `INVALID_STRESS_LEVEL` (wrong type incl. bool/numeric
+string), `NONFINITE_STRESS_LEVEL` (NaN / +/-inf), `OUT_OF_RANGE_STRESS_LEVEL`
+(< 0 or > 100).
+
+| Delta ID | Facet | Classification | Runtime status | Canon ref | Notes |
+|----------|-------|----------------|----------------|-----------|-------|
+| `D_STRESS_BANDS` | stress band | `DESIGNED_EXTENSION` | `COMPONENT_VERIFIED / TURN_INTEGRATION_UNVERIFIED` | Ch 14.9-14.15/14.24/14.27 | 4-band cut-points 25/50/75; supersedes ADR-021 6-band proposal |
+| `D_STRESS_WEIGHT_MODIFIERS` | utility weights | `DESIGNED_EXTENSION` | `COMPONENT_VERIFIED / TURN_INTEGRATION_UNVERIFIED` | Ch 27.4.2 | Applied once in `select_action`; `stress_reduction` fixed x1.0 |
+| `D_STRESS_BAND_FAILCLOSED` | input validity | `DESIGNED_EXTENSION` | `COMPONENT_VERIFIED / TURN_INTEGRATION_UNVERIFIED` | Ch 27.7 | MISSING/INVALID/NONFINITE/OUT_OF_RANGE_STRESS_LEVEL; forces `replacement_authorised=False` |
+
+**Hash safety.** Candidate identity, `candidate_set_hash`, noise seed material,
+the noise draw, and tie-breaking are unchanged (the candidate is not mutated). P2
+diagnostic fields are excluded from the prepared `state_hash`
+(`utility_ai._hashable_candidate`); CALM and every invalid input apply x1.0
+modifiers, so weights/`base_utility`/`state_hash` are byte-identical to pre-P2.
+P1 actor/off-screen policy and foundation snapshot identity rules are unchanged.
+
+**Verification (this pass, truthful):** both touched files compile; focused
+non-live bundle 139 passed + 1 pre-existing unrelated failure
+(`test_prompt_fingerprint` server.py commit-range vs `9da1ae2`); new
+`test_stress_behaviour.py` 66 passed; determinism/hash-boundary green. Turn-path
+tests needing fastapi+MongoDB not run in this sandbox. P3/P4 deferred.

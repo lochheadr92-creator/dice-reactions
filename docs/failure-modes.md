@@ -430,6 +430,23 @@ For each mode: detection, prevention, recovery, and **current protection status*
 
 ---
 
+## FM-27: Invalid authoritative stress mis-banded or awarded a bonus (P2)
+
+**Scope:** `codex/ch14-stress-behaviour` (P2) only — unmerged draft PR; shadow-only.
+
+| Field | Detail |
+|-------|--------|
+| **Trigger** | Authoritative `stress_level` is missing, wrong-type, NaN/inf, negative, or > 100 when the P2 band layer reads it. |
+| **Effect** | Without fail-closing: corrupt stress treated as CALM, or a high band fabricated, silently authorising a replacement or producing a maximum/emergency weighting. |
+| **Detection** | `stress.evaluate_stress_behaviour` validity + blocker code; `select_action` `stress_input_valid`/`stress_blocker_code` in shadow `score_table`; `test_stress_behaviour.py`. |
+| **Prevention** | Fail-closed pure layer: no band, identity (x1.0) modifiers, distinct blocker code (MISSING/INVALID/NONFINITE/OUT_OF_RANGE_STRESS_LEVEL); `replacement_authorised` forced False; band derived from the authoritative snapshot input, not the coerced candidate field. |
+| **Recovery** | Candidate remains visible in shadow diagnostics but cannot be an authorised replacement; selection unchanged (identity weights). |
+| **Files** | `stress.py`, `utility_ai.py` |
+| **Tests** | `test_stress_behaviour.py` (66 passed) |
+| **Status** | **Protected (proposed/unmerged)** — deterministic fail-closed unit + integration tests |
+
+---
+
 ## Removed from catalogue (N/A)
 
 Historical pre-foundation scoring equivalence remains **N/A** because that implementation never existed. Foundation Utility AI scoring now exists in shadow mode; determinism and non-finite-input protection are covered by its focused tests and must be revisited before any live/load-bearing activation.
