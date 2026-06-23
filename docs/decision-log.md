@@ -425,3 +425,22 @@ Promote to ADR when implementation and tests exist.
 | **T2** | Live turn-path verification sequencing is owner-directed; current decision is to run the T2 static turn-path trace before implementing ADR-023. Status stays `TURN_INTEGRATION_UNVERIFIED`; this ADR does not promote it. |
 | **Non-goals** | No P3; no relationship provenance remediation; no full event sourcing; no unrelated doc reconciliation; no code/test changes (documentation only). |
 | **Full ADR** | `docs/adr-023-pressure-authority.md` |
+
+
+
+---
+
+## ADR-024: Live NPC action selection bridge — Ch 27 utility as scoring core via shadow-equivalence gate (Option D)
+
+| Field | Detail |
+|-------|--------|
+| **Date** | Proposed 2026-06-24 |
+| **Status** | Proposed — decision recorded; implementation deferred (documentation-only ADR). On a dedicated docs branch off the ADR-023 branch. |
+| **Context** | T2 static trace: live NPC moves are decided + committed by `npc_world_moves` (local heuristic `score_move`, ADR-020 substitute); Ch 27 `utility_ai.select_action` runs after commit and is staged-but-unconsumed (`foundation_prepared_v1.utility_selection` has no readers). Two parallel engine-state scorers; canon Ch 27 is inert. Canon-fidelity + duplication problem (not a State-is-truth violation). |
+| **Decision** | `npc_world_moves` remains the live eligibility/target/effect/receipt/commit substrate (no replacement). Ch 27 `utility_ai` becomes the canonical NPC scoring core ONLY after shadow-equivalence evidence (Option D -> Option C). Until then `utility_ai.select_action` stays `SHADOW_ONLY` / `TURN_INTEGRATION_UNVERIFIED`. No `TURN_INTEGRATION_VERIFIED` claim until live scoring actually uses Ch 27 utility. |
+| **Migration** | Phase 0 ADR; Phase 1 same-candidate-set shadow comparison (zero behaviour change, internal diagnostics only); Phase 2 gated flip of `score_move` to canon utility after evidence + tests + acceptance. |
+| **Rejected** | (A) replace `npc_world_moves` (breaks live substrate); (B) permanent duplicate scoring (canon stays inert); direct flip without shadow evidence (unverified behaviour/determinism change). |
+| **Determinism** | Phase 1 is observation-only: committed move + `rolling_state` + snapshot identity byte-identical to baseline; diagnostics excluded from rolling_state/player/prompt. Phase 2 must fold seeded noise + tie-break into the deterministic sort. Canon scorer consumes `pressure_graph` (ADR-023) + P2 bands (ADR-022). |
+| **Amends** | ADR-020 (Living Cast / `npc_world_moves`); relates to ADR-022, ADR-023. |
+| **Non-goals** | No `npc_world_moves` replacement; no Phase-2 flip in this ADR; no `TURN_INTEGRATION_VERIFIED`; no P3 / relationship-provenance / event-sourcing; no current-state/ADR-020 reconciliation yet; no code/test changes. |
+| **Full ADR** | `docs/adr-024-npc-scoring-bridge.md` |
