@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+import stress
 from engine_determinism import (
     NUMERIC_CONTRACT_VERSION,
     build_seed_material,
@@ -44,6 +45,36 @@ WHIM_NOISE_HIGH = 0.5
 TIE_WINDOW = 0.01
 
 DIMENSION_ORDER = tuple(sorted(BASE_WEIGHTS.keys()))
+
+
+# --- P2 stress behavioural integration (Ch 14 P2 -- shadow-only) -----------
+# Diagnostic-only keys attached to each evaluated candidate for shadow tracing.
+# They are EXCLUDED from the prepared decision hash (see _hashable_candidate):
+# recording a band must not change canonical decision identity. A *valid* band's
+# weight change DOES flow into the hash via "weights"/"base_utility" -- that is
+# real scoring, not a diagnostic -- but CALM and any invalid/missing stress apply
+# x1.0 modifiers and so leave the hash byte-identical.
+_P2_SHADOW_KEYS = ("stress_band", "stress_input_valid", "stress_blocker_code")
+
+
+def apply_stress_band_modifiers(
+    weights: Mapping[str, float], modifiers: Mapping[str, float]
+) -> Dict[str, float]:
+    """Multiply canonical Ch 27 weights by P2 band modifiers exactly once.
+
+    Identity (all-1.0) modifiers return bit-identical weights, so CALM and every
+    fail-closed (invalid/missing) input leave the canonical weights unchanged.
+    The band never selects an action directly -- it only reshapes the weighting.
+    """
+    return {
+        name: float(weight) * float(modifiers.get(name, 1.0))
+        for name, weight in weights.items()
+    }
+
+
+def _hashable_candidate(row: Mapping[str, Any]) -> Dict[str, Any]:
+    """Evaluated-candidate projection excluding P2 diagnostic-only keys."""
+    return {key: value for key, value in row.items() if key not in _P2_SHADOW_KEYS}
 
 
 class UtilityAIError(ValueError):
@@ -179,7 +210,7 @@ def select_action(
         if not action_kind or not target_kind or not target_id:
             continue
         dimension_scores = dict(raw.get("dimension_scores") or {})
-        weights = compute_dimension_weights(
+        baseline_weights = compute_dimension_weights(
             pressure_intensity=float(raw.get("pressure_intensity", 0.0)),
             stress=float(raw.get("stress", 0.0)),
             goal_priority=float(raw.get("goal_priority", 5.0)),
@@ -188,6 +219,20 @@ def select_action(
             trauma_intensity=float(raw.get("trauma_intensity", 0.0)),
             starving=bool(raw.get("starving")),
         )
+        # Ch 14 P2 (shadow-only): derive the behavioural profile from the
+        # AUTHORITATIVE stress_level on the snapshot -- not the candidate "stress"
+        # field, which candidates_from_agendas flattens missing -> 0.0 and would
+        # misread as a valid CALM band. Modifiers apply EXACTLY ONCE here on top of
+        # the canonical Ch 27 weights; missing/invalid stress yields identity
+        # (x1.0) modifiers, so weights stay byte-identical.
+        authoritative_stress = _utility_inputs_for_actor(snapshot, actor_id).get("stress_level")
+        stress_behaviour = stress.evaluate_stress_behaviour(authoritative_stress)
+        stress_input_valid = bool(stress_behaviour["valid"])
+        weights = apply_stress_band_modifiers(baseline_weights, stress_behaviour["modifiers"])
+        # Fail closed: missing/invalid authoritative stress can NEVER authorise a
+        # replacement. The band never forces an action -- it only gates
+        # authorisation and reshapes weights; selection stays argmax-with-noise.
+        replacement_authorised = bool(raw.get("replacement_authorised")) and stress_input_valid
         base_utility = compute_utility_score(dimension_scores, weights)
         c_hash = candidate_set_hash(
             actor_id=actor_id,
@@ -216,10 +261,14 @@ def select_action(
                 "weights": weights,
                 "dimension_scores": dimension_scores,
                 "dimension_score_records": list(raw.get("dimension_score_records") or []),
-                "replacement_authorised": bool(raw.get("replacement_authorised")),
+                "replacement_authorised": replacement_authorised,
                 "personality_order": list(raw.get("personality_order") or []),
                 "candidate_set_hash": c_hash,
                 "seed_material": seed_material,
+                # P2 diagnostic-only (shadow) -- excluded from state_hash.
+                "stress_band": stress_behaviour["band"],
+                "stress_input_valid": stress_input_valid,
+                "stress_blocker_code": stress_behaviour["blocker_code"],
             }
         )
 
@@ -264,6 +313,9 @@ def select_action(
             "base_utility": winner["base_utility"],
             "noisy_utility": winner["noisy_utility"],
             "replacement_authorised": winner.get("replacement_authorised"),
+            "stress_band": winner.get("stress_band"),
+            "stress_input_valid": winner.get("stress_input_valid"),
+            "stress_blocker_code": winner.get("stress_blocker_code"),
         },
         "selected_actor_id": winner["actor_id"],
         "selected_action_kind": winner["action_kind"],
@@ -280,6 +332,9 @@ def select_action(
                 "base_utility": row["base_utility"],
                 "noisy_utility": row["noisy_utility"],
                 "replacement_authorised": row.get("replacement_authorised"),
+                "stress_band": row.get("stress_band"),
+                "stress_input_valid": row.get("stress_input_valid"),
+                "stress_blocker_code": row.get("stress_blocker_code"),
             }
             for row in sorted(
                 feasible,
@@ -292,7 +347,7 @@ def select_action(
                 ),
             )
         ],
-        "state_hash": stable_hash("utility_ai_prepared", winner),
+        "state_hash": stable_hash("utility_ai_prepared", _hashable_candidate(winner)),
     }
 
 

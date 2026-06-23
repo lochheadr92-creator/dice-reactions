@@ -386,3 +386,22 @@ Promote to ADR when implementation and tests exist.
 | **Files affected** | `backend/stress.py`, `backend/foundation_snapshot.py`, `backend/replayability.py`, `backend/server.py`, focused tests, ADR/runbook/canon-delta evidence |
 | **Verification** | Four touched backend files compiled; focused suite 69 passed; turn-path integration 2 passed; stress-free hash matched pre-P1; deterministic GitHub CI passed. |
 | **Authority note** | Runtime code and passing tests on `emergent` are controlling evidence. Agent summaries, old PR descriptions, and unmerged branches do not override them. |
+
+
+---
+
+## ADR-022: Chapter 14 P2 stress behavioural bands + Utility AI integration
+
+| Field | Detail |
+|-------|--------|
+| **Date** | Proposed 2026-06-24 (unmerged draft PR on `codex/ch14-stress-behaviour`, base `02646ab`) |
+| **Status** | Proposed — **shadow-only; not merged, not authorised for production** |
+| **Context** | P1 (ADR-021) made `stress_level` authoritative and snapshot-emitted. P2 consumes it: derive a behavioural band on read and modify canonical Ch 27 utility weights (goal-narrowing 14.24/14.27). Ch 14 is non-numerical, so all cut-points/modifiers are designed extensions. |
+| **Decision** | Add pure `stress.evaluate_stress_behaviour` (4 bands CALM/ELEVATED/STRAINED/OVERLOADED at 25/50/75; lower-inclusive, OVERLOADED includes 100). Apply per-band weight modifiers exactly once in `utility_ai.select_action` after `compute_dimension_weights`. `stress_reduction` stays x1.0 (Ch 27.4.2 already scales by stress/100). |
+| **Supersedes** | The ADR-021 6-band "Proposed constants" table (Stable/.../Collapse); P2 ratifies a 4-band model. The Critical/Collapse archetype end moves to P3. |
+| **Fail-closed** | Missing/invalid stress is never CALM: no band, identity modifiers, `stress_input_valid=False`, `replacement_authorised` forced False, blocker code recorded, candidate visible in shadow but never an authorised replacement, no max/emergency bonus. Codes: MISSING/INVALID/NONFINITE/OUT_OF_RANGE_STRESS_LEVEL. |
+| **Determinism** | Pure functions; candidate not mutated -> `candidate_set_hash`/noise/tie-break stable; P2 diagnostics excluded from `state_hash`; CALM/invalid apply x1.0 so weights/utility/hash byte-identical to pre-P2. |
+| **Scope** | P1 accumulation/capacity/decay/actor-scope/off-screen unchanged. Utility AI stays shadow-only. P3 breaking points and P4 collective stress deferred. |
+| **Files affected** | `backend/stress.py`, `backend/utility_ai.py`, `backend/tests/test_stress_behaviour.py`, `docs/adr-022-stress-behaviour-bands.md`, canon-delta / feature-status / failure-mode / current-state docs |
+| **Verification** | Both touched files compile; focused non-live bundle 139 passed + 1 pre-existing unrelated failure (`test_prompt_fingerprint` server.py commit-range vs `9da1ae2`); `test_stress_behaviour.py` 66 passed; determinism/hash-boundary green. Turn-path tests needing fastapi+MongoDB not run in this sandbox. |
+| **Authority note** | Proposal only. Runtime code + passing tests on `emergent` remain controlling; this unmerged branch does not override them. |

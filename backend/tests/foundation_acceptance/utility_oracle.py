@@ -218,3 +218,85 @@ def inputs_complete(fixture: Mapping[str, Any]) -> bool:
     if action in MOVE_RESOURCE_SVU and fixture.get("resource_scarcity") is None:
         return False
     return True
+
+
+# --- P2 stress behavioural bands (ADR-022) -- INDEPENDENT acceptance model ----
+# These thresholds/modifiers are an INDEPENDENT transcription of the ADR-022
+# designed-extension table. They are duplicated here on purpose: this oracle must
+# NOT import the production stress tables (backend/stress.py) or the equivalence
+# check would become tautological. Keep in sync with ADR-022 by hand.
+import math as _math
+
+BAND_THRESHOLDS = (
+    (75.0, "OVERLOADED"),
+    (50.0, "STRAINED"),
+    (25.0, "ELEVATED"),
+    (0.0, "CALM"),
+)
+
+BAND_MODIFIERS = {
+    "CALM": {
+        "survival": 1.0, "goal_progression": 1.0, "pressure_relief": 1.0,
+        "stress_reduction": 1.0, "relationship_impact": 1.0,
+        "resource_gain_loss": 1.0, "memory_avoidance": 1.0,
+    },
+    "ELEVATED": {
+        "survival": 1.10, "goal_progression": 0.85, "pressure_relief": 1.10,
+        "stress_reduction": 1.0, "relationship_impact": 0.95,
+        "resource_gain_loss": 1.0, "memory_avoidance": 1.0,
+    },
+    "STRAINED": {
+        "survival": 1.25, "goal_progression": 0.60, "pressure_relief": 1.30,
+        "stress_reduction": 1.0, "relationship_impact": 0.80,
+        "resource_gain_loss": 0.85, "memory_avoidance": 1.10,
+    },
+    "OVERLOADED": {
+        "survival": 1.60, "goal_progression": 0.30, "pressure_relief": 1.50,
+        "stress_reduction": 1.0, "relationship_impact": 0.50,
+        "resource_gain_loss": 0.60, "memory_avoidance": 1.25,
+    },
+}
+
+_IDENTITY_MODIFIERS = dict(BAND_MODIFIERS["CALM"])
+
+
+def oracle_band(stress_level: Any) -> Optional[str]:
+    """Independent band classifier (fail-closed).
+
+    Returns a band name for a finite int/float in [0, 100] (lower bound
+    inclusive; OVERLOADED includes 100). Returns None for every invalid input:
+    missing (None), wrong type (incl. bool / numeric string), NaN/+/-inf,
+    negative, or above 100.
+    """
+    if stress_level is None:
+        return None
+    if isinstance(stress_level, bool) or not isinstance(stress_level, (int, float)):
+        return None
+    level = float(stress_level)
+    if not _math.isfinite(level):
+        return None
+    if level < 0.0 or level > 100.0:
+        return None
+    for threshold, band in BAND_THRESHOLDS:
+        if level >= threshold:
+            return band
+    return None
+
+
+def oracle_band_modifiers(stress_level: Any) -> Dict[str, float]:
+    """Band weight modifiers for a valid stress level; identity (x1.0) if invalid."""
+    band = oracle_band(stress_level)
+    if band is None:
+        return dict(_IDENTITY_MODIFIERS)
+    return dict(BAND_MODIFIERS[band])
+
+
+def oracle_weights_banded(fixture: Mapping[str, Any]) -> Dict[str, float]:
+    """Canonical dynamic weights with the P2 band modifier applied EXACTLY ONCE.
+
+    Missing/invalid stress -> identity modifiers -> weights unchanged from the
+    canonical dynamic weights (oracle_weights).
+    """
+    weights = oracle_weights(fixture)
+    mods = oracle_band_modifiers(fixture.get("stress_level"))
+    return {name: weight * mods.get(name, 1.0) for name, weight in weights.items()}
