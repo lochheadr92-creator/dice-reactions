@@ -404,17 +404,32 @@ For each mode: detection, prevention, recovery, and **current protection status*
 
 | Field | Detail |
 |-------|--------|
-| **Trigger** | Docs authored against `main` cherry-picked to `emergent` without re-audit; PRD dates pass. |
-| **Effect** | False confidence; missing gateway/relationship/HUD in operational docs. |
-| **Detection** | `current-state.md` evidence tags; branch note in `change-history.md`. |
-| **Prevention** | Treat `memory/PRD.md` as planning only; re-run 47-test bundle on `emergent`. |
-| **Recovery** | This reconciliation pass (2026-06-17). |
+| **Trigger** | Stale docs, old PR descriptions, agent summaries, chat handoffs, or unmerged feature branches are treated as canonical after runtime has moved. |
+| **Effect** | False feature status, unsafe activation decisions, or proposal behaviour reported as shipped. |
+| **Detection** | Compare the claim to runtime code and passing tests on canonical `emergent`, then to the operational documentation hierarchy. |
+| **Prevention** | Enforce this order: runtime code/tests on `emergent` → `current-state.md` → `system-doctrine.md` → this catalogue → `feature-status.md` → decision log/accepted ADRs → verification evidence → agent/chat summaries. Feature branches are proposals until merged. |
+| **Recovery** | Reconcile operational docs from updated `emergent`; downgrade unsupported agent or PR claims. |
 | **Files** | `memory/PRD.md`, `/docs/*` |
 | **Tests** | `release-checklist.md` |
-| **Status** | **Partial** — addressed by emergent reconciliation pass |
+| **Status** | **Protected procedurally** — requires discipline on every publication/reconciliation pass |
+
+---
+
+## FM-26: Actor stress ownership, identity, or scope drift
+
+| Field | Detail |
+|-------|--------|
+| **Trigger** | Model output overwrites `actor_stress`; nondeterministic inputs alter stress; snapshot identity omits present authoritative stress; or P1 silently widens beyond living actors with active agendas. |
+| **Effect** | Replay divergence, untrustworthy Utility AI inputs, incorrect recovery/generation, or behaviour outside the accepted P1 scope. |
+| **Detection** | Stress unit/determinism tests, turn-path integration, clobber-protection test, and snapshot hash comparison. |
+| **Prevention** | Deterministic seeded capacity and update order; persisted `rolling_state["actor_stress"]`; `enforce_authoritative_stress` after consolidation; commit present stress into foundation snapshot identity; agenda-bearing living-actor predicate. |
+| **Recovery** | Restore engine-owned persisted stress, rerun focused P1 and hash evidence, and handle any scope widening through a separate design decision. |
+| **Files** | `stress.py`, `foundation_snapshot.py`, `replayability.py`, `server.py` |
+| **Tests** | `test_stress.py`, `test_stress_integration.py`, foundation acceptance and determinism suites ✅ |
+| **Status** | **Protected — P1 `TURN_INTEGRATION_VERIFIED`; widening deferred** |
 
 ---
 
 ## Removed from catalogue (N/A)
 
-FM entries for **exact scoring boundary drift** and **NaN/infinity corrupting rankings** are **N/A** — no scoring/ranking subsystem ever existed in this repository. Do not track as Dice Reactions failure modes.
+Historical pre-foundation scoring equivalence remains **N/A** because that implementation never existed. Foundation Utility AI scoring now exists in shadow mode; determinism and non-finite-input protection are covered by its focused tests and must be revisited before any live/load-bearing activation.
