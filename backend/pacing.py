@@ -118,7 +118,6 @@ def build_early_game_directive(
             "or optional sightseeing is insufficient by itself.\n"
             "- Give the player an actionable reason to decide immediately.\n"
             "- Store the immediate situation in state Pressure.\n"
-            "- Store at least one concrete pressure in rolling_state.active_pressures.\n"
             "- Store at least one forward route, stake, unresolved consequence, obligation, "
             "opportunity, or immediate objective in rolling_state.objectives or "
             "rolling_state.unresolved.\n"
@@ -198,9 +197,8 @@ def validate_opening_structure(parsed: Any) -> Optional[str]:
     if not isinstance(rolling, dict):
         return "missing rolling_state"
 
-    active = rolling.get("active_pressures")
-    if not isinstance(active, list) or not any(_non_empty_string(x) for x in active):
-        return "missing active_pressures"
+    # ADR-023: active_pressures is engine-derived from the canonical pressure_graph
+    # during consolidation (not LLM-owned); the opening is not gated on it here.
 
     objectives = rolling.get("objectives") if isinstance(rolling.get("objectives"), list) else []
     unresolved = rolling.get("unresolved") if isinstance(rolling.get("unresolved"), list) else []
@@ -220,7 +218,7 @@ def build_pacing_retry_instruction(reason: str, debug_clause: str) -> str:
         "Rewrite the opening response while preserving all established generated facts "
         "that do not conflict with this correction: keep the same location, role, tone, "
         "inventory, named NPCs, and scenario seed.\n"
-        "Supply a concrete state Pressure, at least one active_pressures entry, and at "
+        "Supply a concrete state Pressure and at "
         "least one objectives or unresolved stake in rolling_state.\n"
         "Preserve hidden-threat secrecy. Output ONLY the required tag blocks "
         f"(<narrative>, <choices>, <state>, <ledger>, <rolling_state>{debug_clause}). "

@@ -438,7 +438,6 @@ def build_pressure_directive(graph: Mapping[str, Any]) -> str:
         PRESSURE_DIRECTIVE_MARKER,
         "INTERNAL — foreground pressure (engine guidance; do not expose graph labels):",
         f"- Surface '{label}' through sensory detail this turn ({trend_word} pressure).",
-        "- Maintain at least one active_pressures entry aligned with this foreground.",
         "- Do not invent a wholly new crisis unrelated to established state.",
     ]
     recent = (graph.get("threshold_crossings") or [])[-1:]

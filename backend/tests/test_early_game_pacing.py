@@ -134,7 +134,6 @@ def test_turn_count_maps_to_early_game_stage(turn_count, expected):
 def test_stage_one_directive_allows_genesis_authoring():
     text = pacing.build_early_game_directive(1)
     assert "no prior Chronicle truth" in text
-    assert "active_pressures" in text
     assert pacing.PACING_DIRECTIVE_MARKER in text
 
 
@@ -194,9 +193,11 @@ def test_rejects_missing_rolling_state_for_opening():
     assert pacing.validate_opening_structure(parsed) == "missing rolling_state"
 
 
-def test_rejects_missing_active_pressure_state():
+def test_opening_no_longer_requires_llm_active_pressures():
+    # ADR-023: active_pressures is engine-derived from pressure_graph at consolidation
+    # (not LLM-owned); the opening gate no longer requires the model to emit it.
     parsed = _opening_parsed(active_pressures=[])
-    assert pacing.validate_opening_structure(parsed) == "missing active_pressures"
+    assert pacing.validate_opening_structure(parsed) is None
 
 
 def test_rejects_missing_objectives_and_unresolved_stake():
