@@ -1,6 +1,6 @@
 # ADR-024: Live NPC action selection bridge — Ch 27 utility as scoring core via a shadow-equivalence gate (Option D)
 
-**Status:** Proposed (decision recorded; implementation deferred; documentation-only)
+**Status:** Accepted — Phase 1 retained; NW-UTILITY-01 Phase 2 implemented behind a default-off feature flag; `TURN_INTEGRATION_UNVERIFIED`
 **Date:** 2026-06-24
 **Deciders:** Ryan
 **Branch:** `docs/adr-024-npc-scoring-bridge` (off the ADR-023 branch `a0e9054`, which is off `emergent` `c82c0af`)
@@ -20,15 +20,15 @@ This is a canon-fidelity + duplication problem, not a "State is truth" violation
 
 ## 2. Current architecture
 
-`replayability.prepare_action_turn` (pre-provider), per turn: `world_moves.select_npc_move` (`replayability.py:347`) -> `world_moves.commit_npc_move` (`:353`, applies real effects: relationship vectors, faction ticks, pressure graph, receipts) -> `world_moves.build_move_directive` (`:385`, `[NPC_WORLD_MOVE_V1]` prompt directive) -> `stress.update_actor_stress` (`:456`) -> `foundation_integration.evaluate_foundation_turn` (`:465`, Ch 27 utility, shadow) -> `apply_prepared_to_replayability_state` stages `foundation_prepared_v1` (`:474`). `npc_world_moves` owns eligibility (`resolve_actor_tier`, cadence), targets (`resolve_move_target`), effects (`apply_move_effects`), receipts, directive, commit; `utility_ai` owns canon dimensional scoring only, staged and unconsumed.
+`replayability.prepare_action_turn` (pre-provider) first asks `npc_world_moves` for its eligible candidate set and heuristic winner. `living_cast_shadow.compare_move_scoring` then adapts that exact set and calls band-aware `utility_ai.select_action`. The default-off feature flag controls which winner is handed to the existing `npc_world_moves.commit_npc_move` effects/receipt/directive path. Shadow comparison records both winners in either mode.
 
 ## 3. Decision
 
 1. **`npc_world_moves` remains the live eligibility, target-resolution, effect, receipt, and commit substrate.** No replacement.
-2. **Ch 27 `utility_ai` shall become the canonical NPC scoring core only after shadow-equivalence evidence** (Option D -> Option C).
-3. **Until then, `utility_ai.select_action` remains `SHADOW_ONLY` / `TURN_INTEGRATION_UNVERIFIED`**; live scoring continues via `npc_world_moves.score_move`.
-4. **Migration = Option D:** a shadow-equivalence-gated bridge. Phase 1 adds same-candidate-set shadow comparison with ZERO behaviour change. Phase 2 MAY flip scoring to Ch 27 only after evidence + tests + acceptance.
-5. **No `TURN_INTEGRATION_VERIFIED` claim until live scoring actually uses Ch 27 utility.**
+2. **Ch 27 `utility_ai.select_action` is the canonical alternative selector for the eligible set**, including P2 stress-band weights, seeded noise, and deterministic tie handling.
+3. **`ENABLE_UTILITY_AI_LIVE_SELECTION` controls live handoff and defaults to false.** OFF preserves the heuristic winner. ON hands off the authorised Utility AI winner; missing/invalid authoritative inputs fail closed to the heuristic.
+4. **Phase 1 comparison remains active in both modes.** The feature flag changes selection only; it does not replace eligibility, effects, receipts, directives, or pressure authority.
+5. **Status remains `TURN_INTEGRATION_UNVERIFIED`** until a real turn-path acceptance run is completed.
 
 ## 4. Rejected options
 
@@ -39,20 +39,20 @@ This is a canon-fidelity + duplication problem, not a "State is truth" violation
 ## 5. Migration phases
 
 - **Phase 0 - this ADR (documentation only).**
-- **Phase 1 - shadow compare, zero behaviour change.** Score the candidate set that `npc_world_moves` actually enumerates with the canon utility model (reuse `build_canonical_dimension_bundle` + `compute_dimension_weights` + P2 bands + `compute_utility_score`); record per-turn agreement vs the heuristic pick in internal diagnostics only (engine-projection internal; never rolling_state / player / prompt). Live selection still uses `score_move`. Produces equivalence evidence and makes the shadow meaningful (same candidate set, unlike today's divergent sets).
-- **Phase 2 - gated flip (only after evidence + acceptance + ratifying ADR).** Replace `score_move`'s heuristic body with the canon utility score, preserving the eligibility gates (tier / cadence / goal-align / target), the commit/effects path, determinism (seeded noise + tie-break folded into the deterministic sort), and the repetition/recency penalty (retained as an eligibility/penalty layer or folded into a dimension - explicit Phase-2 decision). Only then consider a `TURN_INTEGRATION_VERIFIED` claim, separately.
+- **Phase 1 — complete.** Same-candidate-set comparison is always recorded in internal diagnostics.
+- **Phase 2 — implemented, default OFF.** The comparison's `utility_ai.select_action` winner can be handed to the existing commit path when authorised. `npc_world_moves` still owns all hard eligibility gates and cadence; its heuristic remains the OFF-mode winner and fail-closed fallback. This intentionally avoids replacing `score_move`, preserving continuous comparison and rollback.
 
 ## 6. Determinism and state / hash implications
 
 - Phase 1 must be a pure, deterministic function of engine state; the committed move and `rolling_state` must be byte-identical to today (shadow is observation-only). Diagnostics must not enter `rolling_state`, snapshot identity, player, or prompt surfaces (engine-projection allowlist).
-- Canon scoring is deterministic + seeded (whim noise via `engine_determinism`; canonical hashes). Phase 2 must integrate noise/tie-break into `npc_world_moves`' deterministic sort without introducing nondeterminism.
+- Canon scoring is deterministic + seeded (whim noise via `engine_determinism`; canonical hashes). Phase 2 reuses `utility_ai.select_action` noise/tie handling and maps its winner back to the existing eligible candidate without re-sorting or adding randomness.
 - `source_state_hash` already commits `pressure_graph` and `actor_stress` (the canon scorer's inputs); Phase 1 adds no new authoritative state (diagnostics only), so snapshot identity and hashes are unchanged.
 - Dependency: the canon scorer's `pressure_relief`/weights consume `pressure_graph` (ADR-023 canonical) and P2 stress bands (ADR-022); pressure authority remediation (ADR-023) cleanly precedes and strengthens this work.
 
-## 7. Test plan (for the implementation tasks; no tests written by this ADR)
+## 7. Verification
 
 - **Phase 1:** shadow-compare is pure/deterministic; committed move + `rolling_state` byte-identical to baseline (regression: existing `npc_world_moves` / `replayability` / foundation suites stay green); divergence diagnostics excluded from player/prompt (`test_leakage` / engine-projection); deterministic recorded comparison.
-- **Phase 2:** acceptance/equivalence - extend the foundation oracle to NPC-move selection; canon-scored selection matches the agreed expectation on fixtures; tier/cadence/goal-align gates preserved; effect application unchanged; determinism (noise + tie-break) stable; repetition penalty preserved or intentionally changed-with-tests; update selection tests.
+- **Phase 2:** focused tests prove flag OFF preserves the heuristic winner, flag ON hands off the `utility_ai.select_action` winner, unauthorised inputs fail closed, shadow diagnostics remain present, and Living Cast eligibility/integration regressions remain green. Real provider/turn-path acceptance is still outstanding.
 
 ## 8. Risks
 
@@ -65,21 +65,21 @@ This is a canon-fidelity + duplication problem, not a "State is truth" violation
 ## 9. Non-goals
 
 - No replacement of `npc_world_moves`.
-- No Phase-2 flip authorized by this ADR (decision + Phase-1 planning only).
+- No default deployment activation; the feature flag is an explicit opt-in.
 - No `TURN_INTEGRATION_VERIFIED` claim.
 - No P3, no relationship provenance remediation, no full event sourcing.
-- No `current-state.md` / ADR-020 reconciliation yet (separate task; flagged).
+- No unrelated ADR-020 reconciliation.
 - No production code or test changes (documentation only).
 
 ## 10. Status labels
 
-- **Live NPC action selection:** `LIVE_LOAD_BEARING` via `npc_world_moves` local/non-canon scorer (ADR-020 substitute).
-- **Ch 27 `utility_ai`:** `SHADOW_ONLY` / `TURN_INTEGRATION_UNVERIFIED` (unchanged; not promoted).
-- **This ADR:** Proposed - Option D approved as direction; Phase 1 may be implemented next (separate task); Phase 2 gated on evidence.
+- **Live NPC action selection:** heuristic winner by default; authorised Utility AI winner when the flag is enabled; commit remains `LIVE_LOAD_BEARING` through `npc_world_moves`.
+- **Ch 27 `utility_ai`:** `FEATURE_GATED_LIVE_SELECTION` / default OFF / `TURN_INTEGRATION_UNVERIFIED`; shadow evaluation always remains active.
+- **This ADR:** Accepted — Phase 1 comparison and NW-UTILITY-01 Phase 2 handoff implemented.
 
 ## Action items
 
-1. [ ] Implement Phase 1 (shadow compare) as a separate task (production code + tests).
-2. [ ] Gather divergence evidence; define an acceptance threshold.
-3. [ ] Separate ratifying ADR + acceptance before any Phase-2 flip; only then consider `TURN_INTEGRATION_VERIFIED`.
-4. [ ] Reconcile `current-state.md` / ADR-020 (`npc_world_moves` present + live on `emergent`) - separate doc task.
+1. [x] Implement Phase 1 same-candidate shadow comparison.
+2. [x] Implement default-off Phase 2 handoff with OFF/ON/fail-closed tests.
+3. [ ] Run real turn-path acceptance before any `TURN_INTEGRATION_VERIFIED` claim or default activation.
+4. [ ] Reconcile unrelated ADR-020 historical wording separately.

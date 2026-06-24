@@ -61,6 +61,13 @@ ENABLE_DEBUG_PANEL: bool = (
     os.environ.get("ENABLE_DEBUG_PANEL", "true").lower() in ("1", "true", "yes", "on")
 )
 
+# ADR-024 Phase 2. Default OFF: deployments must opt in to using the canonical
+# Utility AI winner for live NPC moves. Shadow comparison continues either way.
+ENABLE_UTILITY_AI_LIVE_SELECTION: bool = (
+    os.environ.get("ENABLE_UTILITY_AI_LIVE_SELECTION", "false").lower()
+    in ("1", "true", "yes", "on")
+)
+
 # Cost mode. "normal" (default) or "low". When low, prose is compressed
 # and max_tokens is reduced — causality / continuity preserved.
 COST_MODE: str = os.environ.get("COST_MODE", "normal").lower()

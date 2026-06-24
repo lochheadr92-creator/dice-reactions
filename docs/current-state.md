@@ -29,7 +29,7 @@ This document is the canonical operational snapshot of the repository **as it ex
 | Merge status | Canonical runtime branch | **Unmerged** — not deployed |
 | CI coverage | Deterministic CI on `emergent` only | **Not covered by emergent CI** |
 | Living Cast | **Present & live on `emergent`** -- `npc_agendas.py`, `npc_world_moves.py`, `arc_diversity.py`, `consequence_echoes.py`, `living_cast_*` merged; wired into the live turn path (`replayability.prepare_action_turn` -> `select_npc_move`/`commit_npc_move`); Living Cast test modules run under emergent CI. Remains a **local substitute** for PRD Ch 25/27 (ADR-020/ADR-024). | Superseded -- merged to `emergent` |
-| Actor Resolution / Utility AI | Ch 27 Foundation Utility AI (`utility_ai.select_action`) is **shadow-only** and does NOT drive live NPC actions. ADR-024 Phase 1 (live, diagnostics-only): `living_cast_shadow.compare_move_scoring` scores the same `npc_world_moves` candidate set with the canon model and records canon-vs-heuristic agreement in turn diagnostics -- no action handoff. Live NPC moves are still driven by `npc_world_moves` (local scorer). Full PRD Ch 25 Actor Resolution still incomplete. | Merged to `emergent` |
+| Actor Resolution / Utility AI | ADR-024 Phase 2 is implemented behind default-off `ENABLE_UTILITY_AI_LIVE_SELECTION`. Shadow comparison always calls `utility_ai.select_action` over the eligible `npc_world_moves` candidate set. Flag OFF preserves the heuristic winner; flag ON hands an authorised Utility AI winner to the unchanged `npc_world_moves` commit path. `TURN_INTEGRATION_UNVERIFIED`; full PRD Ch 25 Actor Resolution remains incomplete. | Merged to `emergent` |
 | World execution mode | `TURN_COUPLED_AUTONOMY_ONLY` | Same (turn-coupled; no offline sim) |
 | Event sourcing | Turn log only on `emergent` HEAD | **LOCAL SUBSTITUTE** — bounded transition receipts provide idempotency and causal pointers but do not provide canonical reconstruction or durable complete event history; **DEFERRED** — full contract unavailable beyond PRD summary |
 | Pressure authority | **Unresolved** — duplicate sources (`replayability_state.pressure_graph` vs `rolling_state.active_pressures`) | Same blocker until remediation lands |
@@ -80,6 +80,7 @@ Do **not** report 39.8%. The chapter matrix remains authoritative.
 | `MAX_RETRIES` | `2` per model | `backend/ai_config.py` |
 | `PROVIDER_TIMEOUT` | `180` s | `backend/ai_config.py` |
 | `ENABLE_DEBUG_PANEL` | `true` | `backend/ai_config.py` |
+| `ENABLE_UTILITY_AI_LIVE_SELECTION` | `false` | `backend/ai_config.py` |
 | `developer_mode` (admin settings) | `false` | `backend/server.py` (`get_ai_settings`) |
 | `ADMIN_API_KEY` | unset unless configured in deployment | `backend/security.py` — required for admin routes |
 | `CORS_ORIGINS` | `*` | `backend/server.py` |
@@ -102,7 +103,7 @@ Do **not** report 39.8%. The chapter matrix remains authoritative.
 | Early-Game Pacing Governor v1 | Implemented (deterministic structural Stage 1) | Code (`pacing.py`) + Tests (`test_early_game_pacing.py` ✅) |
 | Replayability Engine v1 | Implemented (deterministic — session `replayability_state`) | Code (`replayability.py`, `run_identity.py`, `opening_state.py`, `pressure_graph.py`, `consequence_echoes.py`) + Tests (`test_run_identity.py`, `test_opening_state.py`, `test_pressure_graph.py`, `test_consequence_echoes.py`, `test_replayability_integration.py` ✅) |
 | P1 actor stress substrate | **Canonical — `TURN_INTEGRATION_VERIFIED` / `UTILITY_STRESS_INPUT_COMPLETE`** | Code (`stress.py`, `foundation_snapshot.py`, `replayability.py`, `server.py`) + Tests (`test_stress.py`, `test_stress_integration.py`) |
-| Foundation Utility AI | **Shadow-mode only** -- not authorised to drive live NPC actions; ADR-024 Phase 1 shadow comparison live (diagnostics-only) | Code (`utility_ai.py`, `utility_dimensions.py`, `foundation_integration.py`, `living_cast_shadow.py`) + Tests (foundation acceptance / utility / `test_living_cast_shadow`) |
+| Foundation Utility AI | **Feature-gated live selection; default OFF; `TURN_INTEGRATION_UNVERIFIED`** -- shadow comparison remains active in both modes; authorised band-aware Utility AI winners drive NPC choice only when enabled | Code (`ai_config.py`, `utility_ai.py`, `living_cast_shadow.py`, `replayability.py`) + Tests (foundation acceptance / utility / `test_living_cast_shadow` / Living Cast integration) |
 | Turn generation pipeline | Implemented | Code |
 | Anti-Hallucination Gateway | Implemented | Code (`gateway.py`) + Tests (`test_anti_hallucination_gateway.py`, `test_gateway_e2e.py` ✅) |
 | LLM chokepoint (`invoke_llm`) | Implemented | Code — all `_generate_turn` / retry calls route through `gateway.invoke_llm` |
@@ -138,7 +139,7 @@ Do **not** report 39.8%. The chapter matrix remains authoritative.
 
 P1 stress is canonical on `emergent` as of merge commit `5c042fb`, with runtime status **`TURN_INTEGRATION_VERIFIED`** and Utility input status **`UTILITY_STRESS_INPUT_COMPLETE`**. Actor stress is deterministic, persisted in `rolling_state["actor_stress"]`, and engine-owned across model consolidation. When authoritative stress values are present, stress and capacity are committed into foundation snapshot identity.
 
-The accepted P1 update scope is **living actors with active agendas only**. Widening to all scene-present actors is deferred to a separate future design decision. Utility AI remains shadow-mode: its selected action is staged for diagnostics/state preparation and is not authorised to drive live NPC actions.
+The accepted P1 update scope is **living actors with active agendas only**. Widening to all scene-present actors is deferred to a separate future design decision. Utility AI remains shadow-evaluated on every eligible turn and can drive the existing NPC commit path only when `ENABLE_UTILITY_AI_LIVE_SELECTION=true`; the default is false and live turn integration remains unverified.
 
 ---
 
@@ -165,7 +166,6 @@ These appear in `memory/PRD.md` or design vocabulary but **have no implementing 
 
 | System | Status | Evidence |
 |--------|--------|----------|
-| Utility AI live activation | Foundation scoring + ADR-024 Phase 1 **shadow comparison** are live but remain **shadow-mode** (diagnostics-only); they do NOT drive live NPC actions. Activation requires ADR-024 Phase 2 evidence + a separate decision | Code: `living_cast_shadow.compare_move_scoring` recorded in turn diagnostics; `foundation_integration` retrieval `shadow_mode=True` |
 | Actor resolution / actor caps | **Local substitute present on `emergent`** (`npc_world_moves.resolve_actor_tier` tier/cadence eligibility); full PRD Ch 25 Actor Resolution not yet implemented | **Code:** `npc_world_moves.py` (tier/cadence) merged on `emergent` `c82c0af`; not the full canon module |
 | Gravity / retention governance (beyond context budget) | Planned — partial ad-hoc only | Only `enforce_context_budget` and `consolidate_rolling_state` exist |
 | Formal event sourcing | **DEFERRED** — full contract unavailable beyond PRD summary; turn log only on `emergent` HEAD | Turns `insert_one`; session `rolling_state` overwritten; no rebuild. Recovery branch: **LOCAL SUBSTITUTE** — bounded receipts provide idempotency and causal pointers but not canonical reconstruction or durable complete event history |
@@ -390,11 +390,10 @@ From `memory/PRD.md` (planning tracker — not runtime truth):
 Treat PRD verification dates as historical planning reports, not current CI truth.
 
 
-## Chapter 14 P2 stress behavioural bands (PROPOSED — unmerged, 2026-06-24)
+## Chapter 14 P2 stress behavioural bands (MERGED, 2026-06-24)
 
-**Status: proposal on branch `codex/ch14-stress-behaviour` (base `02646ab`). Not
-on `emergent`, not merged, shadow-only. Per FM-19, treat as a proposal until
-merged — it does not change the canonical snapshot above.**
+**Status: canonical on `emergent`. P2 remains a scoring input only: it reshapes
+Utility AI weights and never bypasses the feature flag or world-move eligibility.**
 
 P2 derives a behavioural band from the authoritative P1 `stress_level` and uses
 it to modify canonical Ch 27 Utility AI weights (goal-narrowing), applied exactly
@@ -409,7 +408,8 @@ blocker code; candidate visible in shadow but never an authorised replacement.
 Determinism/hash: candidate identity, `candidate_set_hash`, noise seed, and
 tie-breaking unchanged; P2 diagnostics excluded from `state_hash`; CALM/invalid
 byte-identical to pre-P2. P1 accumulation/scope/off-screen and snapshot identity
-unchanged. Utility AI stays shadow-only. P3/P4 deferred.
+unchanged. Band-aware Utility AI live handoff is default-off and fail-closed.
+P3/P4 remain deferred.
 
 **Verification (truthful):** `stress.py`+`utility_ai.py` compile; focused
 non-live bundle 139 passed + 1 pre-existing unrelated failure
