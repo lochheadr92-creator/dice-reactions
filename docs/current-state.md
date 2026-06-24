@@ -28,8 +28,8 @@ This document is the canonical operational snapshot of the repository **as it ex
 | Git ref | `5c042fbd090b0e2519b3096a9a9bd90233231331` | `4dadb3feb3737b28a4e5fbb1ef71aa0d56b365a5` |
 | Merge status | Canonical runtime branch | **Unmerged** — not deployed |
 | CI coverage | Deterministic CI on `emergent` only | **Not covered by emergent CI** |
-| Living Cast | **Absent** — no `npc_agendas.py`, `npc_world_moves.py`, `arc_diversity.py` | **Provisional integrated local substitute** |
-| Actor Resolution / Utility AI | Foundation Utility AI exists in **shadow mode**; P1 stress input is complete, but selection does not drive live NPC actions. Full Actor Resolution remains incomplete. | **Local substitutes** in `npc_world_moves.py` only |
+| Living Cast | **Present & live on `emergent`** -- `npc_agendas.py`, `npc_world_moves.py`, `arc_diversity.py`, `consequence_echoes.py`, `living_cast_*` merged; wired into the live turn path (`replayability.prepare_action_turn` -> `select_npc_move`/`commit_npc_move`); Living Cast test modules run under emergent CI. Remains a **local substitute** for PRD Ch 25/27 (ADR-020/ADR-024). | Superseded -- merged to `emergent` |
+| Actor Resolution / Utility AI | Ch 27 Foundation Utility AI (`utility_ai.select_action`) is **shadow-only** and does NOT drive live NPC actions (staged under `foundation_prepared_v1`, unconsumed -- see ADR-024). Live NPC moves ARE driven by `npc_world_moves` (local tier/utility scorer) on `emergent`. Full PRD Ch 25 Actor Resolution still incomplete (`resolve_actor_tier` is a local substitute). | Merged to `emergent` |
 | World execution mode | `TURN_COUPLED_AUTONOMY_ONLY` | Same (turn-coupled; no offline sim) |
 | Event sourcing | Turn log only on `emergent` HEAD | **LOCAL SUBSTITUTE** — bounded transition receipts provide idempotency and causal pointers but do not provide canonical reconstruction or durable complete event history; **DEFERRED** — full contract unavailable beyond PRD summary |
 | Pressure authority | **Unresolved** — duplicate sources (`replayability_state.pressure_graph` vs `rolling_state.active_pressures`) | Same blocker until remediation lands |
@@ -166,7 +166,7 @@ These appear in `memory/PRD.md` or design vocabulary but **have no implementing 
 | System | Status | Evidence |
 |--------|--------|----------|
 | Utility AI live activation | Foundation scoring and selection exist, with authoritative stress input complete, but remain **shadow-mode** and do not drive live NPC actions | Code: `foundation_integration.py` calls retrieval with `shadow_mode=True`; prepared selection is staged under `foundation_prepared_v1` |
-| Actor resolution / actor caps | Planned (PRD Ch 25) — not present on `emergent` HEAD | **Code search:** no dedicated module on `emergent`; recovery branch has **local substitute** tier policy only (unmerged) |
+| Actor resolution / actor caps | **Local substitute present on `emergent`** (`npc_world_moves.resolve_actor_tier` tier/cadence eligibility); full PRD Ch 25 Actor Resolution not yet implemented | **Code:** `npc_world_moves.py` (tier/cadence) merged on `emergent` `c82c0af`; not the full canon module |
 | Gravity / retention governance (beyond context budget) | Planned — partial ad-hoc only | Only `enforce_context_budget` and `consolidate_rolling_state` exist |
 | Formal event sourcing | **DEFERRED** — full contract unavailable beyond PRD summary; turn log only on `emergent` HEAD | Turns `insert_one`; session `rolling_state` overwritten; no rebuild. Recovery branch: **LOCAL SUBSTITUTE** — bounded receipts provide idempotency and causal pointers but not canonical reconstruction or durable complete event history |
 | Historical scoring equivalence | **N/A** — never existed in this repo | `git log -S` empty; no ranking subsystem |

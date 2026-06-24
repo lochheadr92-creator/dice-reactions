@@ -351,8 +351,8 @@ Promote to ADR when implementation and tests exist.
 | Field | Detail |
 |-------|--------|
 | **Date** | 2026-06-20 |
-| **Status** | Accepted — **provisional integrated local substitute on `recovery/living-cast-working-tree` only** (unmerged, not deployed, not covered by emergent CI, not merge-ready) |
-| **Branch** | `recovery/living-cast-working-tree` @ `4dadb3f` — **absent on `emergent` HEAD** @ `d8b9caf` |
+| **Status** | Accepted -- **merged to `emergent`** (present at `c82c0af`); live-wired in `replayability.prepare_action_turn` and covered by emergent CI (`pytest -m "not live"`). Remains a **local substitute** for PRD Ch 25/27 (not full canon). |
+| **Branch** | Merged to `emergent` (verified at `c82c0af`). Originated on `recovery/living-cast-working-tree` @ `4dadb3f`; that branch is now superseded. |
 | **Context** | NPCs only reacted when the player addressed them. Chronicles needed deterministic independent world movement, persistent NPC priorities, and narrative variety without extra provider calls or LLM-owned simulation truth. PRD Ch 25 (Actor Resolution) and Ch 27 (Utility AI) modules are not present in the repo. |
 | **Decision** | Add three pure modules: `npc_agendas.py` (engine-owned agendas in `replayability_state["npc_agendas"]`; closed enums; **canonical `npc_id` stable across run seeds**; agenda selection uses `run_seed + npc_id + namespace`; evolve from structured events only), `npc_world_moves.py` (bounded move catalog; **local** tier eligibility + utility scoring — not PRD Ch 25/27; explicit move targets; real effects on relationship vectors, faction ticks, pressure graph; **bounded transition receipts** in `replayability_state["npc_move_receipts"]` — not rolling_state; `[NPC_WORLD_MOVE_V1]` directive), `arc_diversity.py` (engine beat history; primary emphasis only). Orchestrate in `replayability.prepare_action_turn` **before** provider: tick agendas → select/commit ≤1 move with targets → apply effects → append receipt → schedule qualifying echoes → select primary beat → freeze directives. Policy A legacy skip inherited. **No canonical event-sourcing module exists** — receipts are idempotency/transition records, not world-event history. |
 | **Why engine-owned agendas** | Agendas must survive model merge and must not leak to players; `rolling_state` is LLM-merged each turn. |
@@ -367,8 +367,8 @@ Promote to ADR when implementation and tests exist.
 | **v1 proves** | NPCs may act during player turns; agendas persist/evolve from structured events; moves alter state before narration; runs diverge by seed; low-urgency beat repetition penalized; qualifying move events schedule echoes; no extra provider calls. |
 | **v1 does not prove** | Offline/real-time sim; every NPC every turn; semantic free-text; full social sim; arbitrary inventory; every move echoes; perfect variety; live provider quality. |
 | **Files affected** | `npc_agendas.py`, `npc_world_moves.py`, `arc_diversity.py`, `replayability.py`, `consequence_echoes.py`, `server.py`, Living Cast test modules, `docs/*` |
-| **Tests required** | Recovery branch: `test_npc_agendas.py`, `test_npc_world_moves.py`, `test_arc_diversity.py`, `test_living_cast_integration.py` ✅ locally — **not covered by emergent CI** |
-| **Evidence** | Recovery branch local pytest passes 2026-06-20; **not verified on `emergent` HEAD**; golden-path blockers remain (pressure authority, relationship provenance) |
+| **Tests required** | `test_npc_agendas.py`, `test_npc_world_moves.py`, `test_arc_diversity.py`, `test_living_cast_integration.py`, `test_living_cast_bounded_state.py` -- present on `emergent` and run under emergent CI (`pytest -m "not live"`). |
+| **Evidence** | Present on `emergent` `c82c0af` (all Living Cast modules + test modules; wired in `replayability.py:347/353/385`). Golden-path blockers remain (pressure authority -- see ADR-023; relationship provenance). Doc-status corrected 2026-06-24. |
 
 ---
 
