@@ -18,8 +18,11 @@ import uuid
 from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
 import arc_diversity as arc
+import ai_config
 import consequence_echoes as echoes
 import foundation_integration
+from foundation_snapshot import FoundationTurnSnapshot
+import living_cast_shadow
 import living_cast_provenance as provenance
 import npc_agendas as agendas
 import npc_world_moves as world_moves
@@ -347,6 +350,36 @@ def prepare_action_turn(
     move, _candidates = world_moves.select_npc_move(
         run_seed, agendas_state, working_rolling, state, identity, turn_number
     )
+    try:
+        selection_snapshot = FoundationTurnSnapshot.build(
+            run_seed=run_seed,
+            turn_sequence=turn_number,
+            rolling_state=working_rolling,
+            replayability_state=state,
+        )
+        comparison = living_cast_shadow.compare_move_scoring(
+            selection_snapshot, _candidates, move
+        )
+        diagnostics["utility_ai_shadow_comparison"] = comparison
+        move, utility_applied = living_cast_shadow.choose_live_move(
+            _candidates,
+            move,
+            comparison,
+            enabled=ai_config.ENABLE_UTILITY_AI_LIVE_SELECTION,
+            run_seed=run_seed,
+            turn_number=turn_number,
+        )
+        diagnostics["utility_ai_live_selection_enabled"] = (
+            ai_config.ENABLE_UTILITY_AI_LIVE_SELECTION
+        )
+        diagnostics["utility_ai_live_selection_applied"] = utility_applied
+    except Exception as exc:
+        # Failed or unauthorised handoff falls back to the existing heuristic.
+        diagnostics["utility_ai_shadow_error"] = str(exc)[:200]
+        diagnostics["utility_ai_live_selection_enabled"] = (
+            ai_config.ENABLE_UTILITY_AI_LIVE_SELECTION
+        )
+        diagnostics["utility_ai_live_selection_applied"] = False
     if move:
         agenda = agendas.get_agenda_by_npc_id(agendas_state, str(move.get("npc_id") or ""))
         if agenda and agendas.get_agenda_by_agenda_id(agendas_state, str(move.get("agenda_id") or "")):
@@ -474,21 +507,6 @@ def prepare_action_turn(
         state = foundation_integration.apply_prepared_to_replayability_state(state, foundation_bundle)
     except Exception as exc:
         diagnostics["foundation_eval_error"] = str(exc)[:200]
-
-    try:
-        from foundation_snapshot import FoundationTurnSnapshot
-        import living_cast_shadow
-        _shadow_snapshot = FoundationTurnSnapshot.build(
-            run_seed=run_seed,
-            turn_sequence=turn_number,
-            rolling_state=working_rolling,
-            replayability_state=state,
-        )
-        diagnostics["utility_ai_shadow_comparison"] = living_cast_shadow.compare_move_scoring(
-            _shadow_snapshot, _candidates, committed_move or move
-        )
-    except Exception as exc:  # ADR-024 Phase 1: shadow must never affect the live turn
-        diagnostics["utility_ai_shadow_error"] = str(exc)[:200]
 
     return state, directives, diagnostics, threshold_fired, working_rolling
 

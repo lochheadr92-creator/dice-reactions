@@ -201,7 +201,7 @@ These topics appear in `memory/PRD.md` or design briefs but **lack sufficient co
 |-------|---------|
 | Actor caps / actor resolution | No resolver module; NPCs are LLM-authored lists (PRD Ch 25 ❌) |
 | NPC↔NPC relationship edges | Only NPC→player vectors implemented |
-| Deterministic utility AI | Foundation implementation exists in shadow mode; live/load-bearing activation remains a separate decision |
+| Deterministic utility AI | Foundation implementation is shadow-evaluated on every eligible turn; ADR-024 provides a default-off, fail-closed feature flag for live selection |
 | Gravity-based memory retention | Only context budget + rolling merge |
 | Formal event sourcing | Turn log only (see ADR-003) |
 
@@ -394,17 +394,17 @@ Promote to ADR when implementation and tests exist.
 
 | Field | Detail |
 |-------|--------|
-| **Date** | Proposed 2026-06-24 (unmerged draft PR on `codex/ch14-stress-behaviour`, base `02646ab`) |
-| **Status** | Proposed — **shadow-only; not merged, not authorised for production** |
+| **Date** | Accepted 2026-06-24 |
+| **Status** | Accepted — **canonical on `emergent`; band-aware scoring input** |
 | **Context** | P1 (ADR-021) made `stress_level` authoritative and snapshot-emitted. P2 consumes it: derive a behavioural band on read and modify canonical Ch 27 utility weights (goal-narrowing 14.24/14.27). Ch 14 is non-numerical, so all cut-points/modifiers are designed extensions. |
 | **Decision** | Add pure `stress.evaluate_stress_behaviour` (4 bands CALM/ELEVATED/STRAINED/OVERLOADED at 25/50/75; lower-inclusive, OVERLOADED includes 100). Apply per-band weight modifiers exactly once in `utility_ai.select_action` after `compute_dimension_weights`. `stress_reduction` stays x1.0 (Ch 27.4.2 already scales by stress/100). |
 | **Supersedes** | The ADR-021 6-band "Proposed constants" table (Stable/.../Collapse); P2 ratifies a 4-band model. The Critical/Collapse archetype end moves to P3. |
 | **Fail-closed** | Missing/invalid stress is never CALM: no band, identity modifiers, `stress_input_valid=False`, `replacement_authorised` forced False, blocker code recorded, candidate visible in shadow but never an authorised replacement, no max/emergency bonus. Codes: MISSING/INVALID/NONFINITE/OUT_OF_RANGE_STRESS_LEVEL. |
 | **Determinism** | Pure functions; candidate not mutated -> `candidate_set_hash`/noise/tie-break stable; P2 diagnostics excluded from `state_hash`; CALM/invalid apply x1.0 so weights/utility/hash byte-identical to pre-P2. |
-| **Scope** | P1 accumulation/capacity/decay/actor-scope/off-screen unchanged. Utility AI stays shadow-only. P3 breaking points and P4 collective stress deferred. |
+| **Scope** | P1 accumulation/capacity/decay/actor-scope/off-screen unchanged. P2 changes scoring weights only and cannot bypass ADR-024's feature flag or world-move eligibility. P3 breaking points and P4 collective stress deferred. |
 | **Files affected** | `backend/stress.py`, `backend/utility_ai.py`, `backend/tests/test_stress_behaviour.py`, `docs/adr-022-stress-behaviour-bands.md`, canon-delta / feature-status / failure-mode / current-state docs |
 | **Verification** | Both touched files compile; focused non-live bundle 139 passed + 1 pre-existing unrelated failure (`test_prompt_fingerprint` server.py commit-range vs `9da1ae2`); `test_stress_behaviour.py` 66 passed; determinism/hash-boundary green. Turn-path tests needing fastapi+MongoDB not run in this sandbox. |
-| **Authority note** | Proposal only. Runtime code + passing tests on `emergent` remain controlling; this unmerged branch does not override them. |
+| **Authority note** | Runtime code + passing tests on `emergent` remain controlling. |
 
 
 
@@ -434,13 +434,13 @@ Promote to ADR when implementation and tests exist.
 
 | Field | Detail |
 |-------|--------|
-| **Date** | Proposed 2026-06-24 |
-| **Status** | **Phase 1 implemented + pushed** on `emergent` @ `5cb19a7` -- shadow comparison live, diagnostics-only (`living_cast_shadow.compare_move_scoring` wired into `replayability.prepare_action_turn`). Phase 2 (evidence-gated flip) deferred. Utility AI remains shadow-only / `TURN_INTEGRATION_UNVERIFIED`; no live action handoff. |
+| **Date** | Proposed 2026-06-24; Phase 2 accepted 2026-06-25 |
+| **Status** | **Phase 1 retained; NW-UTILITY-01 Phase 2 implemented behind default-off `ENABLE_UTILITY_AI_LIVE_SELECTION`.** Utility AI remains shadow-evaluated in both modes; authorised winners become live only when enabled. `TURN_INTEGRATION_UNVERIFIED`. |
 | **Context** | T2 static trace: live NPC moves are decided + committed by `npc_world_moves` (local heuristic `score_move`, ADR-020 substitute); Ch 27 `utility_ai.select_action` runs after commit and is staged-but-unconsumed (`foundation_prepared_v1.utility_selection` has no readers). Two parallel engine-state scorers; canon Ch 27 is inert. Canon-fidelity + duplication problem (not a State-is-truth violation). |
-| **Decision** | `npc_world_moves` remains the live eligibility/target/effect/receipt/commit substrate (no replacement). Ch 27 `utility_ai` becomes the canonical NPC scoring core ONLY after shadow-equivalence evidence (Option D -> Option C). Until then `utility_ai.select_action` stays `SHADOW_ONLY` / `TURN_INTEGRATION_UNVERIFIED`. No `TURN_INTEGRATION_VERIFIED` claim until live scoring actually uses Ch 27 utility. |
-| **Migration** | Phase 0 ADR; Phase 1 same-candidate-set shadow comparison (zero behaviour change, internal diagnostics only); Phase 2 gated flip of `score_move` to canon utility after evidence + tests + acceptance. |
+| **Decision** | `npc_world_moves` remains the eligibility/target/effect/receipt/commit substrate. The same-candidate comparison always calls band-aware `utility_ai.select_action`. Flag OFF commits the existing heuristic winner; flag ON hands off an authorised Utility AI winner. Missing/invalid authoritative inputs fail closed to the heuristic. |
+| **Migration** | Phase 0 ADR; Phase 1 same-candidate-set shadow comparison; Phase 2 default-off handoff at the pre-commit seam. The local scorer remains available for shadow comparison and safe fallback; no effects/receipt/pressure/server logic changes. |
 | **Rejected** | (A) replace `npc_world_moves` (breaks live substrate); (B) permanent duplicate scoring (canon stays inert); direct flip without shadow evidence (unverified behaviour/determinism change). |
-| **Determinism** | Phase 1 is observation-only: committed move + `rolling_state` + snapshot identity byte-identical to baseline; diagnostics excluded from rolling_state/player/prompt. Phase 2 must fold seeded noise + tie-break into the deterministic sort. Canon scorer consumes `pressure_graph` (ADR-023) + P2 bands (ADR-022). |
+| **Determinism** | Flag OFF preserves the heuristic move. Flag ON reuses `utility_ai.select_action` seeded noise and deterministic tie handling; handoff maps only to an already eligible candidate and reuses stable receipt construction. Diagnostics remain excluded from rolling_state/player/prompt. |
 | **Amends** | ADR-020 (Living Cast / `npc_world_moves`); relates to ADR-022, ADR-023. |
-| **Non-goals** | No `npc_world_moves` replacement; no Phase-2 flip in this ADR; no `TURN_INTEGRATION_VERIFIED`; no P3 / relationship-provenance / event-sourcing; no current-state/ADR-020 reconciliation yet; no code/test changes. |
+| **Non-goals** | No `npc_world_moves` replacement; no default deployment activation; no `TURN_INTEGRATION_VERIFIED`; no P3/P4, relationship-provenance, event-sourcing, retrieval, pressure, pacing, or server changes. |
 | **Full ADR** | `docs/adr-024-npc-scoring-bridge.md` |
