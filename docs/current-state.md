@@ -1,6 +1,6 @@
 # Current State Snapshot
 
-**Generated:** 2026-06-24 (reconciled against `emergent` runtime @ `5c042fb`)
+**Generated:** 2026-06-25 (reconciled against `emergent` runtime @ `cf2329d`)
 **Repository:** `dice-reactions` (FastAPI backend + Expo frontend)
 **Git branch:** `emergent` (canonical runtime branch for this documentation pass)
 
@@ -25,17 +25,17 @@ This document is the canonical operational snapshot of the repository **as it ex
 
 | Item | `emergent` HEAD | `recovery/living-cast-working-tree` |
 |------|-----------------|-------------------------------------|
-| Git ref | `5c042fbd090b0e2519b3096a9a9bd90233231331` | `4dadb3feb3737b28a4e5fbb1ef71aa0d56b365a5` |
+| Git ref | `cf2329d` | `4dadb3feb3737b28a4e5fbb1ef71aa0d56b365a5` |
 | Merge status | Canonical runtime branch | **Unmerged** — not deployed |
 | CI coverage | Deterministic CI on `emergent` only | **Not covered by emergent CI** |
-| Living Cast | **Present & live on `emergent`** -- `npc_agendas.py`, `npc_world_moves.py`, `arc_diversity.py`, `consequence_echoes.py`, `living_cast_*` merged; wired into the live turn path (`replayability.prepare_action_turn` -> `select_npc_move`/`commit_npc_move`); Living Cast test modules run under emergent CI. Remains a **local substitute** for PRD Ch 25/27 (ADR-020/ADR-024). | Superseded -- merged to `emergent` |
-| Actor Resolution / Utility AI | ADR-024 Phase 2 is implemented behind default-off `ENABLE_UTILITY_AI_LIVE_SELECTION`. Shadow comparison always calls `utility_ai.select_action` over the eligible `npc_world_moves` candidate set. Flag OFF preserves the heuristic winner; flag ON hands an authorised Utility AI winner to the unchanged `npc_world_moves` commit path. `TURN_INTEGRATION_UNVERIFIED`; full PRD Ch 25 Actor Resolution remains incomplete. | Merged to `emergent` |
+| Living Cast | **Present & live on `emergent`** -- `npc_agendas.py`, `npc_world_moves.py`, `arc_diversity.py`, `consequence_echoes.py`, `living_cast_*` merged; wired into the live turn path (`replayability.prepare_action_turn` -> `select_npc_move`/`commit_npc_move`). Remains a **local substitute** for full PRD Ch 25 Actor Resolution; ADR-024 supplies the Utility AI scoring bridge. | Superseded -- merged to `emergent` |
+| Actor Resolution / Utility AI | ADR-024 Phase 1 and NW-UTILITY-01 are complete. `ENABLE_UTILITY_AI_LIVE_SELECTION` exposes feature-gated live selection and defaults OFF. Shadow comparison always calls `utility_ai.select_action` over the eligible `npc_world_moves` candidate set; flag ON hands an authorised Utility AI winner to the unchanged commit path. Utility AI remains `TURN_INTEGRATION_UNVERIFIED`; full PRD Ch 25 Actor Resolution remains incomplete. | Merged to `emergent` |
 | World execution mode | `TURN_COUPLED_AUTONOMY_ONLY` | Same (turn-coupled; no offline sim) |
 | Event sourcing | Turn log only on `emergent` HEAD | **LOCAL SUBSTITUTE** — bounded transition receipts provide idempotency and causal pointers but do not provide canonical reconstruction or durable complete event history; **DEFERRED** — full contract unavailable beyond PRD summary |
-| Pressure authority | **Unresolved** — duplicate sources (`replayability_state.pressure_graph` vs `rolling_state.active_pressures`) | Same blocker until remediation lands |
+| Pressure authority | **ADR-023 complete** — `replayability_state.pressure_graph` is canonical; `rolling_state.active_pressures` is a derived, engine-owned projection | Recovery branch superseded by canonical `emergent` implementation |
 | Relationship provenance | **Unresolved** — vectors mutated from player intent + generated prose | Same blocker; blocks merge |
 | Feature development | **Frozen** | Recovery work is provisional; not merge-ready |
-| Golden-path blockers | Pressure authority duplication; relationship provenance | Same |
+| Golden-path blockers | Relationship provenance | Same |
 
 **Bible text in repository:** Chapters 1–21 full text in `memory/DESIGN_BIBLE.txt`. Chapters 22–32 have **PRD tracker summaries only** — full Chapter 22–32 conformance is **unverified**. Chapter 26 is a **PRD extension associated with Chapter 20**, not a recovered standalone Bible chapter.
 
@@ -101,9 +101,9 @@ Do **not** report 39.8%. The chapter matrix remains authoritative.
 |--------|--------|----------|
 | Story session CRUD | Implemented | Code (`server.py` routes) |
 | Early-Game Pacing Governor v1 | Implemented (deterministic structural Stage 1) | Code (`pacing.py`) + Tests (`test_early_game_pacing.py` ✅) |
-| Replayability Engine v1 | Implemented (deterministic — session `replayability_state`) | Code (`replayability.py`, `run_identity.py`, `opening_state.py`, `pressure_graph.py`, `consequence_echoes.py`) + Tests (`test_run_identity.py`, `test_opening_state.py`, `test_pressure_graph.py`, `test_consequence_echoes.py`, `test_replayability_integration.py` ✅) |
+| Replayability Engine v1 | Implemented (deterministic — session `replayability_state`); ADR-023 pressure authority complete | Code (`replayability.py`, `run_identity.py`, `opening_state.py`, `pressure_graph.py`, `consequence_echoes.py`) + Tests (`test_run_identity.py`, `test_opening_state.py`, `test_pressure_graph.py`, `test_consequence_echoes.py`, `test_replayability_integration.py` ✅) |
 | P1 actor stress substrate | **Canonical — `TURN_INTEGRATION_VERIFIED` / `UTILITY_STRESS_INPUT_COMPLETE`** | Code (`stress.py`, `foundation_snapshot.py`, `replayability.py`, `server.py`) + Tests (`test_stress.py`, `test_stress_integration.py`) |
-| Foundation Utility AI | **Feature-gated live selection; default OFF; `TURN_INTEGRATION_UNVERIFIED`** -- shadow comparison remains active in both modes; authorised band-aware Utility AI winners drive NPC choice only when enabled | Code (`ai_config.py`, `utility_ai.py`, `living_cast_shadow.py`, `replayability.py`) + Tests (foundation acceptance / utility / `test_living_cast_shadow` / Living Cast integration) |
+| Foundation Utility AI | **ADR-024 Phase 1 + NW-UTILITY-01 complete; feature-gated live selection available; default OFF; `TURN_INTEGRATION_UNVERIFIED`** — shadow comparison remains active in both modes; authorised band-aware Utility AI winners drive NPC choice only when enabled | Code (`ai_config.py`, `utility_ai.py`, `living_cast_shadow.py`, `replayability.py`) + Tests (foundation acceptance / utility / `test_living_cast_shadow` / Living Cast integration) |
 | Turn generation pipeline | Implemented | Code |
 | Anti-Hallucination Gateway | Implemented | Code (`gateway.py`) + Tests (`test_anti_hallucination_gateway.py`, `test_gateway_e2e.py` ✅) |
 | LLM chokepoint (`invoke_llm`) | Implemented | Code — all `_generate_turn` / retry calls route through `gateway.invoke_llm` |
@@ -269,7 +269,7 @@ Derived from confirmed gaps (not speculative features):
 **What this increment proves (deterministic):**
 
 - Stage 1 (turn_count 0) receives a non-persisted internal genesis directive as a separate system message in `_build_messages`.
-- Stage 1 structural validation rejects missing/blank/placeholder `state.Pressure`, empty `active_pressures`, and missing both `objectives` and `unresolved` in `rolling_state`.
+- Stage 1 structural validation uses the engine-derived `active_pressures` projection from canonical `pressure_graph`; model-authored pressure is not authoritative.
 - Pacing stage is computed once per request from pre-generation `turn_count` and threaded unchanged through initial generation, validation, and the single shared retry.
 - Only one retry total per request; pacing failures use the same retry budget as format/hallucination failures.
 - Internal directives are absent from `player_action`, turn records, rolling state, player export, raw admin export, and player API responses.

@@ -1,6 +1,6 @@
 # Next Work
 
-Practical backlog from confirmed repo gaps on the **`emergent`** branch. No speculative product features. Scoring-equivalence and NaN-ranking items are **excluded** — those symbols never existed in this repository.
+Practical backlog from confirmed repo gaps on the **`emergent`** branch. No speculative product features. Historical ranking-equivalence and NaN-ranking items remain excluded; ADR-024's same-candidate Utility AI shadow comparison is implemented and tracked separately below.
 
 ---
 
@@ -47,16 +47,35 @@ Practical backlog from confirmed repo gaps on the **`emergent`** branch. No spec
 
 ## Completed (Replayability Engine v1)
 
-### NW-LIVING-CAST-01: Living Cast Engine v1 (provisional — recovery branch only)
+### NW-LIVING-CAST-01: Living Cast Engine v1 ✅
 
 | Field | Detail |
 |-------|--------|
-| **Status** | **Provisional integrated local substitute** on `recovery/living-cast-working-tree` @ `4dadb3f` — **unmerged**, **not deployed**, **not covered by emergent CI**, **not merge-ready** |
-| **Resolution** | Recovery branch: `npc_agendas.py`, `npc_world_moves.py`, `arc_diversity.py` orchestrated in `replayability.py`; ≤1 deterministic NPC move per turn before narration; Policy A legacy skip; world execution `TURN_COUPLED_AUTONOMY_ONLY` |
-| **Tests** | Recovery branch local pytest only — **not on `emergent` HEAD** |
-| **ADR** | ADR-020 (recovery scope) |
-| **Blockers** | Pressure authority unresolved; relationship provenance unresolved; golden-path blockers remain |
-| **Follow-up** | Pressure authority remediation; relationship provenance remediation; full PRD Ch 25/27 modules (Bible contracts absent — PRD summaries only for Ch 22–32) |
+| **Status** | Merged and live on `emergent`; deterministic NPC world-move substrate remains authoritative for eligibility, targets, effects, receipts, and commit |
+| **Resolution** | `npc_agendas.py`, `npc_world_moves.py`, `arc_diversity.py` orchestrated in `replayability.py`; ≤1 deterministic NPC move per turn before narration; Policy A legacy skip; world execution `TURN_COUPLED_AUTONOMY_ONLY` |
+| **Tests** | Living Cast modules run under emergent deterministic CI |
+| **ADR** | ADR-020; amended by ADR-024 scoring bridge |
+| **Remaining blocker** | Relationship provenance |
+| **Follow-up** | Relationship provenance remediation; full PRD Ch 25 Actor Resolution |
+
+### NW-PRESSURE-01: ADR-023 pressure authority remediation ✅
+
+| Field | Detail |
+|-------|--------|
+| **Status** | Complete on `emergent` |
+| **Resolution** | `replayability_state.pressure_graph` is canonical; `rolling_state.active_pressures` is a deterministic, engine-owned derived projection; model-authored pressure is not authoritative |
+| **Evidence** | ADR-023 implementation commits `79f1d48` and `75009f0`; deterministic CI verified |
+| **Follow-up** | None for pressure authority; preserve single-source ownership |
+
+### NW-UTILITY-01: ADR-024 shadow comparison + feature-gated live selection ✅
+
+| Field | Detail |
+|-------|--------|
+| **Status** | ADR-024 Phase 1 complete; NW-UTILITY-01 complete on `emergent` @ `cf2329d` |
+| **Resolution** | Shadow comparison always runs. `ENABLE_UTILITY_AI_LIVE_SELECTION` defaults OFF; when enabled, an authorised band-aware `utility_ai.select_action` winner is handed to the unchanged `npc_world_moves` commit path |
+| **Safety** | Flag OFF preserves current live selection; missing/invalid Utility inputs fail closed to the heuristic winner |
+| **Verification status** | `TURN_INTEGRATION_UNVERIFIED` remains correct; no live turn-path promotion claim |
+| **Follow-up** | Real turn-path acceptance before any `TURN_INTEGRATION_VERIFIED` claim or default activation |
 
 ---
 
@@ -262,7 +281,6 @@ From PRD P2 — only if P0/P1 clear:
 
 Do not schedule without implementation evidence:
 
-- Utility AI (PRD Ch 27)
 - Actor resolution / caps (PRD Ch 25)
 - Formal event sourcing rebuild
 - Gravity retention beyond context budget
