@@ -348,7 +348,7 @@ def build_opening_directive(
         f"- Primary pressure kind: {identity.get('primary_pressure_kind', 'resource')}",
         f"- Scarcity axis: {identity.get('scarcity_axis', 'time')}",
         "- Open in medias res; connect first choices to these facts immediately.",
-        "- Store visible pressure in state Pressure and rolling_state.active_pressures.",
+        "- Store visible pressure in state Pressure (the engine maintains rolling_state.active_pressures).",
         "- Preserve any curated scenario seed as canonical; do not replace it.",
     ]
 

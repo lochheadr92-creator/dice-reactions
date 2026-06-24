@@ -247,7 +247,7 @@ Every turn must produce at least ONE concrete forward motion: discovery, complic
 When a scene has yielded its useful information, emotional value, or gameplay pressure, the engine MUST end it gracefully. Use natural transition, interruption, time pressure, escalation of danger, forced movement, or decision momentum. Recognise when lingering is becoming repetitive and break the loop.
 
 4. FORWARD PRESSURE SYSTEM
-At least ONE active pressure must always live in the foreground of the scene. Rotate among: approaching night, weather shift, distant sounds, worsening wound, hunger, thirst, spreading panic, failing infrastructure, movement outside, hostile factions on the move, NPC stress, dwindling daylight, resource decay, time-sensitive opportunity. Track these in rolling_state `active_pressures` and ensure at least one is referenced through sensory detail each turn.
+At least ONE active pressure must always live in the foreground of the scene. Rotate among: approaching night, weather shift, distant sounds, worsening wound, hunger, thirst, spreading panic, failing infrastructure, movement outside, hostile factions on the move, NPC stress, dwindling daylight, resource decay, time-sensitive opportunity. Ensure at least one is referenced through sensory detail each turn (the engine maintains rolling_state `active_pressures` from the pressure graph).
 
 5. CHOICE FRESHNESS GOVERNOR
 Compare proposed choices against the last 2–3 turns of choice fingerprints (rolling_state `recent_choice_signatures`). Suppress:
@@ -495,7 +495,6 @@ Output a compact JSON object. Compress, do not delete. Format:
   "simulation_hooks": ["setup-derived latent triggers, fears, leverage, relationship consequences, faction hooks"],
   "recent_beats": ["one-line summary of turn N-2", "one-line summary of turn N-1", "one-line summary of THIS turn"],
   "topic_ledger": [{"topic": "short topic / clue / rumour key", "status": "active/exhausted/degraded/blocked/low-yield", "yield": "high/medium/low", "last_touched_turn": 0}],
-  "active_pressures": ["1-3 currently foregrounded pressures (e.g. 'dusk closing in', 'wound throbbing', 'distant generator dying')"],
   "recent_choice_signatures": ["last 4-6 verb+intent fingerprints, lower-snake-case (e.g. 'ask_about_outsiders', 'check_road', 'barricade_door')"],
   "archived": ["dormant facts to re-surface only if relevant"],
   "world_clock": "what time / weather / decay / fatigue cycle is doing"
@@ -522,7 +521,7 @@ On subsequent turns the user message will start with a <prior_state> block conta
 
 MODE:
 Every user message includes [MODE: basic] or [MODE: advanced]. This is also engine-only and must never be referenced in prose.
-- basic: 4 choices, 2-3 short paragraphs, simpler rolling_state (you may omit "factions" and "archived" if there's nothing meaningful), no nested NPC structures. The anti-loop fields (`topic_ledger`, `active_pressures`, `recent_choice_signatures`) MUST still be present and maintained. The player experience is the SAME — only the simulation depth changes.
+- basic: 4 choices, 2-3 short paragraphs, simpler rolling_state (you may omit "factions" and "archived" if there's nothing meaningful), no nested NPC structures. The anti-loop fields (`topic_ledger`, `recent_choice_signatures`) MUST still be present and maintained. The player experience is the SAME — only the simulation depth changes.
 - advanced: 4-6 choices, 2-4 short paragraphs, full rolling_state, deeper NPC/faction simulation, longer memory persistence, stronger consequence propagation. STILL nothing about the engine is exposed.
 
 INVENTORY COMMAND:
@@ -3065,7 +3064,7 @@ async def _create_new_story(req: NewStoryRequest):
         f"Begin the story now. Use the following setup:\n{setup_text}\n\n"
         f"Open in medias res with a specific immediate situation — not pure setup, routine, or generic exploration. "
         f"Give the player a reason to decide now and connect first choices to that situation. "
-        f"Populate state Pressure, rolling_state.active_pressures, and at least one objectives or unresolved stake. "
+        f"Populate state Pressure and at least one objectives or unresolved stake. "
         f"Preserve hidden-threat secrecy; do not reveal latent threats merely to create pace. "
         f"Populate the inventory ledger with the starting kit. "
         f"Present the appropriate number of meaningful first choices for the mode. "
