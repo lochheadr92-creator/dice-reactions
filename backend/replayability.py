@@ -475,6 +475,21 @@ def prepare_action_turn(
     except Exception as exc:
         diagnostics["foundation_eval_error"] = str(exc)[:200]
 
+    try:
+        from foundation_snapshot import FoundationTurnSnapshot
+        import living_cast_shadow
+        _shadow_snapshot = FoundationTurnSnapshot.build(
+            run_seed=run_seed,
+            turn_sequence=turn_number,
+            rolling_state=working_rolling,
+            replayability_state=state,
+        )
+        diagnostics["utility_ai_shadow_comparison"] = living_cast_shadow.compare_move_scoring(
+            _shadow_snapshot, _candidates, committed_move or move
+        )
+    except Exception as exc:  # ADR-024 Phase 1: shadow must never affect the live turn
+        diagnostics["utility_ai_shadow_error"] = str(exc)[:200]
+
     return state, directives, diagnostics, threshold_fired, working_rolling
 
 
