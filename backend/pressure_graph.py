@@ -390,6 +390,33 @@ def strip_model_pressure_mutations(graph: Dict[str, Any], authoritative: Mapping
     return adjustments
 
 
+def project_active_pressures(graph: Mapping[str, Any], *, limit: int = 3) -> List[str]:
+    """ADR-023: engine-derived, read-only projection of the canonical pressure_graph
+    foreground into rolling_state.active_pressures prose phrases.
+
+    Pure and deterministic: the foreground node first, then remaining active nodes by
+    descending magnitude then id; deduplicated; capped. pressure_graph is the single
+    canonical pressure authority -- active_pressures is never model-authored.
+    """
+    if not isinstance(graph, dict):
+        return []
+    fg_id = graph.get("foreground_node_id")
+    actives = [
+        n for n in (graph.get("nodes") or [])
+        if isinstance(n, dict) and n.get("status") == "active"
+    ]
+    def _key(n: Mapping[str, Any]):
+        return (0 if n.get("id") == fg_id else 1, -int(n.get("magnitude") or 0), str(n.get("id") or ""))
+    out: List[str] = []
+    for n in sorted(actives, key=_key):
+        label = str(n.get("label") or n.get("kind") or "rising pressure").strip()
+        if label and label not in out:
+            out.append(label)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def build_pressure_directive(graph: Mapping[str, Any]) -> str:
     """Non-persisted guidance to surface the foreground pressure."""
     fg_id = graph.get("foreground_node_id")

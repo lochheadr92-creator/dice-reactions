@@ -771,6 +771,12 @@ def enforce_authoritative(
             )
             del merged_rolling["pressure_graph"]
             adjustments.append("rolling_pressure_graph_stripped")
+        if isinstance(auth_pg, dict):
+            # ADR-023: active_pressures is a read-only projection of the canonical
+            # pressure_graph; overwrite any model-emitted value so pressure has a
+            # single authoritative source (no narrative/LLM pressure authority).
+            merged_rolling["active_pressures"] = pressure_graph.project_active_pressures(auth_pg)
+            adjustments.append("rolling_active_pressures_engine_derived")
         adjustments.extend(agendas.strip_model_agenda_mutations(merged_rolling, authoritative_replayability))
         if not is_closed_enum_identity((authoritative_replayability or {}).get("identity")):
             adjustments.append("replayability_identity_invalid_ignored")
