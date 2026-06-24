@@ -435,7 +435,7 @@ Promote to ADR when implementation and tests exist.
 | Field | Detail |
 |-------|--------|
 | **Date** | Proposed 2026-06-24 |
-| **Status** | Proposed — decision recorded; implementation deferred (documentation-only ADR). On a dedicated docs branch off the ADR-023 branch. |
+| **Status** | **Phase 1 implemented + pushed** on `emergent` @ `5cb19a7` -- shadow comparison live, diagnostics-only (`living_cast_shadow.compare_move_scoring` wired into `replayability.prepare_action_turn`). Phase 2 (evidence-gated flip) deferred. Utility AI remains shadow-only / `TURN_INTEGRATION_UNVERIFIED`; no live action handoff. |
 | **Context** | T2 static trace: live NPC moves are decided + committed by `npc_world_moves` (local heuristic `score_move`, ADR-020 substitute); Ch 27 `utility_ai.select_action` runs after commit and is staged-but-unconsumed (`foundation_prepared_v1.utility_selection` has no readers). Two parallel engine-state scorers; canon Ch 27 is inert. Canon-fidelity + duplication problem (not a State-is-truth violation). |
 | **Decision** | `npc_world_moves` remains the live eligibility/target/effect/receipt/commit substrate (no replacement). Ch 27 `utility_ai` becomes the canonical NPC scoring core ONLY after shadow-equivalence evidence (Option D -> Option C). Until then `utility_ai.select_action` stays `SHADOW_ONLY` / `TURN_INTEGRATION_UNVERIFIED`. No `TURN_INTEGRATION_VERIFIED` claim until live scoring actually uses Ch 27 utility. |
 | **Migration** | Phase 0 ADR; Phase 1 same-candidate-set shadow comparison (zero behaviour change, internal diagnostics only); Phase 2 gated flip of `score_move` to canon utility after evidence + tests + acceptance. |
