@@ -23,6 +23,8 @@ from server import (  # noqa: E402
     _scrub_meta_from_text,
     _check_direct_inspection_violation,
     _INSPECTION_VERB_RE,
+    _rolling_state_block_diagnostic,
+    parse_turn,
     _validate_parsed,
 )
 
@@ -223,6 +225,280 @@ def scenario_no_p1b_regression() -> bool:
     return ok
 
 
+# ---------------------------------------------------------------------------
+# F4 - First-pass live output contract
+# ---------------------------------------------------------------------------
+def scenario_f4_live_output_contract() -> bool:
+    section("F4 - First-pass live output contract")
+    ok = True
+
+    prompt = srv.STORY_ENGINE_SYSTEM_PROMPT
+    ok &= _expect(
+        "Prompt uses shorter narration target",
+        srv.MAX_NARRATION_CHARS == 1200
+        and "750-900 characters" in prompt
+        and "hard max 1200 after formatting" in prompt,
+        detail=f"MAX_NARRATION_CHARS={srv.MAX_NARRATION_CHARS}",
+    )
+    ok &= _expect(
+        "Retry prompt uses lower narration target",
+        "under 800 characters" in srv._RETRY_INSTRUCTION
+        and "never over 1200 after formatting" in srv._RETRY_INSTRUCTION
+        and "never omit rolling_state" in srv._RETRY_INSTRUCTION,
+        detail=srv._RETRY_INSTRUCTION,
+    )
+    narration_retry = srv._build_format_retry_instruction(
+        f"narration 1838 chars exceeds {srv.MAX_NARRATION_CHARS}",
+        "",
+    )
+    ok &= _expect(
+        "Narration-length retry prompt includes measured count",
+        "Your previous narrative was 1838 characters. The hard cap is 1200. Rewrite the narrative under 900 characters."
+        in narration_retry
+        and "Preserve facts and consequences" in narration_retry
+        and "keep <rolling_state> valid and first" in narration_retry
+        and "do not add new events just to compress" in narration_retry,
+        detail=narration_retry,
+    )
+    ok &= _expect(
+        "Prompt requires exact A-D choice labels",
+        "labelled exactly A. B. C. D. in order" in prompt,
+        detail="missing exact A-D label contract",
+    )
+    ok &= _expect(
+        "Prompt requires strict rolling_state JSON",
+        "valid JSON object" in prompt,
+        detail="missing strict rolling_state JSON wording",
+    )
+    output_contract = prompt.split("OUTPUT FORMAT", 1)[1]
+    ok &= _expect(
+        "Prompt places rolling_state before narrative",
+        output_contract.index("<rolling_state>") < output_contract.index("<narrative>"),
+        detail="rolling_state must be first in output contract",
+    )
+    ok &= _expect(
+        "Prompt forbids full prior_state replay",
+        "Do NOT reproduce the full <prior_state>" in prompt
+        and "bounded continuity UPDATE" in prompt,
+        detail="missing bounded update contract",
+    )
+
+    too_long = _mk_parsed(["x" * (srv.MAX_NARRATION_CHARS + 1)])
+    valid, reason = _validate_parsed(too_long)
+    ok &= _expect(
+        "Validator rejects narration over shorter cap",
+        not valid and "exceeds 1200" in reason,
+        detail=f"valid={valid} reason={reason!r}",
+    )
+
+    out_of_order = _mk_parsed(
+        ["Short scene."],
+        choices=[
+            {"label": "A", "text": "First"},
+            {"label": "C", "text": "Third"},
+            {"label": "B", "text": "Second"},
+            {"label": "D", "text": "Fourth"},
+        ],
+    )
+    valid, reason = _validate_parsed(out_of_order)
+    ok &= _expect(
+        "Validator rejects out-of-order choice labels",
+        not valid and "labelled exactly" in reason,
+        detail=f"valid={valid} reason={reason!r}",
+    )
+
+    fake_choice = _mk_parsed(
+        ["Short scene."],
+        choices=[
+            {"label": "A", "text": "Try the door"},
+            {"label": "B", "text": "Use the rifle (no ammo)"},
+            {"label": "C", "text": "Call out"},
+            {"label": "D", "text": "Retreat"},
+        ],
+    )
+    valid, reason = _validate_parsed(fake_choice)
+    ok &= _expect(
+        "Validator rejects no-resource fake choices",
+        not valid and "closed-off" in reason,
+        detail=f"valid={valid} reason={reason!r}",
+    )
+
+    malformed_choice_raw = (
+        "<narrative>\nShort scene.\n</narrative>\n"
+        "<choices>\nA) Try the door\nB. Wait\nC. Call out\nD. Retreat\n</choices>\n"
+        "<state>\nHealth: stable\n</state>\n"
+        "<ledger>\nCarried: torch\n</ledger>\n"
+        "<rolling_state>{}</rolling_state>"
+    )
+    parsed = parse_turn(malformed_choice_raw)
+    valid, reason = _validate_parsed(parsed)
+    ok &= _expect(
+        "Parser/validator rejects A) choice labels",
+        not valid and "missing required choice labels" in reason,
+        detail=f"choices={parsed.choices!r} reason={reason!r}",
+    )
+
+    invalid_rolling_raw = (
+        "<narrative>\nShort scene.\n</narrative>\n"
+        "<choices>\nA. Try the door\nB. Wait\nC. Call out\nD. Retreat\n</choices>\n"
+        "<state>\nHealth: stable\n</state>\n"
+        "<ledger>\nCarried: torch\n</ledger>\n"
+        "<rolling_state>\nnot json\n</rolling_state>"
+    )
+    parsed = parse_turn(invalid_rolling_raw)
+    valid, reason = _validate_parsed(parsed)
+    ok &= _expect(
+        "Validator requires valid rolling_state JSON",
+        parsed.rolling_state is None
+        and not valid
+        and "rolling_state JSON" in reason,
+        detail=f"rolling_state={parsed.rolling_state!r} reason={reason!r}",
+    )
+
+    missing_close_raw = (
+        "<rolling_state>\n{\"scene\":\"shed\"}\n"
+        "<narrative>\nShort scene.\n</narrative>\n"
+        "<choices>\nA. Try the door\nB. Wait\nC. Call out\nD. Retreat\n</choices>\n"
+        "<state>\nHealth: stable\n</state>\n"
+        "<ledger>\nCarried: torch\n</ledger>\n"
+    )
+    parsed = parse_turn(missing_close_raw)
+    valid, reason = _validate_parsed(parsed)
+    diag = _rolling_state_block_diagnostic(missing_close_raw, f"format/{reason}")
+    ok &= _expect(
+        "Validator rejects missing rolling_state close tag",
+        not valid
+        and "rolling_state JSON" in reason
+        and diag["rolling_state_open_tag_exists"]
+        and not diag["rolling_state_close_tag_exists"],
+        detail=f"reason={reason!r} diag={diag}",
+    )
+
+    missing_rolling_raw = (
+        "<narrative>\nShort scene.\n</narrative>\n"
+        "<choices>\nA. Try the door\nB. Wait\nC. Call out\nD. Retreat\n</choices>\n"
+        "<state>\nHealth: stable\n</state>\n"
+        "<ledger>\nCarried: torch\n</ledger>\n"
+    )
+    parsed = parse_turn(missing_rolling_raw)
+    valid, reason = _validate_parsed(parsed)
+    diag = _rolling_state_block_diagnostic(
+        missing_rolling_raw, f"format/{reason}"
+    )
+    ok &= _expect(
+        "Diagnostic records missing rolling_state tag",
+        not valid
+        and not diag["rolling_state_tag_exists"]
+        and diag["rolling_state_extracted_length"] == 0
+        and "missing" in (diag["rolling_state_json_error"] or ""),
+        detail=str(diag),
+    )
+
+    fenced_rolling_raw = (
+        "<narrative>\nShort scene.\n</narrative>\n"
+        "<choices>\nA. Try the door\nB. Wait\nC. Call out\nD. Retreat\n</choices>\n"
+        "<state>\nHealth: stable\n</state>\n"
+        "<ledger>\nCarried: torch\n</ledger>\n"
+        "<rolling_state>\n```json\n{\"scene\":\"shed\"}\n```\n</rolling_state>"
+    )
+    parsed = parse_turn(fenced_rolling_raw)
+    valid, reason = _validate_parsed(parsed)
+    diag = _rolling_state_block_diagnostic(
+        fenced_rolling_raw, f"format/{reason}"
+    )
+    ok &= _expect(
+        "Diagnostic records malformed/fenced rolling_state JSON",
+        not valid
+        and diag["rolling_state_tag_exists"]
+        and diag["rolling_state_extracted_length"] > 0
+        and "Expecting value" in (diag["rolling_state_json_error"] or "")
+        and "```json" in diag["rolling_state_snippet_start"],
+        detail=str(diag),
+    )
+
+    valid_rolling_raw = (
+        "<rolling_state>\n{\"scene\":\"shed\"}\n</rolling_state>"
+        "<narrative>\nShort scene.\n</narrative>\n"
+        "<choices>\nA. Try the door\nB. Wait\nC. Call out\nD. Retreat\n</choices>\n"
+        "<state>\nHealth: stable\n</state>\n"
+        "<ledger>\nCarried: torch\n</ledger>\n"
+    )
+    parsed = parse_turn(valid_rolling_raw)
+    valid, reason = _validate_parsed(parsed)
+    diag = _rolling_state_block_diagnostic(valid_rolling_raw, "ok")
+    ok &= _expect(
+        "Diagnostic accepts valid rolling_state JSON object",
+        valid
+        and parsed.rolling_state == {"scene": "shed"}
+        and diag["rolling_state_tag_exists"]
+        and diag["rolling_state_json_error"] is None,
+        detail=f"valid={valid} reason={reason!r} diag={diag}",
+    )
+
+    oversized_without_rolling_raw = (
+        "<narrative>\n"
+        + ("x" * (srv.MAX_NARRATION_CHARS + 200))
+        + "\n</narrative>\n"
+        "<choices>\nA. Try the door\nB. Wait\nC. Call out\nD. Retreat\n</choices>\n"
+        "<state>\nHealth: stable\n</state>\n"
+        "<ledger>\nCarried: torch\n</ledger>\n"
+    )
+    parsed = parse_turn(oversized_without_rolling_raw)
+    valid, reason = _validate_parsed(parsed)
+    ok &= _expect(
+        "Oversized narrative cannot mask missing rolling_state",
+        not valid and "rolling_state JSON" in reason,
+        detail=f"reason={reason!r}",
+    )
+    return ok
+
+
+# ---------------------------------------------------------------------------
+# F5 - Custom setup seeding accepts structured instability entries
+# ---------------------------------------------------------------------------
+def scenario_f5_custom_setup_instability_dedupe() -> bool:
+    section("F5 - Custom setup world_instability de-dupe")
+    ok = True
+
+    rolling = {
+        "world_instability": [
+            "existing drought",
+            {"severity": "high", "source": "quarantine"},
+            {"source": "quarantine", "severity": "high"},
+            ["nested", "pressure"],
+        ],
+    }
+    setup = {
+        "pressures": ["water rationing", {"kind": "market panic"}],
+        "danger": "ash storm",
+    }
+    out = srv._seed_custom_setup_into_rolling(rolling, setup)
+    instability = out.get("world_instability") or []
+
+    ok &= _expect(
+        "Structured instability entries do not crash and become strings",
+        instability and all(isinstance(entry, str) for entry in instability),
+        detail=str(instability),
+    )
+    ok &= _expect(
+        "Existing string entry preserved exactly",
+        "existing drought" in instability,
+        detail=str(instability),
+    )
+    ok &= _expect(
+        "Duplicate dict entries de-duped by stable JSON",
+        instability.count('{"severity":"high","source":"quarantine"}') == 1,
+        detail=str(instability),
+    )
+    ok &= _expect(
+        "Custom setup pressures and danger still seed instability",
+        any("active pressure: water rationing" == entry for entry in instability)
+        and any(entry.startswith("danger: ash storm") for entry in instability),
+        detail=str(instability),
+    )
+    return ok
+
+
 def test_scenario_f1_hygiene():
     assert scenario_f1_hygiene()
 
@@ -239,12 +515,22 @@ def test_scenario_no_p1b_regression():
     assert scenario_no_p1b_regression()
 
 
+def test_scenario_f4_live_output_contract():
+    assert scenario_f4_live_output_contract()
+
+
+def test_scenario_f5_custom_setup_instability_dedupe():
+    assert scenario_f5_custom_setup_instability_dedupe()
+
+
 def main() -> int:
     results = []
     results.append(scenario_f1_hygiene())
     results.append(scenario_f2_schema())
     results.append(scenario_f3_verb_trim())
     results.append(scenario_no_p1b_regression())
+    results.append(scenario_f4_live_output_contract())
+    results.append(scenario_f5_custom_setup_instability_dedupe())
     passed = sum(1 for r in results if r)
     total = len(results)
     print(f"\n{'=' * 50}")

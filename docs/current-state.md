@@ -59,8 +59,8 @@ Do **not** report 39.8%. The chapter matrix remains authoritative.
 | Database | MongoDB via Motor 3.3.1 | Code |
 | LLM | OpenRouter chat completions via `httpx` | Code |
 | LLM chokepoint | `gateway.invoke_llm` — sole approved provider call path | Code (`gateway.py`, `server.py`) |
-| Default model | `anthropic/claude-3-5-haiku` | Code (`ai_config.py`) |
-| Fallback chain | Haiku → Sonnet → Mythomax | Code |
+| Default model | `anthropic/claude-haiku-4.5` | Code (`ai_config.py`) |
+| Fallback chain | Haiku 4.5 → Sonnet 4.5 → Mythomax | Code |
 
 **Branch note:** `main` lacks `gateway.py`, `relationships.py`, and `hud.py`. Prior documentation (pass 1–2) described `main` and was cherry-picked onto `emergent` without re-audit — corrected in this pass.
 
@@ -72,7 +72,7 @@ Do **not** report 39.8%. The chapter matrix remains authoritative.
 
 | Variable | Default | File |
 |----------|---------|------|
-| `DEFAULT_MODEL` | `anthropic/claude-3-5-haiku` | `backend/ai_config.py` |
+| `DEFAULT_MODEL` | `anthropic/claude-haiku-4.5` | `backend/ai_config.py` |
 | `DEFAULT_MAX_TOKENS` | `2048` | `backend/ai_service.py` |
 | `DEFAULT_HISTORY_WINDOW` | `40` | `backend/ai_service.py` |
 | `DEFAULT_MEMORY_DEPTH` | `3` | `backend/server.py` |

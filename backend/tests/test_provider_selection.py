@@ -14,6 +14,7 @@ raises BEFORE any network request):
 """
 
 import asyncio
+import importlib
 import os
 import sys
 
@@ -21,6 +22,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import ai_config  # noqa: E402
 import ai_service  # noqa: E402
 
 
@@ -28,10 +30,10 @@ import ai_service  # noqa: E402
 # Routing — default stays OpenRouter
 # --------------------------------------------------------------------------- #
 def test_default_model_routes_to_openrouter():
-    r = ai_service.resolve_provider_route("anthropic/claude-3-5-haiku")
+    r = ai_service.resolve_provider_route(ai_service.DEFAULT_MODEL)
     assert r["provider"] == "openrouter"
     assert r["base_url"] == ai_service.OPENROUTER_BASE_URL
-    assert r["api_model"] == "anthropic/claude-3-5-haiku"
+    assert r["api_model"] == "anthropic/claude-haiku-4.5"
     assert r["key_env"] == "OPENROUTER_API_KEY"
     # OpenRouter-specific attribution headers must be preserved unchanged.
     assert "HTTP-Referer" in r["extra_headers"]
@@ -50,6 +52,30 @@ def test_openrouter_native_openai_namespace_is_not_direct_openai():
 def test_default_model_constant_is_openrouter():
     # Smallest-switch guarantee: the engine default is an OpenRouter model.
     assert not ai_service.DEFAULT_MODEL.startswith(ai_service.OPENAI_PROVIDER_PREFIX)
+
+
+def test_default_and_fallback_models_use_current_anthropic_ids():
+    assert ai_service.DEFAULT_MODEL == "anthropic/claude-haiku-4.5"
+    assert ai_service.FALLBACK_MODELS[:2] == [
+        "anthropic/claude-haiku-4.5",
+        "anthropic/claude-sonnet-4.5",
+    ]
+
+
+def test_model_config_remains_env_overridable(monkeypatch):
+    monkeypatch.setenv("DEFAULT_MODEL", "custom/default-model")
+    monkeypatch.setenv("FALLBACK_MODELS", "custom/default-model,custom/fallback-model")
+    reloaded = importlib.reload(ai_config)
+    try:
+        assert reloaded.DEFAULT_MODEL == "custom/default-model"
+        assert reloaded.FALLBACK_MODELS == [
+            "custom/default-model",
+            "custom/fallback-model",
+        ]
+    finally:
+        monkeypatch.delenv("DEFAULT_MODEL", raising=False)
+        monkeypatch.delenv("FALLBACK_MODELS", raising=False)
+        importlib.reload(ai_config)
 
 
 # --------------------------------------------------------------------------- #
@@ -113,7 +139,7 @@ def test_openrouter_missing_key_still_raises(monkeypatch):
     with pytest.raises(ai_service.AIServiceError) as ei:
         asyncio.run(
             ai_service._call_model_once(
-                "anthropic/claude-3-5-haiku",
+                ai_service.DEFAULT_MODEL,
                 [{"role": "user", "content": "hi"}],
                 0.7,
                 16,
