@@ -7,8 +7,8 @@ swapping providers or models trivial — just adjust ``chat_completion``.
 
 Features:
     * OpenRouter chat completions over httpx (async)
-    * Default model: anthropic/claude-3-5-haiku  (env-overridable)
-    * Safe fallback chain: Haiku → Sonnet → Mythomax
+    * Default model: anthropic/claude-haiku-4.5  (env-overridable)
+    * Safe fallback chain: Haiku 4.5 → Sonnet 4.5 → Mythomax
     * Adjustable model / temperature / max_tokens per call
     * Retry with exponential backoff on transient failures (5xx, 408, 429)
     * Error classification for fallback decisions
@@ -69,16 +69,28 @@ APP_TITLE = os.environ.get("APP_TITLE", "Dice Reaction Story Engine")
 # ---------------------------------------------------------------------------
 SUPPORTED_MODELS: List[Dict[str, Any]] = [
     {
+        "id": "anthropic/claude-haiku-4.5",
+        "label": "Claude Haiku 4.5",
+        "context": 200000,
+        "note": "Default · fast · affordable · strong format compliance",
+    },
+    {
+        "id": "anthropic/claude-sonnet-4.5",
+        "label": "Claude Sonnet 4.5",
+        "context": 1000000,
+        "note": "Fallback tier · top-tier reasoning · 1M context",
+    },
+    {
         "id": "anthropic/claude-3-5-haiku",
         "label": "Claude 3.5 Haiku",
         "context": 200000,
-        "note": "Default · fast · low cost · strong format compliance",
+        "note": "Legacy Anthropic · fast · low cost",
     },
     {
         "id": "anthropic/claude-3-5-sonnet",
         "label": "Claude 3.5 Sonnet",
         "context": 200000,
-        "note": "Fallback tier · higher fidelity Anthropic",
+        "note": "Legacy Anthropic · higher fidelity",
     },
     {
         "id": "gryphe/mythomax-l2-13b",
@@ -87,22 +99,10 @@ SUPPORTED_MODELS: List[Dict[str, Any]] = [
         "note": "Final fallback · cheap · loose format compliance",
     },
     {
-        "id": "anthropic/claude-sonnet-4.5",
-        "label": "Claude Sonnet 4.5",
-        "context": 1000000,
-        "note": "Top-tier reasoning · 1M context",
-    },
-    {
         "id": "anthropic/claude-opus-4.5",
         "label": "Claude Opus 4.5",
         "context": 200000,
         "note": "Highest fidelity · slower / pricier",
-    },
-    {
-        "id": "anthropic/claude-haiku-4.5",
-        "label": "Claude Haiku 4.5",
-        "context": 200000,
-        "note": "Fast & affordable Anthropic",
     },
     {
         "id": "openai/gpt-4o",

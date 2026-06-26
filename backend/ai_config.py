@@ -28,9 +28,9 @@ def _csv_env(name: str, default: List[str]) -> List[str]:
 # ---------------------------------------------------------------------------
 # Primary routing
 # ---------------------------------------------------------------------------
-# Claude 3.5 Haiku — strong instruction following, low cost, ~200k context.
+# Claude Haiku 4.5 — strong instruction following, low cost, ~200k context.
 DEFAULT_MODEL: str = os.environ.get(
-    "DEFAULT_MODEL", "anthropic/claude-3-5-haiku"
+    "DEFAULT_MODEL", "anthropic/claude-haiku-4.5"
 )
 
 # Ordered fallback chain. The first entry is the default; subsequent entries
@@ -38,8 +38,8 @@ DEFAULT_MODEL: str = os.environ.get(
 FALLBACK_MODELS: List[str] = _csv_env(
     "FALLBACK_MODELS",
     [
-        "anthropic/claude-3-5-haiku",     # primary
-        "anthropic/claude-3-5-sonnet",    # higher fidelity safety net
+        "anthropic/claude-haiku-4.5",     # primary
+        "anthropic/claude-sonnet-4.5",    # higher fidelity safety net
         "gryphe/mythomax-l2-13b",         # ultimate cheap backup
     ],
 )

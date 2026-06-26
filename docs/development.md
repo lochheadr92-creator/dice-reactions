@@ -36,7 +36,7 @@ Optional overrides (see `ai_config.py` / `ai_service.py`):
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `DEFAULT_MODEL` | `anthropic/claude-3-5-haiku` | Primary model |
+| `DEFAULT_MODEL` | `anthropic/claude-haiku-4.5` | Primary model |
 | `FALLBACK_MODELS` | CSV of model IDs | Fallback chain |
 | `DEFAULT_TEMPERATURE` | `0.85` | Sampling |
 | `DEFAULT_MAX_TOKENS` | `2048` | Completion cap |

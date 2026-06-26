@@ -220,8 +220,9 @@ def build_pacing_retry_instruction(reason: str, debug_clause: str) -> str:
         "inventory, named NPCs, and scenario seed.\n"
         "Supply a concrete state Pressure and at "
         "least one objectives or unresolved stake in rolling_state.\n"
-        "Preserve hidden-threat secrecy. Output ONLY the required tag blocks "
-        f"(<narrative>, <choices>, <state>, <ledger>, <rolling_state>{debug_clause}). "
+        "Preserve hidden-threat secrecy. Output ONLY the required tag blocks with "
+        "<rolling_state> first and closed before prose "
+        f"(<rolling_state>, <narrative>, <choices>, <state>, <ledger>{debug_clause}). "
         "Do NOT echo <prior_state>."
     )
 

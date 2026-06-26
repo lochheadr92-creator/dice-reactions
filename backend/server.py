@@ -123,12 +123,15 @@ Every internal mechanism is hidden by default. The player must never see:
 HARD OUTPUT VALIDATION (read this first)
 ============================
 Every turn MUST satisfy ALL of the following or the response is invalid:
-  1. Exactly ONE <narrative> block containing 2–4 short paragraphs. Combined narrative text under ~1200 characters.
-  2. Exactly ONE <choices> block containing 4 to 6 choices, each on its own line, labelled in order A. B. C. D. (E. F. optional).
-  3. Choices must cover meaningfully different intents — include at least one CAUTIOUS option, one DIRECT/RISKY option, one INVESTIGATIVE option, and one SOCIAL/COMMUNICATION option where the scene supports it.
-  4. NO `Roll:` / `Modifiers:` / `Final:` / `Active systems:` / `Delayed trigger:` / `Latent trigger:` / `Scale:` lines anywhere outside the <debug> block.
-  5. NO `<prior_state>` echo. NO bare JSON outside `<rolling_state>` / `<debug>`. NO preamble or meta.
-  6. <state>, <ledger>, and <rolling_state> blocks are present. <debug> is present ONLY when the user message contains `[DEV_MODE: ON]`.
+  1. Exactly ONE <rolling_state> block FIRST. It must contain one complete valid JSON object, then close with </rolling_state> before any prose.
+  2. Exactly ONE <narrative> block containing 2–4 short paragraphs. Combined narrative text target 750-900 characters; hard max 1200 after formatting.
+  3. Exactly ONE <choices> block containing 4 to 6 choices, each on its own line, labelled exactly A. B. C. D. in order (E. F. optional).
+  4. Choices must cover meaningfully different intents — include at least one CAUTIOUS option, one DIRECT/RISKY option, one INVESTIGATIVE option, and one SOCIAL/COMMUNICATION option where the scene supports it.
+  5. NO `Roll:` / `Modifiers:` / `Final:` / `Active systems:` / `Delayed trigger:` / `Latent trigger:` / `Scale:` lines anywhere outside the <debug> block.
+  6. NO `<prior_state>` echo. NO bare JSON outside `<rolling_state>` / `<debug>`. NO preamble or meta.
+  7. <state>, <ledger>, and <rolling_state> blocks are present. <debug> is present ONLY when the user message contains `[DEV_MODE: ON]`.
+
+If space is limited, preserve a complete closed <rolling_state> block first and shorten narrative, choices, state, and ledger. If choices or state consume space, shorten prose; never omit rolling_state. On retry, cut narrative under 800 characters.
 
 If any of these would be violated, regenerate internally before responding.
 
@@ -189,7 +192,7 @@ GOOD: "D. The highway is too far on foot with the dog still barking. Stay where 
 BAD:  "E. Use the rifle (no ammo)."
 GOOD: "E. Reach for the rifle anyway. The weight in your hand might be enough."
 
-Choices must always be PLAYABLE. They may be costly, foolish, brave, or doomed — but never closed off mechanically.
+Choices must always be PLAYABLE. They may be costly, foolish, brave, or doomed — but never closed off mechanically. Do not use parenthetical no-resource labels such as "(no ammo)", "(unavailable)", or "(locked)".
 
 ============================
 CORE SIMULATION (driven by the engine, FELT by the player)
@@ -418,7 +421,7 @@ ANTI-STAGNATION + CHOICE QUALITY:
 ============================
 PARAGRAPH PRESERVATION RULE
 ============================
-Every turn MUST contain 2–4 SHORT paragraphs of immersive prose before Choices. Combined narrative length must stay under ~1200 characters.
+Every turn MUST contain 2–4 SHORT paragraphs of immersive prose before Choices. Target 750-900 characters total; hard max 1200 after formatting.
 Each paragraph must include action progression, sensory detail, consequence or reaction, and forward pressure.
 Never collapse into one dense block. Never degrade into bullet narration. Never exceed 4 paragraphs.
 
@@ -435,8 +438,19 @@ OUTPUT FORMAT — STRICT
 ============================
 Every response MUST use this exact structure with these exact section headers:
 
+<rolling_state>
+DEVELOPER-FACING CONTINUITY PACKET. The player will NEVER see this. It is consumed only by the engine on the next turn for compressed memory.
+Output this block FIRST and close it before writing <narrative>. Output one compact valid JSON object and nothing else inside this block.
+Do NOT reproduce the full <prior_state>. Emit a bounded continuity UPDATE: changed/new facts, current active facts, and resolved markers only. The engine preserves omitted prior fields and restores protected unresolved state during merge.
+Opening turns have no prior state, so seed only compact initial facts. Later turns should usually fit under 1200 characters; hard maximum 1800 characters.
+Use minified JSON, no markdown fences, no comments, no trailing commas. Keep arrays short: at most 3 items per list, at most 2 NPCs, at most 2 inventory/object rows unless the player directly changed more this turn.
+Required compact shape:
+{"scene":"current scene in one clause","character":"one-line condition","objectives":["current objective"],"unresolved":["active unresolved stake"],"injuries":[],"inventory_objects":[],"object_locations":[],"route_continuity":[],"npcs":[],"npc_memory":[],"relationship_threads":[],"faction_pressure":[{"name":"","movement":"","player_reputation":"","ticks":{"suspicion":0,"guard_attention":0,"goodwill":0,"debt":0}}],"pressure_horizon":{"immediate":"immediate pressure","emerging":"","latent":""},"world_instability":[],"simulation_hooks":[],"recent_beats":["this turn in one line"],"topic_ledger":[],"recent_choice_signatures":["verb_intent"],"world_clock":"time/weather/decay"}
+If space is tight, keep scene, character, objectives, unresolved, injuries, inventory_objects, object_locations, npcs, npc_memory, recent_beats, recent_choice_signatures, and world_clock; omit low-value empty optional arrays. Never omit active threats, wounds, debts, or named NPCs changed this turn.
+</rolling_state>
+
 <narrative>
-(2-4 short paragraphs of immersive prose, separated by blank lines. Combined under ~1200 characters. Grounded sensory detail. No mechanics. No "What do you do?")
+(2-4 short paragraphs of immersive prose, separated by blank lines. Target 750-900 characters total, hard max 1200 after formatting. Grounded sensory detail. No mechanics. No "What do you do?")
 </narrative>
 
 <choices>
@@ -449,7 +463,7 @@ F. [choice text]   (optional)
 </choices>
 
 CHOICE DIVERSITY REQUIREMENT:
-You must always output 4 to 6 choices labelled in order A. B. C. D. (E. F. optional). Each choice must represent a meaningfully different intent. Where the scene supports it, include at least one CAUTIOUS option, one DIRECT / RISKY option, one INVESTIGATIVE option, and one SOCIAL / COMMUNICATION option. Never duplicate intents. Never omit the <choices> block. Never write "what do you do?" or hand control back to the player without a choice list.
+You must always output 4 to 6 choices labelled exactly A. B. C. D. in order (E. F. optional), with each label followed by a period and a space. Each choice must represent a meaningfully different intent. Where the scene supports it, include at least one CAUTIOUS option, one DIRECT / RISKY option, one INVESTIGATIVE option, and one SOCIAL / COMMUNICATION option. Never duplicate intents. Never omit the <choices> block. Never write "what do you do?" or hand control back to the player without a choice list.
 
 <state>
 Health: [stable / bruised / wounded / badly wounded / critical]
@@ -473,35 +487,6 @@ Uncertain: item (last known location)
 Load: [light / manageable / heavy / overloaded]
 </ledger>
 
-<rolling_state>
-DEVELOPER-FACING CONTINUITY PACKET. The player will NEVER see this. It is consumed only by the engine on the next turn for compressed memory.
-Output a compact JSON object. Compress, do not delete. Format:
-{
-  "scene": "one-sentence current scene summary",
-  "character": "one-line character status (role, current physical/mental condition, important conditions)",
-  "objectives": ["primary objective", "secondary objective (if any)"],
-  "unresolved": ["short list of dangling consequences, debts, promises, wounds compounding, things the world owes the player or player owes the world"],
-  "injuries": [{"name": "injury/condition", "severity": "minor/moderate/severe/critical", "status": "active/treating/worsening/stable/resolved", "since_turn": 0}],
-  "inventory_objects": [{"object": "specific item", "qty": "number/estimate", "condition": "usable/damaged/consumed/destroyed", "location_state": "carried/worn/stored/hidden/dropped/consumed/destroyed/uncertain", "where": "exact in-world location"}],
-  "object_locations": [{"object": "specific item", "status": "carried/worn/stored/hidden/dropped/consumed/destroyed/uncertain", "where": "exact in-world location", "turn_changed": 0}],
-  "route_continuity": ["known exits, blocked routes, distances, maps, waypoints, route promises"],
-  "npcs": [{"name": "name", "role": "what they are", "stance": "ally/neutral/hostile/unknown", "last_seen": "where", "note": "one-line memory"}],
-  "npc_memory": [{"name": "NPC", "remembers": [{"event": "what the player did to them", "severity": "major|minor", "since_turn": 0, "subject": "optional tag"}], "goal": "active material goal", "next_move": "what they may do if ignored"}],
-  "relationship_threads": [{"name": "NPC/faction", "dynamic": "trust/fear/attraction/debt/rivalry/dependency/suspicion", "intensity": "low/medium/high", "leverage": "how this can affect future choices"}],
-  "factions": [{"name": "name", "pressure": "what they're doing this turn", "scale": "local/regional/systemic"}],
-  "faction_pressure": [{"name": "faction/group", "movement": "current independent action", "player_reputation": "how they perceive the player", "ticks": {"suspicion": 0, "guard_attention": 0, "goodwill": 0, "debt": 0}}],
-  "pressure_horizon": {"immediate": "the threat landing this turn or next", "emerging": "the threat building 2-4 turns out", "latent": "the buried threat that will fire when conditions align"},
-  "world_instability": ["environmental/logistical/economic/social conditions that advance without player input"],
-  "simulation_hooks": ["setup-derived latent triggers, fears, leverage, relationship consequences, faction hooks"],
-  "recent_beats": ["one-line summary of turn N-2", "one-line summary of turn N-1", "one-line summary of THIS turn"],
-  "topic_ledger": [{"topic": "short topic / clue / rumour key", "status": "active/exhausted/degraded/blocked/low-yield", "yield": "high/medium/low", "last_touched_turn": 0}],
-  "recent_choice_signatures": ["last 4-6 verb+intent fingerprints, lower-snake-case (e.g. 'ask_about_outsiders', 'check_road', 'barricade_door')"],
-  "archived": ["dormant facts to re-surface only if relevant"],
-  "world_clock": "what time / weather / decay / fatigue cycle is doing"
-}
-Keep total length under ~700 words. Be ruthless about compression. Never omit currently-active threats, wounds, debts, or named NPCs the player has interacted with.
-</rolling_state>
-
 <debug>
 (ONLY include this block if the user message contains the marker [DEV_MODE: ON]. Otherwise OMIT this block entirely. The block is for developer diagnostics only.)
 Roll: [1-20]
@@ -514,15 +499,15 @@ Latent trigger stored: [short description]
 Scale: [local / regional / systemic]
 </debug>
 
-NEVER include any text outside these five tag blocks. NEVER add preamble, meta commentary, or closing remarks. The tags <narrative>, <choices>, <state>, <ledger>, <rolling_state>, and <debug> are mandatory wrappers (debug only when [DEV_MODE: ON]).
+NEVER include any text outside these tag blocks. NEVER add preamble, meta commentary, or closing remarks. Output <rolling_state> first, then <narrative>, <choices>, <state>, <ledger>, and optional <debug> only when [DEV_MODE: ON].
 
 CONTINUITY MODE:
-On subsequent turns the user message will start with a <prior_state> block containing the JSON from your previous <rolling_state>. Treat it as authoritative ground truth. Maintain every entry forward, evolve it, never reset it. Do NOT echo it back verbatim — instead, update and re-emit it in your own <rolling_state> block at the end of your response. The <prior_state> block is engine-only; the player never sees it.
+On subsequent turns the user message will start with a <prior_state> block containing authoritative engine state. Treat it as ground truth. Do NOT echo it back verbatim. Emit only a compact <rolling_state> update object first; omitted prior fields are preserved by the engine merge. The <prior_state> block is engine-only; the player never sees it.
 
 MODE:
 Every user message includes [MODE: basic] or [MODE: advanced]. This is also engine-only and must never be referenced in prose.
-- basic: 4 choices, 2-3 short paragraphs, simpler rolling_state (you may omit "factions" and "archived" if there's nothing meaningful), no nested NPC structures. The anti-loop fields (`topic_ledger`, `recent_choice_signatures`) MUST still be present and maintained. The player experience is the SAME — only the simulation depth changes.
-- advanced: 4-6 choices, 2-4 short paragraphs, full rolling_state, deeper NPC/faction simulation, longer memory persistence, stronger consequence propagation. STILL nothing about the engine is exposed.
+- basic: 4 choices, 2-3 short paragraphs, simpler rolling_state update (you may omit empty optional arrays), no nested NPC structures. The anti-loop fields (`topic_ledger`, `recent_choice_signatures`) MUST still be maintained when touched. The player experience is the SAME — only the simulation depth changes.
+- advanced: 4-6 choices, 2-4 short paragraphs, bounded rolling_state update, deeper NPC/faction simulation, longer memory persistence, stronger consequence propagation. STILL nothing about the engine is exposed.
 
 INVENTORY COMMAND:
 If the player asks to check inventory/gear/pack/pockets/weapons/supplies, still output all required sections. The narrative paragraphs should reflect the act of checking (a moment of pause, tactile detail) and the ledger must be fully populated.
@@ -631,7 +616,7 @@ def _parse_choices(block: str) -> List[Dict[str, str]]:
         line = line.strip()
         if not line:
             continue
-        m = re.match(r"^([A-F])[\.\)]\s*(.+)$", line)
+        m = re.match(r"^([A-F])\.\s+(.+)$", line)
         if m:
             choices.append({"label": m.group(1), "text": m.group(2).strip()})
     return choices
@@ -654,6 +639,97 @@ def _parse_paragraphs(narrative: str) -> List[str]:
     paras = [p.strip() for p in re.split(r"\n\s*\n", narrative) if p.strip()]
     return paras
 
+
+def _parse_rolling_state_json(block: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Parse a strict rolling_state JSON object and return a compact error."""
+    candidate = (block or "").strip()
+    if not candidate:
+        return None, "missing <rolling_state> block"
+    try:
+        loaded = _json.loads(candidate)
+    except Exception as exc:
+        return None, str(exc)
+    if not isinstance(loaded, dict):
+        return None, f"rolling_state JSON root is {type(loaded).__name__}, expected object"
+    return loaded, None
+
+
+_ROLLING_STATE_OPEN_RE = re.compile(r"<\s*rolling_state\b[^>]*>", re.IGNORECASE)
+_ROLLING_STATE_CLOSE_RE = re.compile(r"<\s*/\s*rolling_state\s*>", re.IGNORECASE)
+_VALIDATION_DIAGNOSTIC_SNIPPET_CHARS = 220
+_VALIDATION_DIAGNOSTICS_ENABLED = (
+    os.environ.get("ENABLE_VALIDATION_DIAGNOSTIC_LOGS", "false").lower()
+    in ("1", "true", "yes", "on")
+)
+_DIAGNOSTIC_REDACTIONS = (
+    re.compile(
+        r'((?:"?(?:secret|token|password|api[_-]?key|authorization)"?\s*[:=]\s*)'
+        r')("[^"]*"|[^\s,}\]]+)',
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b(sk-[A-Za-z0-9_-]{8,})\b"),
+)
+
+
+def _redact_validation_diagnostic_snippet(text: str) -> str:
+    """Keep validation diagnostics useful without logging obvious credentials."""
+    out = text or ""
+    out = _DIAGNOSTIC_REDACTIONS[0].sub(r'\1"[REDACTED]"', out)
+    out = _DIAGNOSTIC_REDACTIONS[1].sub("[REDACTED_KEY]", out)
+    return out.replace("\r", "\\r").replace("\n", "\\n")
+
+
+def _rolling_state_block_diagnostic(raw: str, validator_rule: str) -> Dict[str, Any]:
+    """Diagnostic hook for rolling_state format failures.
+
+    This deliberately does not repair or loosen parsing. It mirrors strict
+    parser behaviour and reports only redacted, bounded evidence.
+    """
+    text = raw or ""
+    open_match = _ROLLING_STATE_OPEN_RE.search(text)
+    close_match = _ROLLING_STATE_CLOSE_RE.search(text, open_match.end() if open_match else 0)
+    tag_exists = bool(open_match and close_match)
+    extracted = ""
+    if tag_exists and open_match and close_match:
+        extracted = text[open_match.end():close_match.start()].strip()
+    _, parse_error = _parse_rolling_state_json(extracted)
+
+    if tag_exists and open_match and close_match:
+        start_slice = text[open_match.start(): min(len(text), open_match.start() + _VALIDATION_DIAGNOSTIC_SNIPPET_CHARS)]
+        end_slice = text[max(0, close_match.end() - _VALIDATION_DIAGNOSTIC_SNIPPET_CHARS): close_match.end()]
+    else:
+        needle = re.search(r"rolling_state", text, re.IGNORECASE)
+        center = needle.start() if needle else 0
+        start_slice = text[center: min(len(text), center + _VALIDATION_DIAGNOSTIC_SNIPPET_CHARS)]
+        end_slice = text[max(0, len(text) - _VALIDATION_DIAGNOSTIC_SNIPPET_CHARS):]
+
+    return {
+        "validator_rule": validator_rule,
+        "rolling_state_tag_exists": tag_exists,
+        "rolling_state_open_tag_exists": bool(open_match),
+        "rolling_state_close_tag_exists": bool(close_match),
+        "rolling_state_extracted_length": len(extracted),
+        "rolling_state_json_error": parse_error,
+        "rolling_state_snippet_start": _redact_validation_diagnostic_snippet(start_slice),
+        "rolling_state_snippet_end": _redact_validation_diagnostic_snippet(end_slice),
+    }
+
+
+def _log_validation_failure_diagnostic(
+    raw: str,
+    *,
+    validator_kind: str,
+    validator_reason: str,
+    attempt: str,
+    dev_on: bool,
+) -> None:
+    if not (dev_on or _VALIDATION_DIAGNOSTICS_ENABLED):
+        return
+    diag = _rolling_state_block_diagnostic(
+        raw, f"{validator_kind}/{validator_reason}"
+    )
+    logger.info("Turn validation diagnostic (%s): %s", attempt, diag)
+
 def parse_turn(raw: str) -> ParsedTurn:
     narrative = _extract_block(raw, "narrative")
     choices_block = _extract_block(raw, "choices")
@@ -674,23 +750,8 @@ def parse_turn(raw: str) -> ParsedTurn:
 
     rolling_state: Optional[Dict[str, Any]] = None
     if rolling_block:
-        # The block is supposed to be a JSON object. Try direct, then a soft extract.
-        candidate = rolling_block.strip()
-        # Strip code fences if the model wrapped it
-        candidate = re.sub(r"^```(?:json)?\s*", "", candidate)
-        candidate = re.sub(r"\s*```$", "", candidate).strip()
-        # If the model accidentally embedded extra prose, try to slice the JSON object.
-        try:
-            rolling_state = _json.loads(candidate)
-        except Exception:
-            m = re.search(r"\{.*\}", candidate, re.DOTALL)
-            if m:
-                try:
-                    rolling_state = _json.loads(m.group(0))
-                except Exception:
-                    rolling_state = {"raw": candidate[:1500]}
-            else:
-                rolling_state = {"raw": candidate[:1500]}
+        # The block must be a strict JSON object. Invalid JSON is rejected by validation.
+        rolling_state, _ = _parse_rolling_state_json(rolling_block)
 
     return ParsedTurn(
         narrative=narrative,
@@ -862,6 +923,34 @@ def _build_custom_world_setup_block(setup: Optional[Dict[str, Any]]) -> str:
     )
 
 
+def _normalise_world_instability_entry(value: Any) -> str:
+    """Return a compact hashable world_instability entry for setup seeding."""
+    if isinstance(value, str):
+        return value
+    try:
+        cleaned = _clean_setup(value)
+        return _json.dumps(
+            cleaned,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except Exception:
+        return _short_text(value, 700)
+
+
+def _dedupe_world_instability_entries(entries: List[Any]) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for entry in entries:
+        normalised = _normalise_world_instability_entry(entry)
+        if normalised in seen:
+            continue
+        seen.add(normalised)
+        out.append(normalised)
+    return out
+
+
 def _seed_custom_setup_into_rolling(
     rolling: Dict[str, Any], setup: Optional[Dict[str, Any]]
 ) -> Dict[str, Any]:
@@ -901,12 +990,18 @@ def _seed_custom_setup_into_rolling(
         hooks.append(f"person who matters most: {who}")
     out["simulation_hooks"] = list(dict.fromkeys(hooks))[:16]
 
-    instability = list(out.get("world_instability") or [])
+    existing_instability = out.get("world_instability")
+    if isinstance(existing_instability, list):
+        instability = list(existing_instability)
+    elif existing_instability:
+        instability = [existing_instability]
+    else:
+        instability = []
     for p in pressures:
         instability.append(f"active pressure: {_short_text(p, 120)}")
     if setup.get("danger"):
         instability.append(f"danger: {_short_text(setup.get('danger'), 220)}")
-    out["world_instability"] = list(dict.fromkeys(instability))[:12]
+    out["world_instability"] = _dedupe_world_instability_entries(instability)[:12]
 
     if focus and not out.get("story_focus"):
         out["story_focus"] = focus[:8]
@@ -2189,7 +2284,8 @@ def _text_contains_internal_system_leak(text: str) -> bool:
 
 _FAKE_CHOICE_RE = re.compile(
     r"\b(?:not\s+allowed|not\s+yet|unavailable|locked|blocked|disabled|"
-    r"can(?:not|'t)\s+|won't\s+work|impossible\s+to)\b",
+    r"can(?:not|'t)\s+|won't\s+work|impossible\s+to|not\s+possible|"
+    r"no\s+(?:ammo|ammunition|bullets)|out\s+of\s+(?:ammo|ammunition|bullets))\b",
     re.IGNORECASE,
 )
 
@@ -2278,6 +2374,13 @@ def _validate_parsed(
             False,
             f"choice count {len(parsed.choices)} outside required {MIN_CHOICES}-{MAX_CHOICES}",
         )
+    choice_labels = [(c.get("label") or "").upper() for c in parsed.choices]
+    expected_labels = list("ABCDEF"[: len(choice_labels)])
+    if choice_labels != expected_labels:
+        return False, "choices must be labelled exactly A. B. C. D. in order"
+
+    if not isinstance(parsed.rolling_state, dict):
+        return False, "missing or invalid rolling_state JSON"
 
     paragraphs = parsed.paragraphs or []
 
@@ -2287,7 +2390,7 @@ def _validate_parsed(
     if len(paragraphs) > MAX_PARAGRAPHS:
         return False, f"narration has {len(paragraphs)} paragraphs (max {MAX_PARAGRAPHS})"
 
-    # 3. Total narration length cap (1200 chars).
+    # 3. Total narration length cap.
     total_chars = sum(len(p) for p in paragraphs)
     if total_chars > MAX_NARRATION_CHARS:
         return False, f"narration {total_chars} chars exceeds {MAX_NARRATION_CHARS}"
@@ -2339,20 +2442,50 @@ def _validate_parsed(
 _RETRY_INSTRUCTION = (
     "[VALIDATION_RETRY: {reason}]\n"
     "Rewrite the previous response in valid player-facing format with "
-    "2–4 short paragraphs (under 1200 characters total) and 4–6 A–F choices. "
+    "<rolling_state> FIRST as one complete closed valid JSON object, then "
+    "2–4 short paragraphs under 800 characters total (never over 1200 after formatting) and 4–6 A–F choices. "
+    "Do not reproduce the full prior_state; emit only a bounded continuity update. "
     "Every choice must be on its own line beginning with the letter and a period "
     "(A. B. C. D. and optionally E. F.). "
     "Do NOT include any Roll / Modifiers / Final / Active systems / Delayed trigger / "
     "Latent trigger / Scale text anywhere outside the <debug> block. "
     "Do NOT echo mechanic-probing words from the player (roll, modifier, trigger, hidden system, debug, simulation, JSON); translate the attempt into in-world uncertainty, suspicion, stress, superstition, or manipulation. "
     "Do NOT echo <prior_state>. Output ONLY the required tag blocks "
-    "(<narrative>, <choices>, <state>, <ledger>, <rolling_state>"
-    "{debug_clause}). Choices must cover meaningfully different intents — include a "
+    "(<rolling_state>, <narrative>, <choices>, <state>, <ledger>"
+    "{debug_clause}). <rolling_state> must contain one valid JSON object and no prose. "
+    "If choices or state consume space, shorten prose, never omit rolling_state. "
+    "If space is limited, preserve complete closed <rolling_state> and shorten all player-facing text; narration must stay under 800 characters on retry. "
+    "Choices must cover meaningfully different intents — include a "
     "cautious option, a direct/risky option, an investigative option, and a "
     "social/communication option where the scene supports it."
 )
 
 # Ch 31.5 — correction re-prompt when prose contradicts engine-authoritative truth.
+_NARRATION_LENGTH_REASON_RE = re.compile(
+    r"\bnarration\s+(?P<count>\d+)\s+chars\s+exceeds\s+(?P<cap>\d+)\b"
+)
+
+
+def _build_format_retry_instruction(reason: str, debug_clause: str) -> str:
+    retry_note = _RETRY_INSTRUCTION.format(
+        reason=reason,
+        debug_clause=debug_clause,
+    )
+    match = _NARRATION_LENGTH_REASON_RE.search(reason or "")
+    if not match:
+        return retry_note
+
+    narration_note = (
+        f"Your previous narrative was {match.group('count')} characters. "
+        f"The hard cap is {match.group('cap')}. "
+        "Rewrite the narrative under 900 characters. "
+        "Preserve facts and consequences; keep <rolling_state> valid and first; "
+        "shorten prose; do not add new events just to compress.\n"
+    )
+    first_line, separator, rest = retry_note.partition("\n")
+    return f"{first_line}{separator}{narration_note}{rest}"
+
+
 _HALLUCINATION_RETRY_INSTRUCTION = (
     "[TRUTH_VIOLATION: {reason}]\n"
     "Your narrative contradicted established, FINAL facts of this world. "
@@ -2360,8 +2493,9 @@ _HALLUCINATION_RETRY_INSTRUCTION = (
     "object is gone forever (it cannot be held, used, drawn, worn, or found intact); "
     "a dead character cannot speak, move, or act (reference them only as a corpse, "
     "memory, or absence). Keep the same scene, tone, and continuity, but obey the "
-    "established truth. Output ONLY the required tag blocks (<narrative>, <choices>, "
-    "<state>, <ledger>, <rolling_state>{debug_clause}). Do NOT echo <prior_state> or "
+    "established truth. Output ONLY the required tag blocks, with <rolling_state> "
+    "FIRST and closed before prose (<rolling_state>, <narrative>, <choices>, "
+    "<state>, <ledger>{debug_clause}). Do NOT echo <prior_state> or "
     "<established_truth>."
 )
 
@@ -2434,7 +2568,14 @@ async def _generate_validated_turn(
     elif kind == "pacing":
         retry_note = pacing.build_pacing_retry_instruction(reason, debug_clause)
     else:
-        retry_note = _RETRY_INSTRUCTION.format(reason=reason, debug_clause=debug_clause)
+        retry_note = _build_format_retry_instruction(reason, debug_clause)
+    _log_validation_failure_diagnostic(
+        raw,
+        validator_kind=kind,
+        validator_reason=reason,
+        attempt="first",
+        dev_on=dev_on,
+    )
     logger.info("Turn validation failed (%s/%s) — retrying once", kind, reason)
 
     # Build a proper conversation: original history + bad output + corrective user turn.
@@ -2532,6 +2673,13 @@ async def _generate_validated_turn(
                 combined_meta["pacing_stage3_no_engine_development"] = True
             return _finalize_validated_turn(parsed2, raw2, combined_meta)
 
+        _log_validation_failure_diagnostic(
+            raw2,
+            validator_kind=kind2,
+            validator_reason=reason2,
+            attempt="retry",
+            dev_on=dev_on,
+        )
         logger.warning(
             "Retry still invalid (%s/%s) — using best-available output",
             kind2,
@@ -3069,7 +3217,7 @@ async def _create_new_story(req: NewStoryRequest):
         f"Populate the inventory ledger with the starting kit. "
         f"Present the appropriate number of meaningful first choices for the mode. "
         f"Honour the difficulty modifier on this very first roll. "
-        f"Emit ALL required blocks including <rolling_state>"
+        f"Emit <rolling_state> first, close it completely, then emit all remaining required blocks"
         + (", <debug>" if dev_mode else "")
         + "."
     )
