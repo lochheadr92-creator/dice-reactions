@@ -143,8 +143,20 @@ uvicorn server:app --port 8000   # separate terminal
 python -m pytest -m live -q
 ```
 
+Golden-path live smoke only:
+
+```bash
+cd backend
+# PowerShell:
+#   $env:EXPO_PUBLIC_BACKEND_URL="http://localhost:8000"
+#   $env:ADMIN_API_KEY="<same value configured on the backend>"
+# Backend server environment must include MONGO_URL, DB_NAME, OPENROUTER_API_KEY.
+python -m pytest tests/test_live_golden_path.py -m live -q -s
+```
+
 | Module | Count | Requires |
 |--------|-------|----------|
+| `test_live_golden_path.py` | 1 | Running FastAPI + MongoDB + OpenRouter + admin key |
 | `test_story_engine.py` | 24 | Running FastAPI + OpenRouter |
 | `test_custom_world_system.py` (live only) | 4 | Running FastAPI + OpenRouter |
 | `test_gateway_live_probe.py` | 5 | Running FastAPI + OpenRouter |
