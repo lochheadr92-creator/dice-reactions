@@ -71,11 +71,11 @@ Practical backlog from confirmed repo gaps on the **`emergent`** branch. No spec
 
 | Field | Detail |
 |-------|--------|
-| **Status** | ADR-024 Phase 1 complete; NW-UTILITY-01 complete on `emergent` @ `cf2329d` |
+| **Status** | ADR-024 Phase 1 complete; NW-UTILITY-01 complete on `emergent` @ `cf2329d`; deterministic live-handoff proof complete |
 | **Resolution** | Shadow comparison always runs. `ENABLE_UTILITY_AI_LIVE_SELECTION` defaults OFF; when enabled, an authorised band-aware `utility_ai.select_action` winner is handed to the unchanged `npc_world_moves` commit path |
-| **Safety** | Flag OFF preserves current live selection; missing/invalid Utility inputs fail closed to the heuristic winner |
-| **Verification status** | `TURN_INTEGRATION_UNVERIFIED` remains correct; no live turn-path promotion claim |
-| **Follow-up** | Real turn-path acceptance before any `TURN_INTEGRATION_VERIFIED` claim or default activation |
+| **Safety** | Flag OFF preserves current live selection; missing/invalid Utility inputs fail closed to the heuristic winner; dev-only diagnostics record enabled/applied/source/candidate/receipt evidence |
+| **Verification status** | Deterministic backend tests prove eligible candidate generation, agreement and disagreement live-handoff paths, and committed receipts matching the Utility AI winner. `TURN_INTEGRATION_UNVERIFIED` remains correct because live LLM gameplay turn-path acceptance is separate |
+| **Follow-up** | Real LLM gameplay turn-path acceptance before any `TURN_INTEGRATION_VERIFIED` claim or default activation |
 
 ---
 
