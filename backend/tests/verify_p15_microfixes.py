@@ -261,6 +261,20 @@ def scenario_f4_live_output_contract() -> bool:
         detail=narration_retry,
     )
     ok &= _expect(
+        "Prompt caps narration at 4 blank-line paragraphs with merge guidance",
+        "A blank line starts a new paragraph" in prompt
+        and "NEVER more than 4" in prompt
+        and "merge it into an existing paragraph" in prompt,
+        detail="paragraph-cap wording missing from prompt",
+    )
+    ok &= _expect(
+        "Retry restates 2-4 paragraph cap (blank lines create paragraphs; merge extra)",
+        "a blank line starts a new paragraph" in srv._RETRY_INSTRUCTION
+        and "at most 4, never more" in srv._RETRY_INSTRUCTION
+        and "merge any extra detail into an existing paragraph" in srv._RETRY_INSTRUCTION,
+        detail=srv._RETRY_INSTRUCTION,
+    )
+    ok &= _expect(
         "Prompt requires exact A-D choice labels",
         "labelled exactly A. B. C. D. in order" in prompt,
         detail="missing exact A-D label contract",
