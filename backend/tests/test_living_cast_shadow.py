@@ -1,5 +1,6 @@
 """ADR-024 shadow comparison and feature-gated live handoff tests."""
 import copy
+import logging
 import os
 import sys
 
@@ -171,7 +172,7 @@ def test_live_handoff_fails_closed_when_replacement_is_unauthorised():
     assert applied is False
 
 
-def test_replayability_forwards_live_feature_flag_and_keeps_shadow(monkeypatch):
+def test_replayability_forwards_live_feature_flag_and_keeps_shadow(monkeypatch, caplog):
     state, _ = replayability.init_new_story(
         genre="noir",
         role="detective",
@@ -189,16 +190,59 @@ def test_replayability_forwards_live_feature_flag_and_keeps_shadow(monkeypatch):
 
     def spy_choose(candidates, heuristic_pick, comparison, *, enabled, **kwargs):
         seen["enabled"] = enabled
-        return dict(heuristic_pick) if heuristic_pick else None, False
+        seen["heuristic_pick"] = copy.deepcopy(heuristic_pick)
+        selected = dict(heuristic_pick) if heuristic_pick else None
+        seen["selected_move"] = copy.deepcopy(selected)
+        return selected, False
 
     monkeypatch.setattr(ai_config, "ENABLE_UTILITY_AI_LIVE_SELECTION", True)
+    monkeypatch.setattr(ai_config, "ENABLE_UTILITY_AI_DIAGNOSTIC_LOGS", True)
     monkeypatch.setattr(living_cast_shadow, "choose_live_move", spy_choose)
-    _, _, diagnostics, _, _ = replayability.prepare_action_turn(
-        state,
-        2,
-        rolling_state={"scene": "dock", "npcs": [{"name": "Mara"}]},
-    )
+    with caplog.at_level(logging.INFO, logger=replayability.__name__):
+        _, _, diagnostics, _, _ = replayability.prepare_action_turn(
+            state,
+            2,
+            rolling_state={"scene": "dock", "npcs": [{"name": "Mara"}]},
+        )
 
     assert seen["enabled"] is True
+    assert seen["selected_move"] == seen["heuristic_pick"]
     assert diagnostics["utility_ai_live_selection_enabled"] is True
+    assert diagnostics["utility_ai_live_selection_applied"] is False
+    assert diagnostics["utility_ai_selected_live_winner_source"] == "heuristic"
+    assert diagnostics["utility_ai_heuristic_winner_actor"] == seen["heuristic_pick"]["npc_id"]
+    assert diagnostics["utility_ai_heuristic_winner_move"] == seen["heuristic_pick"]["move_kind"]
+    assert diagnostics["utility_ai_heuristic_winner_target"] == seen["heuristic_pick"]["target_id"]
+    assert "utility_ai_utility_winner_actor" in diagnostics
+    assert "utility_ai_shadow_agreement" in diagnostics
+    assert "utility_ai_shadow_divergence" in diagnostics
     assert "utility_ai_shadow_comparison" in diagnostics
+    assert any(
+        "Utility AI live-selection diagnostic" in record.getMessage()
+        and "utility_ai_selected_live_winner_source" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_replayability_logs_no_eligible_utility_ai_candidates(monkeypatch, caplog):
+    state = {"run_seed": "s", "npc_agendas": {"agendas": []}}
+
+    monkeypatch.setattr(ai_config, "ENABLE_UTILITY_AI_LIVE_SELECTION", True)
+    monkeypatch.setattr(ai_config, "ENABLE_UTILITY_AI_DIAGNOSTIC_LOGS", True)
+    with caplog.at_level(logging.INFO, logger=replayability.__name__):
+        _, _, diagnostics, _, _ = replayability.prepare_action_turn(
+            state,
+            2,
+            rolling_state={"scene": "empty dock", "npcs": []},
+        )
+
+    assert diagnostics["utility_ai_shadow_comparison_exists"] is True
+    assert diagnostics["utility_ai_shadow_candidate_count"] == 0
+    assert diagnostics["utility_ai_live_selection_enabled"] is True
+    assert diagnostics["utility_ai_live_selection_applied"] is False
+    assert diagnostics["utility_ai_selected_live_winner_source"] == "heuristic"
+    assert any(
+        "Utility AI live-selection diagnostic: no eligible NPC move candidates this turn"
+        in record.getMessage()
+        for record in caplog.records
+    )

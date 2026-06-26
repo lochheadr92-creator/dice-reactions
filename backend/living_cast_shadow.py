@@ -80,6 +80,10 @@ def compare_move_scoring(
         for candidate in source_candidates
         if (adapted := _utility_candidate(snapshot, candidate)) is not None
     ]
+    utility_blockers = {
+        (row.get("actor_id"), row.get("action_kind"), row.get("target_id")): list(row.get("blocker_codes") or [])
+        for row in utility_candidates
+    }
     actor_ids = sorted({row["actor_id"] for row in utility_candidates})
     utility_result = utility_ai.select_action(
         utility_candidates,
@@ -93,6 +97,11 @@ def compare_move_scoring(
     rows: List[Dict[str, Any]] = []
     for cand in source_candidates:
         score = score_table.get(_candidate_id(cand)) or {}
+        score_key = (
+            str(cand.get("npc_id") or ""),
+            str(cand.get("move_kind") or ""),
+            str(cand.get("target_id") or ""),
+        )
         rows.append(
             {
                 "actor_id": str(cand.get("npc_id") or ""),
@@ -102,11 +111,18 @@ def compare_move_scoring(
                 "utility_score": score.get("base_utility"),
                 "noisy_utility": score.get("noisy_utility"),
                 "replacement_authorised": score.get("replacement_authorised"),
+                "blocker_codes": utility_blockers.get(score_key) or [],
+                "stress_blocker_code": score.get("stress_blocker_code"),
             }
         )
     utility_pick = None
     selected = utility_result.get("selected")
     if selected:
+        selected_key = (
+            selected.get("actor_id"),
+            selected.get("action_kind"),
+            selected.get("target_id"),
+        )
         utility_pick = {
             "actor_id": selected.get("actor_id"),
             "move_kind": selected.get("action_kind"),
@@ -114,6 +130,8 @@ def compare_move_scoring(
             "utility_score": selected.get("base_utility"),
             "noisy_utility": selected.get("noisy_utility"),
             "replacement_authorised": selected.get("replacement_authorised"),
+            "blocker_codes": utility_blockers.get(selected_key) or [],
+            "stress_blocker_code": selected.get("stress_blocker_code"),
             "stress_band": selected.get("stress_band"),
         }
     heuristic_row = None

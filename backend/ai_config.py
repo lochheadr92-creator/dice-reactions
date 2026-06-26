@@ -68,6 +68,13 @@ ENABLE_UTILITY_AI_LIVE_SELECTION: bool = (
     in ("1", "true", "yes", "on")
 )
 
+# Dev-only live-turn evidence. Default OFF: emits structured logs proving whether
+# Utility AI shadow/live selection was enabled, applied, and what source won.
+ENABLE_UTILITY_AI_DIAGNOSTIC_LOGS: bool = (
+    os.environ.get("ENABLE_UTILITY_AI_DIAGNOSTIC_LOGS", "false").lower()
+    in ("1", "true", "yes", "on")
+)
+
 # Cost mode. "normal" (default) or "low". When low, prose is compressed
 # and max_tokens is reduced — causality / continuity preserved.
 COST_MODE: str = os.environ.get("COST_MODE", "normal").lower()

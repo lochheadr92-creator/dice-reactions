@@ -126,6 +126,23 @@ def test_prepare_action_turn_passthrough_without_state():
 
 
 # 69–72: Policy A + enforcement
+def test_turn_debug_history_includes_utility_ai_live_selection_evidence():
+    debug = server._meta_into_debug(
+        None,
+        {
+            "replayability_utility_ai_live_selection_enabled": True,
+            "replayability_utility_ai_live_selection_applied": False,
+            "replayability_utility_ai_selected_live_winner_source": "heuristic",
+            "replayability_utility_ai_shadow_comparison": {"scores": [1]},
+        },
+    )
+
+    assert debug["replayability_utility_ai_live_selection_enabled"] == "True"
+    assert debug["replayability_utility_ai_live_selection_applied"] == "False"
+    assert debug["replayability_utility_ai_selected_live_winner_source"] == "heuristic"
+    assert "replayability_utility_ai_shadow_comparison" not in debug
+
+
 def test_replayability_active_requires_run_seed():
     assert not replayability.replayability_active({})
     assert not replayability.replayability_active({"replayability_state": {}})
