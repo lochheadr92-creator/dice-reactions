@@ -423,7 +423,7 @@ PARAGRAPH PRESERVATION RULE
 ============================
 Every turn MUST contain 2–4 SHORT paragraphs of immersive prose before Choices. Target 750-900 characters total; hard max 1200 after formatting.
 Each paragraph must include action progression, sensory detail, consequence or reaction, and forward pressure.
-Never collapse into one dense block. Never degrade into bullet narration. Never exceed 4 paragraphs.
+Never collapse into one dense block. Never degrade into bullet narration. A blank line starts a new paragraph, so the narrative must contain 2-4 blank-line-separated blocks and NEVER more than 4. If you have extra detail, merge it into an existing paragraph instead of adding a 5th.
 
 ============================
 CHOICE RANDOMISATION RULE
@@ -2443,7 +2443,7 @@ _RETRY_INSTRUCTION = (
     "[VALIDATION_RETRY: {reason}]\n"
     "Rewrite the previous response in valid player-facing format with "
     "<rolling_state> FIRST as one complete closed valid JSON object, then "
-    "2–4 short paragraphs under 800 characters total (never over 1200 after formatting) and 4–6 A–F choices. "
+    "2–4 short paragraphs (a blank line starts a new paragraph; use at most 4, never more — merge any extra detail into an existing paragraph) under 800 characters total (never over 1200 after formatting) and 4–6 A–F choices. "
     "Do not reproduce the full prior_state; emit only a bounded continuity update. "
     "Every choice must be on its own line beginning with the letter and a period "
     "(A. B. C. D. and optionally E. F.). "
