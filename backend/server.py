@@ -2769,6 +2769,12 @@ def _meta_into_debug(
     ):
         if key in budget:
             debug[label] = str(budget[key])
+    for key, value in meta.items():
+        if not key.startswith("replayability_utility_ai_"):
+            continue
+        if key == "replayability_utility_ai_shadow_comparison":
+            continue
+        debug[key] = str(value)
     return debug
 
 

@@ -13,6 +13,7 @@ rolling_state and not a canonical event-sourcing log.
 from __future__ import annotations
 
 import copy
+import logging
 import re
 import uuid
 from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
@@ -31,6 +32,8 @@ import pressure_graph
 import relationships
 import stress
 from run_identity import derive_run_identity, is_closed_enum_identity
+
+logger = logging.getLogger(__name__)
 
 REPLAYABILITY_VERSION = 1
 TRANSITION_RECEIPTS_MAX = 32
@@ -74,6 +77,107 @@ DIRECTIVE_PROSE_PATTERNS = (
     r"Primary\s+pressure\s+kind:",
     r"Primary\s+beat:",
 )
+
+
+def _pick_diagnostic_identity(pick: Any) -> Dict[str, Optional[str]]:
+    if not isinstance(pick, Mapping):
+        return {"actor": None, "move": None, "target": None}
+    actor = pick.get("actor_id") or pick.get("npc_id")
+    move = pick.get("move_kind") or pick.get("action_kind")
+    target = pick.get("target_id")
+    return {
+        "actor": str(actor) if actor else None,
+        "move": str(move) if move else None,
+        "target": str(target) if target else None,
+    }
+
+
+def _first_blocker_code(pick: Any) -> Optional[str]:
+    if not isinstance(pick, Mapping):
+        return None
+    for key in ("blocker_code", "stress_blocker_code"):
+        value = pick.get(key)
+        if value:
+            return str(value)
+    blockers = pick.get("blocker_codes") or []
+    if isinstance(blockers, (list, tuple)) and blockers:
+        return str(blockers[0])
+    if isinstance(blockers, str) and blockers:
+        return blockers
+    return None
+
+
+def _build_utility_ai_live_diagnostics(
+    comparison: Mapping[str, Any],
+    *,
+    enabled: bool,
+    applied: bool,
+    selected_move: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    heuristic = _pick_diagnostic_identity(comparison.get("heuristic_pick"))
+    utility_pick = comparison.get("utility_pick") or {}
+    utility = _pick_diagnostic_identity(utility_pick)
+    replacement_authorised = utility_pick.get("replacement_authorised")
+    selected_source = "utility_ai" if applied else "heuristic"
+    diagnostics: Dict[str, Any] = {
+        "utility_ai_shadow_comparison_exists": True,
+        "utility_ai_shadow_candidate_count": int(comparison.get("candidate_count") or 0),
+        "utility_ai_live_selection_enabled": bool(enabled),
+        "utility_ai_live_selection_applied": bool(applied),
+        "utility_ai_heuristic_winner_actor": heuristic["actor"],
+        "utility_ai_heuristic_winner_move": heuristic["move"],
+        "utility_ai_heuristic_winner_target": heuristic["target"],
+        "utility_ai_utility_winner_actor": utility["actor"],
+        "utility_ai_utility_winner_move": utility["move"],
+        "utility_ai_utility_winner_target": utility["target"],
+        "utility_ai_shadow_agreement": bool(comparison.get("agree")),
+        "utility_ai_shadow_divergence": not bool(comparison.get("agree")),
+        "utility_ai_replacement_authorised": replacement_authorised,
+        "utility_ai_selected_live_winner_source": selected_source,
+    }
+    if replacement_authorised is False:
+        diagnostics["utility_ai_replacement_blocker_code"] = (
+            _first_blocker_code(utility_pick) or "replacement_not_authorised"
+        )
+    if isinstance(selected_move, Mapping) and selected_move.get("receipt_id"):
+        diagnostics["utility_ai_selected_move_receipt_id"] = str(selected_move.get("receipt_id"))
+    return {key: value for key, value in diagnostics.items() if value is not None}
+
+
+def _attach_utility_ai_committed_move_diagnostics(
+    diagnostics: Dict[str, Any],
+    committed_move: Optional[Mapping[str, Any]],
+) -> None:
+    if not isinstance(committed_move, Mapping):
+        return
+    receipt_id = committed_move.get("receipt_id")
+    if receipt_id:
+        diagnostics["utility_ai_committed_move_receipt_id"] = str(receipt_id)
+
+
+def _log_utility_ai_live_diagnostics(diagnostics: Mapping[str, Any]) -> None:
+    if not ai_config.ENABLE_UTILITY_AI_DIAGNOSTIC_LOGS:
+        return
+    if "utility_ai_shadow_comparison" not in diagnostics:
+        fields = {
+            key: value
+            for key, value in diagnostics.items()
+            if key.startswith("utility_ai_")
+        }
+        logger.info("Utility AI live-selection diagnostic: no comparison this turn: %s", fields)
+        return
+    fields = {
+        key: value
+        for key, value in diagnostics.items()
+        if key.startswith("utility_ai_") or key == "npc_move_receipt_emitted"
+    }
+    if diagnostics.get("utility_ai_shadow_candidate_count") == 0:
+        logger.info(
+            "Utility AI live-selection diagnostic: no eligible NPC move candidates this turn: %s",
+            fields,
+        )
+        return
+    logger.info("Utility AI live-selection diagnostic: %s", fields)
 
 RELATIONSHIP_ECHO_STATES = frozenset({"betrayal_risk", "collapsed"})
 
@@ -350,6 +454,7 @@ def prepare_action_turn(
     move, _candidates = world_moves.select_npc_move(
         run_seed, agendas_state, working_rolling, state, identity, turn_number
     )
+    comparison: Optional[Dict[str, Any]] = None
     try:
         selection_snapshot = FoundationTurnSnapshot.build(
             run_seed=run_seed,
@@ -369,10 +474,14 @@ def prepare_action_turn(
             run_seed=run_seed,
             turn_number=turn_number,
         )
-        diagnostics["utility_ai_live_selection_enabled"] = (
-            ai_config.ENABLE_UTILITY_AI_LIVE_SELECTION
+        diagnostics.update(
+            _build_utility_ai_live_diagnostics(
+                comparison,
+                enabled=ai_config.ENABLE_UTILITY_AI_LIVE_SELECTION,
+                applied=utility_applied,
+                selected_move=move,
+            )
         )
-        diagnostics["utility_ai_live_selection_applied"] = utility_applied
     except Exception as exc:
         # Failed or unauthorised handoff falls back to the existing heuristic.
         diagnostics["utility_ai_shadow_error"] = str(exc)[:200]
@@ -380,6 +489,15 @@ def prepare_action_turn(
             ai_config.ENABLE_UTILITY_AI_LIVE_SELECTION
         )
         diagnostics["utility_ai_live_selection_applied"] = False
+        if isinstance(comparison, Mapping):
+            diagnostics.update(
+                _build_utility_ai_live_diagnostics(
+                    comparison,
+                    enabled=ai_config.ENABLE_UTILITY_AI_LIVE_SELECTION,
+                    applied=False,
+                    selected_move=move,
+                )
+            )
     if move:
         agenda = agendas.get_agenda_by_npc_id(agendas_state, str(move.get("npc_id") or ""))
         if agenda and agendas.get_agenda_by_agenda_id(agendas_state, str(move.get("agenda_id") or "")):
@@ -393,6 +511,10 @@ def prepare_action_turn(
                 state["frozen_npc_move"] = prepared
                 diagnostics["npc_move_kind"] = move.get("move_kind")
                 diagnostics["npc_move_receipt_emitted"] = True
+                _attach_utility_ai_committed_move_diagnostics(
+                    diagnostics,
+                    committed_move,
+                )
                 _append_transition_receipt(
                     state,
                     source_event_id=str(move.get("receipt_id")),
@@ -412,6 +534,8 @@ def prepare_action_turn(
                             receipt_type="echo_scheduled",
                             turn_number=turn_number,
                         )
+
+    _log_utility_ai_live_diagnostics(diagnostics)
 
     pressure_body = pressure_graph.build_pressure_directive(pg)
     echo_body = echoes.build_echo_directive(echo_state, fired_this_turn=fired_echo if did_fire else None)
