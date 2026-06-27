@@ -350,6 +350,37 @@ TRIMMABLE_ROLLING_KEYS = (
     "recent_choice_signatures",  # last N fingerprints
 )
 
+# Prompt-only caps for high-cardinality registries. These apply only when the
+# built prompt is already over budget, never to persisted rolling_state.
+PROMPT_REGISTRY_CAPS = {
+    "object_locations": 48,
+    "inventory_objects": 36,
+    "known_rooms": 12,
+    "npc_memory": 16,
+}
+
+_PROMPT_ACTIVE_MARKERS = {
+    "active",
+    "current",
+    "carried",
+    "worn",
+    "equipped",
+    "held",
+    "open",
+    "urgent",
+    "unresolved",
+    "threat",
+    "promise",
+    "clue",
+}
+_PROMPT_TERMINAL_OBJECT_STATUSES = {"destroyed", "consumed"}
+_PROMPT_MAJOR_EVENT_RE = _re.compile(
+    r"\b(?:theft|steal|stole|stolen|kill|killed|murder|assault|violence|"
+    r"betray|betrayed|betrayal|promise|promised|oath|sworn|rescue|rescued|"
+    r"saved|spared|gift|witness|witnessed|debt|owe|owes|owed|clue|threat)\b",
+    _re.IGNORECASE,
+)
+
 
 def estimate_tokens(text: str) -> int:
     if not text:
@@ -362,7 +393,135 @@ def estimate_messages_tokens(messages: List[Dict[str, str]]) -> int:
     return sum(estimate_tokens(m.get("content", "")) + 4 for m in messages)
 
 
-def _compress_prior_state_json(state: Dict[str, Any]) -> Dict[str, Any]:
+def _item_text_blob(item: Any) -> str:
+    if isinstance(item, dict):
+        try:
+            return _json.dumps(item, sort_keys=True, default=str)
+        except Exception:
+            return str(sorted(item.items()))
+    return str(item)
+
+
+def _item_recency(item: Any) -> int:
+    """Best-effort recency signal from common rolling_state turn fields."""
+    if not isinstance(item, dict):
+        return 0
+    candidates: List[int] = []
+    for key in (
+        "turn",
+        "since_turn",
+        "created_turn",
+        "updated_turn",
+        "last_seen_turn",
+        "last_visited_turn",
+        "turn_seeded",
+        "last_propagated_turn",
+        "fired_turn",
+    ):
+        value = item.get(key)
+        if isinstance(value, int):
+            candidates.append(value)
+        elif isinstance(value, str) and value.isdigit():
+            candidates.append(int(value))
+    remembers = item.get("remembers")
+    if isinstance(remembers, list):
+        for row in remembers:
+            candidates.append(_item_recency(row))
+    return max(candidates, default=0)
+
+
+def _prompt_registry_item_protected(key: str, item: Any) -> bool:
+    """Return True for entries that should win cap space in <prior_state>."""
+    if not isinstance(item, dict):
+        return False
+    text = _item_text_blob(item).lower()
+    if any(marker in text for marker in _PROMPT_ACTIVE_MARKERS):
+        return True
+
+    status = str(
+        item.get("status")
+        or item.get("location_state")
+        or item.get("state")
+        or ""
+    ).strip().lower()
+    if key in {"object_locations", "inventory_objects"}:
+        if status in _PROMPT_TERMINAL_OBJECT_STATUSES:
+            return True
+        if status in {"carried", "worn", "equipped", "held"}:
+            return True
+
+    if key == "known_rooms":
+        if item.get("current") is True or item.get("active") is True:
+            return True
+
+    if key == "npc_memory":
+        remembers = item.get("remembers")
+        if isinstance(remembers, list):
+            for row in remembers:
+                if not isinstance(row, dict):
+                    continue
+                if str(row.get("severity") or "").lower() == "major":
+                    return True
+                if _PROMPT_MAJOR_EVENT_RE.search(str(row.get("event") or "")):
+                    return True
+
+    return False
+
+
+def _cap_prompt_registry(
+    key: str,
+    items: List[Any],
+    cap: int,
+) -> Tuple[List[Any], Dict[str, Any]]:
+    if len(items) <= cap:
+        return list(items), {}
+
+    rows = []
+    for index, item in enumerate(items):
+        rows.append(
+            {
+                "index": index,
+                "item": item,
+                "protected": _prompt_registry_item_protected(key, item),
+                "recency": _item_recency(item),
+            }
+        )
+
+    protected = [row for row in rows if row["protected"]]
+    ordinary = [row for row in rows if not row["protected"]]
+
+    def _rank(row: Dict[str, Any]) -> Tuple[int, int, int]:
+        # Most recent wins when present; otherwise deterministic tail wins.
+        return (int(row["protected"]), int(row["recency"]), int(row["index"]))
+
+    selected = sorted(protected, key=_rank, reverse=True)[:cap]
+    if len(selected) < cap:
+        selected_indices = {int(row["index"]) for row in selected}
+        fill = [
+            row
+            for row in sorted(ordinary, key=_rank, reverse=True)
+            if int(row["index"]) not in selected_indices
+        ]
+        selected.extend(fill[: cap - len(selected)])
+
+    selected_indices = sorted(int(row["index"]) for row in selected)
+    capped = [items[index] for index in selected_indices]
+    meta = {
+        "original": len(items),
+        "kept": len(capped),
+        "elided": max(0, len(items) - len(capped)),
+        "protected_kept": sum(
+            1
+            for row in rows
+            if row["protected"] and int(row["index"]) in selected_indices
+        ),
+    }
+    return capped, meta
+
+
+def _compress_prior_state_json_with_meta(
+    state: Dict[str, Any],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Drop low-value content from a rolling_state copy without losing causality.
 
     Removes / shrinks:
@@ -374,8 +533,9 @@ def _compress_prior_state_json(state: Dict[str, Any]) -> Dict[str, Any]:
     Returns a new dict; never mutates the input.
     """
     if not isinstance(state, dict):
-        return state
+        return state, {}
     out: Dict[str, Any] = {}
+    cap_meta: Dict[str, Any] = {}
     for k, v in state.items():
         if k == "archived":
             continue
@@ -402,7 +562,7 @@ def _compress_prior_state_json(state: Dict[str, Any]) -> Dict[str, Any]:
             out[k] = slim
             continue
         if k in PROTECTED_LIST_KEYS and isinstance(v, list):
-            out[k] = [
+            prompt_items = [
                 item
                 for item in v
                 if not (
@@ -411,30 +571,43 @@ def _compress_prior_state_json(state: Dict[str, Any]) -> Dict[str, Any]:
                     in {"resolved", "done", "complete", "cleared", "closed", "expired"}
                 )
             ]
+            if k in PROMPT_REGISTRY_CAPS:
+                prompt_items, meta = _cap_prompt_registry(
+                    k, prompt_items, PROMPT_REGISTRY_CAPS[k]
+                )
+                if meta:
+                    cap_meta[k] = meta
+            out[k] = prompt_items
             continue
         out[k] = v
-    return out
+    return out, {"projected_registry_caps": cap_meta} if cap_meta else {}
 
 
-def _shrink_user_with_prior_state(user_text: str) -> Tuple[str, bool]:
+def _compress_prior_state_json(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Compatibility wrapper for prompt-only prior_state compression."""
+    compressed, _meta = _compress_prior_state_json_with_meta(state)
+    return compressed
+
+
+def _shrink_user_with_prior_state(user_text: str) -> Tuple[str, bool, Dict[str, Any]]:
     """Try compressing the embedded <prior_state> JSON inside the final user
     message. Returns (new_text, did_change)."""
     m = _PRIOR_STATE_BLOCK_RE.search(user_text)
     if not m:
-        return user_text, False
+        return user_text, False, {}
     try:
         prior = _json.loads(m.group(1))
     except Exception:
-        return user_text, False
-    slim = _compress_prior_state_json(prior)
+        return user_text, False, {}
+    slim, meta = _compress_prior_state_json_with_meta(prior)
     if slim == prior:
-        return user_text, False
+        return user_text, False, {}
     new_block = (
         "<prior_state>\n"
         + _json.dumps(slim, indent=2, ensure_ascii=False)
         + "\n</prior_state>"
     )
-    return user_text[: m.start()] + new_block + user_text[m.end():], True
+    return user_text[: m.start()] + new_block + user_text[m.end():], True, meta
 
 
 def _strip_assistant_engine_blocks(text: str) -> Tuple[str, bool]:
@@ -472,6 +645,8 @@ def enforce_context_budget(
             "context_budget_tokens": budget_tokens,
             "context_over_budget": False,
             "context_trimmed": False,
+            "compressed_prior_state": False,
+            "projected_registry_caps": {},
             "trim_reason": "",
             "estimated_tokens_removed": 0,
             "protected_state_items_count": 0,
@@ -480,6 +655,7 @@ def enforce_context_budget(
     msgs = [dict(m) for m in messages]
     initial_tokens = estimate_messages_tokens(msgs)
     diag_actions: List[str] = []
+    projection_meta: Dict[str, Any] = {}
 
     # Contiguous leading system prefix — never drop or reorder.
     leading_system = 0
@@ -496,12 +672,13 @@ def enforce_context_budget(
 
     # Step 1 — try compressing prior_state in the final user message
     if estimate_messages_tokens(msgs) > budget_tokens:
-        new_text, changed = _shrink_user_with_prior_state(
+        new_text, changed, shrink_meta = _shrink_user_with_prior_state(
             _last_user().get("content", "")
         )
         if changed:
             msgs[-1]["content"] = new_text
             diag_actions.append("compressed_prior_state")
+            projection_meta.update(shrink_meta)
 
     # Step 2 — strip engine blocks from older assistant messages
     if estimate_messages_tokens(msgs) > budget_tokens:
@@ -546,6 +723,8 @@ def enforce_context_budget(
         "context_budget_tokens": budget_tokens,
         "context_over_budget": initial_tokens > budget_tokens,
         "context_trimmed": bool(diag_actions),
+        "compressed_prior_state": "compressed_prior_state" in diag_actions,
+        "projected_registry_caps": projection_meta.get("projected_registry_caps") or {},
         "trim_reason": ",".join(diag_actions),
         "estimated_tokens_removed": max(0, initial_tokens - final_tokens),
         "protected_state_items_count": protected_count,
