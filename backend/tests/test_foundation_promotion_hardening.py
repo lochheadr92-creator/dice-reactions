@@ -174,3 +174,90 @@ def test_foundation_authority_memory_never_canonical_until_accepted(monkeypatch)
     # Only granting the acceptance constant flips it to canonical.
     monkeypatch.setattr(ai_config, "CANONICAL_MEMORY_RETRIEVAL_PROMPT_INJECTION_ACCEPTED", True)
     assert fp.foundation_authority()["memory"] == "canonical"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — per-turn authority diagnostic + Actor Resolution end-to-end routing
+# ---------------------------------------------------------------------------
+def test_foundation_turn_authority_all_off_is_legacy(monkeypatch):
+    base = _fresh_state()
+    _set_flags(monkeypatch, (False, False, False, False))
+    _, _, diag, _, _ = replayability.prepare_action_turn(copy.deepcopy(base), 2)
+    auth = diag["foundation_turn_authority"]
+    assert auth["actor"]["source"] == "legacy" and auth["actor"]["applied"] is False
+    assert auth["utility"]["source"] == "legacy" and auth["utility"]["applied"] is False
+    assert auth["flags"] == fp.promotion_flags()
+
+
+def _actor_proof_state():
+    """A real candidate-producing turn state (mirrors the ADR-024 proof fixture)."""
+    state, _ = replayability.init_new_story(
+        genre="noir", role="detective", tone="gritty", difficulty="standard",
+        scenario_id=None, custom_premise=None, custom_world_setup=None, run_seed=SEED,
+        npc_seed_records=[{"name": "Marlene Cho", "source_type": "seed_record", "source_slot": 0}],
+    )
+    state["pressure_graph"]["nodes"] = [
+        {"id": "pressure-resource-proof", "kind": "resource", "status": "active", "magnitude": 60, "trend": 1}
+    ]
+    npc_id = state["npc_agendas"]["active"][0]["npc_id"]
+    rolling = {
+        "scene": "dock warehouse",
+        "npcs": [{"npc_id": npc_id, "name": "Marlene Cho", "stance": "ally", "last_seen": "dock"}],
+        "relationship_vectors": [
+            {"npc_id": npc_id, "name": "Marlene Cho", "trust": 10, "loyalty": 30,
+             "fear": 0, "resentment": 12, "state": "neutral"}
+        ],
+        "faction_pressure": [{"name": "Syndicate", "ticks": {"suspicion": 0, "goodwill": 0}}],
+        "actor_stress": {npc_id: {"stress_level": 55, "capacity": 1.0}},
+    }
+    return state, rolling
+
+
+def test_actor_resolution_authoritative_veto_end_to_end(monkeypatch):
+    """Canonical Actor Resolution is authoritative over WHO acts in a real turn."""
+    state, rolling = _actor_proof_state()
+
+    # Legacy path (flag OFF) commits an NPC move for the seeded actor.
+    monkeypatch.setattr(ai_config, "ENABLE_CANONICAL_ACTOR_RESOLUTION", False)
+    _, _, off_diag, _, _ = replayability.prepare_action_turn(
+        copy.deepcopy(state), 2, rolling_state=copy.deepcopy(rolling)
+    )
+    assert off_diag.get("npc_move_receipt_emitted") is True
+    assert off_diag["foundation_turn_authority"]["actor"]["source"] == "legacy"
+
+    # Canonical ON with the acting actor forced non-acting: canonical vetoes the
+    # legacy move. Tier derivation is stubbed (separately tested); the real
+    # route_actor_move + turn wiring do the authoritative suppression.
+    monkeypatch.setattr(ai_config, "ENABLE_CANONICAL_ACTOR_RESOLUTION", True)
+    monkeypatch.setattr(
+        fp,
+        "compute_actor_resolution_prepared",
+        lambda snapshot: {"referenceable_registry": [{"display_name": "Marlene Cho", "tier": "dormant"}]},
+    )
+    _, _, on_diag, _, _ = replayability.prepare_action_turn(
+        copy.deepcopy(state), 2, rolling_state=copy.deepcopy(rolling)
+    )
+    actor = on_diag["foundation_turn_authority"]["actor"]
+    assert actor["enabled"] is True and actor["applied"] is True and actor["changed"] is True
+    assert actor["source"] == "canonical"
+    assert on_diag["actor_resolution_reason"] == "no_acting_candidate"
+    # Authoritative suppression: the vetoed legacy move is NOT committed.
+    assert not on_diag.get("npc_move_receipt_emitted")
+
+
+def test_actor_veto_turn_is_deterministic(monkeypatch):
+    state, rolling = _actor_proof_state()
+    monkeypatch.setattr(ai_config, "ENABLE_CANONICAL_ACTOR_RESOLUTION", True)
+    monkeypatch.setattr(
+        fp,
+        "compute_actor_resolution_prepared",
+        lambda snapshot: {"referenceable_registry": [{"display_name": "Marlene Cho", "tier": "dormant"}]},
+    )
+
+    def run():
+        _, _, d, _, _ = replayability.prepare_action_turn(
+            copy.deepcopy(state), 2, rolling_state=copy.deepcopy(rolling)
+        )
+        return d["foundation_turn_authority"]
+
+    assert run() == run()
