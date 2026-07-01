@@ -79,6 +79,19 @@ Practical backlog from confirmed repo gaps on the **`emergent`** branch. No spec
 
 ---
 
+### NW-FOUNDATION-PROMOTION-01: Foundation Completion Phase 2 — flag-gated promotion ✅ (infra)
+
+| Field | Detail |
+|-------|--------|
+| **Status** | Promotion infrastructure landed on `emergent`; all `ENABLE_CANONICAL_*` flags default OFF. OFF path byte-identical to pre-promotion behaviour |
+| **Resolution** | `foundation_promotion.py` (pure, fail-closed routing) + flags in `ai_config.py`; Stage 1 Actor Resolution veto in `replayability.py`; Stage 2 Gravity `npc_memory` prompt-projection ordering in `memory.py`; Stage 3 `ENABLE_CANONICAL_UTILITY` alias for the ADR-024 handoff; Stage 4 Memory Retrieval flag + diagnostics with prompt injection gated OFF |
+| **Safety** | Every helper returns legacy on flag-off / error / mapping gap; deterministic (no new RNG/I/O/LLM); persisted `rolling_state` untouched; context-budget count unchanged; canonical-vs-legacy diagnostics are dev/admin only |
+| **Verification** | Offline deterministic: 76-passed OFF baseline (foundation + integration + context budget) + new `test_foundation_promotion.py`. Live/LLM acceptance for any flag-ON default flip is separate and PENDING |
+| **Remaining blocker** | **Memory Retrieval authoritative prompt use** — blocked by `SEPARATE_SHADOW_ACCEPTANCE_REQUIRED` (`D_MEMORY_RETRIEVAL_SHADOW`); requires granting `CANONICAL_MEMORY_RETRIEVAL_PROMPT_INJECTION_ACCEPTED` after a separate shadow-acceptance pass |
+| **Docs** | `docs/foundation-promotion.md`; `current-state.md` promotion section (2026-07-02) |
+
+---
+
 ### NW-REPLAY-01: Session replayability_state + deterministic variation ✅
 
 | Field | Detail |

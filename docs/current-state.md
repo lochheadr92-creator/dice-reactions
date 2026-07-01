@@ -166,8 +166,8 @@ These appear in `memory/PRD.md` or design vocabulary but **have no implementing 
 
 | System | Status | Evidence |
 |--------|--------|----------|
-| Actor resolution / actor caps | **Local substitute present on `emergent`** (`npc_world_moves.resolve_actor_tier` tier/cadence eligibility); full PRD Ch 25 Actor Resolution not yet implemented | **Code:** `npc_world_moves.py` (tier/cadence) merged on `emergent` `c82c0af`; not the full canon module |
-| Gravity / retention governance (beyond context budget) | Planned — partial ad-hoc only | Only `enforce_context_budget` and `consolidate_rolling_state` exist |
+| Actor resolution / actor caps | **Canonical module present as shadow** — `actor_resolution.py` (tiers, ceilings, demotion grace, acting set) runs every turn via `foundation_integration`. Flag-promotable to authoritative via `ENABLE_CANONICAL_ACTOR_RESOLUTION` (default OFF). `npc_world_moves.resolve_actor_tier` remains the legacy fallback. Grace still uses the `turn × 60` proxy (`D_GRACE`). | **Code:** `actor_resolution.py`, `foundation_integration.py`, `foundation_promotion.py`; see `docs/foundation-promotion.md` |
+| Gravity / retention governance (beyond context budget) | **Canonical module present as shadow** — `gravity_governance.py` (retention score, bands, protected set) runs every turn via `foundation_integration`. Flag-promotable to authoritative over the `npc_memory` prompt projection via `ENABLE_CANONICAL_GRAVITY` (default OFF); persisted state untouched. Legacy `enforce_context_budget`/`consolidate_rolling_state` remain the fallback. | **Code:** `gravity_governance.py`, `foundation_promotion.py`, `memory.py`; see `docs/foundation-promotion.md` |
 | Formal event sourcing | **DEFERRED** — full contract unavailable beyond PRD summary; turn log only on `emergent` HEAD | Turns `insert_one`; session `rolling_state` overwritten; no rebuild. Recovery branch: **LOCAL SUBSTITUTE** — bounded receipts provide idempotency and causal pointers but not canonical reconstruction or durable complete event history |
 | Historical scoring equivalence | **N/A** — never existed in this repo | `git log -S` empty; no ranking subsystem |
 | NaN / infinity input protection for rankings | **N/A** — never existed in this repo | No ranking subsystem |
@@ -473,3 +473,61 @@ real LLM turns. Not run; requires a live stack.
 `_compress_prior_state_json_with_meta`, `enforce_context_budget`),
 `backend/server.py` (`_meta_into_debug`), `backend/tests/test_context_budget.py`,
 `backend/tests/foundation_acceptance/test_prompt_fingerprint.py`.
+
+
+## Foundation promotion — Phase 2 (2026-07-02)
+
+**Status: promotion infrastructure landed on `emergent`; all promotion flags
+default OFF. With every flag off, the turn path is byte-identical to
+pre-promotion behaviour.**
+
+The four canonical foundation subsystems (Actor Resolution, Gravity Governance,
+Utility AI, Memory Retrieval) already run every turn as a shadow evaluation via
+`foundation_integration.evaluate_foundation_turn` (called from
+`replayability.prepare_action_turn`). This increment adds a flag-gated, fail-closed
+**promotion layer** that lets each canonical subsystem become the authoritative
+decision path while the legacy implementation remains available as fallback.
+
+- **Flags (default OFF, `ai_config.py`):** `ENABLE_CANONICAL_ACTOR_RESOLUTION`,
+  `ENABLE_CANONICAL_GRAVITY`, `ENABLE_CANONICAL_UTILITY`,
+  `ENABLE_CANONICAL_MEMORY_RETRIEVAL`. Routing helpers live in
+  `foundation_promotion.py` (pure, deterministic, no I/O/LLM).
+- **Actor Resolution** (Stage 1): canonical veto + re-pick over the existing NPC
+  candidate set; unmapped actors fail open; legacy `resolve_actor_tier` fallback.
+- **Gravity Governance** (Stage 2): canonical retention ranks the `npc_memory`
+  prompt projection only; persisted `rolling_state` untouched (State Is Truth);
+  retained count unchanged (context budget preserved); legacy heuristic fallback.
+- **Utility AI** (Stage 3): `ENABLE_CANONICAL_UTILITY` is the canonical name for
+  the existing ADR-024 live handoff; legacy `ENABLE_UTILITY_AI_LIVE_SELECTION`
+  remains an accepted alias.
+- **Memory Retrieval** (Stage 4): **BLOCKED** for authoritative prompt use by
+  `SEPARATE_SHADOW_ACCEPTANCE_REQUIRED` (`D_MEMORY_RETRIEVAL_SHADOW`). Flag +
+  comparison diagnostics added; prompt injection stays gated OFF behind
+  `CANONICAL_MEMORY_RETRIEVAL_PROMPT_INJECTION_ACCEPTED = False`; retrieval keeps
+  running `shadow_mode=True`.
+- **Diagnostics:** `foundation_promotion_flags`, `memory_retrieval_promotion`
+  (with `memory_retrieval_blocker_code`), and per-stage legacy-vs-canonical
+  fields are recorded in dev/admin turn `debug` only — never player-visible.
+
+**What this increment proves (offline, deterministic):** consolidated offline run
+of `test_foundation_promotion.py` + the foundation unit suites
+(`test_actor_resolution/gravity_governance/memory_retrieval`) +
+`tests/foundation_acceptance/` + `test_foundation_integration.py` +
+`test_context_budget.py` + `test_living_cast_shadow.py` = **112 passed** with the
+OFF path byte-identical (the turn-path integration suites import the edited
+`replayability.py`/`foundation_integration.py`/`memory.py`). `test_foundation_promotion.py`
+runs **25/25** from a clean checkout and covers flags, promotion/fallback paths,
+determinism, divergence, rollback, budget stability, and the memory-retrieval
+leakage gate. (A stale-file artifact in this sandbox mount can make the single
+gravity `npc_memory` cap test read a pre-edit `memory.py`; it passes from a clean
+checkout — CI/production are unaffected.)
+
+**What this increment does NOT prove (PENDING):** live 20-turn endurance with
+any flag ON; real-LLM gameplay acceptance for flipping any flag to default ON;
+Memory Retrieval authoritative prompt use (blocked). See
+`docs/foundation-promotion.md`.
+
+**Evidence:** `backend/ai_config.py`, `backend/foundation_promotion.py`,
+`backend/replayability.py`, `backend/memory.py`,
+`backend/foundation_integration.py`,
+`backend/tests/test_foundation_promotion.py`, `docs/foundation-promotion.md`.
