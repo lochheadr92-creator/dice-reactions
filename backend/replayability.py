@@ -22,6 +22,7 @@ import arc_diversity as arc
 import ai_config
 import consequence_echoes as echoes
 import foundation_integration
+import foundation_promotion
 from foundation_snapshot import FoundationTurnSnapshot
 import living_cast_shadow
 import living_cast_provenance as provenance
@@ -455,6 +456,10 @@ def prepare_action_turn(
         run_seed, agendas_state, working_rolling, state, identity, turn_number
     )
     comparison: Optional[Dict[str, Any]] = None
+    # Stage 3 promotion: canonical Utility AI live handoff. Either the canonical
+    # flag or the legacy ENABLE_UTILITY_AI_LIVE_SELECTION alias engages it; the
+    # shadow comparison below always runs regardless of the flag.
+    utility_live = foundation_promotion.utility_live_enabled()
     try:
         selection_snapshot = FoundationTurnSnapshot.build(
             run_seed=run_seed,
@@ -470,14 +475,14 @@ def prepare_action_turn(
             _candidates,
             move,
             comparison,
-            enabled=ai_config.ENABLE_UTILITY_AI_LIVE_SELECTION,
+            enabled=utility_live,
             run_seed=run_seed,
             turn_number=turn_number,
         )
         diagnostics.update(
             _build_utility_ai_live_diagnostics(
                 comparison,
-                enabled=ai_config.ENABLE_UTILITY_AI_LIVE_SELECTION,
+                enabled=utility_live,
                 applied=utility_applied,
                 selected_move=move,
             )
@@ -485,19 +490,51 @@ def prepare_action_turn(
     except Exception as exc:
         # Failed or unauthorised handoff falls back to the existing heuristic.
         diagnostics["utility_ai_shadow_error"] = str(exc)[:200]
-        diagnostics["utility_ai_live_selection_enabled"] = (
-            ai_config.ENABLE_UTILITY_AI_LIVE_SELECTION
-        )
+        diagnostics["utility_ai_live_selection_enabled"] = utility_live
         diagnostics["utility_ai_live_selection_applied"] = False
         if isinstance(comparison, Mapping):
             diagnostics.update(
                 _build_utility_ai_live_diagnostics(
                     comparison,
-                    enabled=ai_config.ENABLE_UTILITY_AI_LIVE_SELECTION,
+                    enabled=utility_live,
                     applied=False,
                     selected_move=move,
                 )
             )
+    # Stage 1 promotion: canonical Actor Resolution is the authority over WHO
+    # acts this turn. Fail-closed — flag off or any error leaves the move
+    # untouched. A re-picked candidate is given a receipt exactly like
+    # select_npc_move so the commit path is unaffected.
+    if foundation_promotion.actor_resolution_enabled():
+        try:
+            actor_snapshot = FoundationTurnSnapshot.build(
+                run_seed=run_seed,
+                turn_sequence=turn_number,
+                rolling_state=working_rolling,
+                replayability_state=state,
+            )
+            actor_prepared = foundation_promotion.compute_actor_resolution_prepared(
+                actor_snapshot
+            )
+            routed_move, actor_diag = foundation_promotion.route_actor_move(
+                move, _candidates, actor_prepared
+            )
+            diagnostics.update(actor_diag)
+            if routed_move is not None and not routed_move.get("receipt_id"):
+                routed_move = dict(routed_move)
+                routed_move["receipt_id"] = world_moves.stable_receipt_id(
+                    run_seed,
+                    str(routed_move.get("npc_id") or ""),
+                    str(routed_move.get("agenda_id") or ""),
+                    str(routed_move.get("move_kind") or ""),
+                    turn_number,
+                    str(routed_move.get("target_id") or ""),
+                )
+                routed_move["turn"] = turn_number
+            move = routed_move
+        except Exception as exc:
+            diagnostics["actor_resolution_error"] = str(exc)[:200]
+
     if move:
         agenda = agendas.get_agenda_by_npc_id(agendas_state, str(move.get("npc_id") or ""))
         if agenda and agendas.get_agenda_by_agenda_id(agendas_state, str(move.get("agenda_id") or "")):

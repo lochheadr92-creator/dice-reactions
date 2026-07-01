@@ -21,6 +21,8 @@ import re as _re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+import ai_config
+
 # ---------------------------------------------------------------------------
 # Field policy
 # ---------------------------------------------------------------------------
@@ -475,6 +477,30 @@ def _cap_prompt_registry(
 ) -> Tuple[List[Any], Dict[str, Any]]:
     if len(items) <= cap:
         return list(items), {}
+
+    # Stage 2 promotion: canonical Gravity Governance retention ordering for the
+    # npc_memory prompt projection (flag-gated, default off). Persisted state is
+    # never touched and the retained count (cap) is unchanged, so State Is Truth
+    # and the context-budget contract hold. Off / any gap -> legacy heuristic.
+    if key == "npc_memory" and ai_config.ENABLE_CANONICAL_GRAVITY:
+        import foundation_promotion
+
+        order, _gravity_diag = foundation_promotion.order_npc_memory_by_gravity(items)
+        if order is not None:
+            selected_indices = sorted(order[:cap])
+            capped = [items[index] for index in selected_indices]
+            meta = {
+                "original": len(items),
+                "kept": len(capped),
+                "elided": max(0, len(items) - len(capped)),
+                "protected_kept": sum(
+                    1
+                    for index in selected_indices
+                    if _prompt_registry_item_protected(key, items[index])
+                ),
+                "ranker": "gravity_governance",
+            }
+            return capped, meta
 
     rows = []
     for index, item in enumerate(items):

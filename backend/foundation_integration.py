@@ -8,6 +8,7 @@ import copy
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 import actor_resolution
+import foundation_promotion
 import gravity_governance
 import memory_retrieval
 import utility_ai
@@ -66,12 +67,17 @@ def evaluate_foundation_turn(
         actor_resolution=actor_prepared,
     )
 
+    # Stage 4 promotion: canonical Memory Retrieval. Prompt injection stays
+    # BLOCKED pending SEPARATE_SHADOW_ACCEPTANCE (D_MEMORY_RETRIEVAL_SHADOW), so
+    # shadow_mode stays True and the prompt is unaffected; the canonical set is
+    # surfaced in diagnostics only. See docs/foundation-promotion.md.
+    memory_injection_allowed = foundation_promotion.memory_retrieval_prompt_injection_allowed()
     retrieval_prepared = memory_retrieval.evaluate_memory_retrieval(
         snapshot,
         actor_resolution=actor_prepared,
         gravity=gravity_prepared,
         rolling_state=rolling_state,
-        shadow_mode=True,
+        shadow_mode=not memory_injection_allowed,
         developer_mode=developer_mode,
     )
 
@@ -101,6 +107,11 @@ def evaluate_foundation_turn(
         "foundation_evaluated": True,
         "foundation_shadow_mode": retrieval_prepared.get("shadow_mode"),
         "foundation_prepared_projection": project_foundation_prepared(bundle),
+        "foundation_promotion_flags": foundation_promotion.promotion_flags(),
+        "foundation_authority": foundation_promotion.foundation_authority(),
+        "memory_retrieval_promotion": foundation_promotion.memory_retrieval_diagnostics(
+            retrieval_prepared
+        ),
     }
     return bundle, diag
 

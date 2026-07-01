@@ -75,6 +75,37 @@ ENABLE_UTILITY_AI_DIAGNOSTIC_LOGS: bool = (
     in ("1", "true", "yes", "on")
 )
 
+
+def _bool_env(name: str, default: str = "false") -> bool:
+    return os.environ.get(name, default).lower() in ("1", "true", "yes", "on")
+
+
+# ---------------------------------------------------------------------------
+# Foundation promotion flags (Phase 2 — Foundation Completion).
+#
+# Each flag promotes ONE canonical foundation subsystem from shadow evaluation
+# into the authoritative decision path. ALL DEFAULT OFF. With every flag off the
+# turn path is byte-identical to the pre-promotion behaviour and the canonical
+# systems keep running as shadow diagnostics only. Legacy implementations remain
+# available as the fallback whenever a flag is off or a canonical subsystem
+# raises (fail-closed). Flipping a flag on is gated by separate acceptance and is
+# only intended for comparison/acceptance runs — see docs/foundation-promotion.md.
+# ---------------------------------------------------------------------------
+ENABLE_CANONICAL_ACTOR_RESOLUTION: bool = _bool_env("ENABLE_CANONICAL_ACTOR_RESOLUTION")
+ENABLE_CANONICAL_GRAVITY: bool = _bool_env("ENABLE_CANONICAL_GRAVITY")
+# Canonical name for the ADR-024 live Utility AI handoff. Either this OR the
+# legacy ENABLE_UTILITY_AI_LIVE_SELECTION engages the authoritative winner; the
+# shadow comparison continues to run in every case.
+ENABLE_CANONICAL_UTILITY: bool = _bool_env("ENABLE_CANONICAL_UTILITY")
+ENABLE_CANONICAL_MEMORY_RETRIEVAL: bool = _bool_env("ENABLE_CANONICAL_MEMORY_RETRIEVAL")
+
+# Memory Retrieval prompt injection is BLOCKED pending SEPARATE_SHADOW_ACCEPTANCE
+# (foundation-canon-deltas D_MEMORY_RETRIEVAL_SHADOW). Even with the canonical
+# flag on, canonical retrieval is surfaced in diagnostics only and NEVER feeds
+# prompt construction until this acceptance constant is granted. Intentionally
+# NOT env-overridable: turning it on requires a code change plus acceptance.
+CANONICAL_MEMORY_RETRIEVAL_PROMPT_INJECTION_ACCEPTED: bool = False
+
 # Cost mode. "normal" (default) or "low". When low, prose is compressed
 # and max_tokens is reduced — causality / continuity preserved.
 COST_MODE: str = os.environ.get("COST_MODE", "normal").lower()
@@ -122,4 +153,12 @@ def get_runtime_config() -> dict:
         "cost_mode": COST_MODE,
         "low_cost_max_tokens": LOW_COST_MAX_TOKENS,
         "normal_max_tokens_default": NORMAL_MAX_TOKENS_DEFAULT,
+        "enable_utility_ai_live_selection": ENABLE_UTILITY_AI_LIVE_SELECTION,
+        "enable_canonical_actor_resolution": ENABLE_CANONICAL_ACTOR_RESOLUTION,
+        "enable_canonical_gravity": ENABLE_CANONICAL_GRAVITY,
+        "enable_canonical_utility": ENABLE_CANONICAL_UTILITY,
+        "enable_canonical_memory_retrieval": ENABLE_CANONICAL_MEMORY_RETRIEVAL,
+        "canonical_memory_retrieval_prompt_injection_accepted": (
+            CANONICAL_MEMORY_RETRIEVAL_PROMPT_INJECTION_ACCEPTED
+        ),
     }
