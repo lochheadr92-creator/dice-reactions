@@ -51,7 +51,7 @@
 | Room audit | Verified complete (deterministic) | `server.py` `_apply_room_audit` | P1-C ✅ | `story-engine.md` | Drift flag only; no auto-repair | — |
 | Curated scenarios | Implemented but unverified | `scenarios.py`, `new-story.tsx` | Indirect via `story/new` | `overview.md` | Only 3 presets | Live preset smoke test |
 | Advanced Builder extraction (Phase 4) | Verified complete (deterministic) | `frontend/src/newstory/AdvancedBuilder.tsx`, `frontend/app/new-story.tsx` | `frontend/__tests__/new-story.test.tsx` ✅ | `current-state.md` | Visual polish and full browser matrix not re-tested in this pass | — |
-| Context budget governor | Verified complete (deterministic) | `memory.enforce_context_budget` | `test_early_game_pacing.py` ✅ | `story-engine.md` | Heuristic token estimate | 15+ turn live budget stress |
+| Context budget governor | Verified complete (deterministic, offline); **live 20-turn verification pending** | `memory.enforce_context_budget`, `memory._compress_prior_state_json_with_meta` | `test_context_budget.py` ✅, `test_early_game_pacing.py` ✅ | `story-engine.md`, `current-state.md` | Heuristic token estimate; prompt-only `<prior_state>` projection caps (object_locations 48 / inventory_objects 36 / known_rooms 12 / npc_memory 16) apply to the prompt copy ONLY — persisted `rolling_state` untouched, causal-spine keys never capped | Run `test_live_20_turn_harness.py` against a live backend |
 | Scoring / rankings | N/A | — | — | — | Never existed in this repo | Do not backlog as lost feature |
 
 **Status definitions used:**

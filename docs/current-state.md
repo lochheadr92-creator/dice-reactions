@@ -115,7 +115,7 @@ Do **not** report 39.8%. The chapter matrix remains authoritative.
 | State supremacy guard (Health/Fatigue) | Implemented | Code + Tests (`test_custom_world_system.py` unit guards — live integration unverified) |
 | Object permanence guards | Implemented | Code + Tests (`verify_p0_object_permanence.py` ✅) |
 | Rolling memory consolidation | Implemented | Code + Tests (P0 scenarios ✅) |
-| Context budget governor | Implemented | Code |
+| Context budget governor | Implemented — prompt-only `<prior_state>` projection caps added (persisted state untouched); live 20-turn verification pending | Code (`memory.enforce_context_budget`, `memory._compress_prior_state_json_with_meta`) + Tests (`test_context_budget.py` ✅) |
 | NPC memory bounds | Implemented | Code + Tests (`verify_p1_immersion_integrity.py` ✅) |
 | Faction consequence tick | Implemented | Code + Tests (P1-D ✅) |
 | Room audit / known_rooms | Implemented | Code + Tests (P1-C ✅) |
@@ -418,3 +418,58 @@ non-live bundle 139 passed + 1 pre-existing unrelated failure
 run in this sandbox. Evidence: `decision-log.md` (ADR-022),
 `adr-022-stress-behaviour-bands.md`, `foundation-canon-deltas.md`,
 `failure-modes.md` (FM-27).
+
+
+## Prompt-only prior_state projection (2026-06-27)
+
+**Status: canonical on `emergent` @ `f168dd2`. Offline-verified; live 20-turn
+endurance verification PENDING.**
+
+The Context Budget Governor now caps high-cardinality `rolling_state` registries
+**only in the projected `<prior_state>` block inserted into the prompt** — never
+in persisted state. State is truth; the projection is output.
+
+- **Caps (prompt copy only):** `object_locations` 48, `inventory_objects` 36,
+  `known_rooms` 12, `npc_memory` 16 (`memory.PROMPT_REGISTRY_CAPS`). Capping
+  engages only when the assembled prompt is already over the active context
+  budget; it preferentially keeps the most important entries (active/carried/
+  worn/terminal objects, `current` rooms, major-severity NPC memories) and the
+  most-recent items.
+- **Persisted `rolling_state` is untouched.** `_compress_prior_state_json_with_meta`
+  operates on a parsed copy of the prompt's `<prior_state>` JSON only; object
+  permanence, room reconciliation, and NPC memory remain authoritative and keep
+  growing in storage.
+- **Causal-spine keys are never capped:** `active_consequences`,
+  `delayed_consequences`, `active_threats` / `unresolved_threats`, `promises`,
+  `clues`, `active_pressures`, `relationship_vectors`, `relationship_threads`,
+  `objectives` / `current_objective` are carried in full.
+- **Debug-only telemetry:** `compressed_prior_state` (bool) and
+  `projected_registry_caps` (`{key: {original, kept, elided, protected_kept}}`)
+  are surfaced in the dev/admin turn `debug` payload via `_meta_into_debug`; they
+  never appear in player-facing prompt text, narrative, choices, player state, or
+  player/session exports.
+- **Prompt fingerprint guard modernised:** the former
+  `tests/foundation_acceptance/test_prompt_fingerprint.py` asserted
+  `git diff 9da1ae2..HEAD -- backend/server.py` produced no output — a stale
+  tripwire that failed on any legitimate `server.py` edit. It now asserts the
+  actual prompt seam (system prompt + `build_immutable_truth_block` +
+  `build_relationship_block` + `<prior_state>` + `enforce_context_budget`) and
+  that the debug-only budget fields never enter `_build_messages`. This resolves
+  the single pre-existing failure noted in the Chapter 14 P2 section above.
+
+**What this increment proves (offline, deterministic — reported at `f168dd2`):**
+`backend/tests/test_context_budget.py` passes (caps applied prompt-only, persisted
+counts unchanged, causal-spine preserved, determinism); `test_prompt_fingerprint.py`
+passes; full offline suite **749 passed, 36 deselected, 0 failed**.
+
+**What this increment does NOT prove (PENDING):** live 20-turn endurance
+behaviour against a running backend (`tests/test_live_20_turn_harness.py`,
+`@pytest.mark.live`) — confirming `compressed_prior_state` /
+`projected_registry_caps` in live debug output, `estimated_prompt_tokens <=
+context_budget_tokens` on every turn, and persisted > projected counts across
+real LLM turns. Not run; requires a live stack.
+
+**Evidence:** `backend/memory.py` (`PROMPT_REGISTRY_CAPS`, `_cap_prompt_registry`,
+`_compress_prior_state_json_with_meta`, `enforce_context_budget`),
+`backend/server.py` (`_meta_into_debug`), `backend/tests/test_context_budget.py`,
+`backend/tests/foundation_acceptance/test_prompt_fingerprint.py`.
