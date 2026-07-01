@@ -385,6 +385,48 @@ def init_new_story(
     return state, directives
 
 
+def _summarize_turn_authority(diagnostics: Mapping[str, Any]) -> Dict[str, Any]:
+    """Compact per-turn authority summary — developer diagnostics only.
+
+    Consolidates the actor/utility routing diagnostics already recorded this turn
+    into a single authority-source view for replay inspection. Pure: reads only
+    existing diagnostic values, never gameplay state and never the prompt. The
+    surrounding turn.debug dict is developer-gated and excluded from player turns
+    (see player_api.PLAYER_TURN_FIELDS), so this never leaks into the prompt.
+    """
+    actor_applied = bool(diagnostics.get("actor_resolution_applied"))
+    actor_changed = bool(diagnostics.get("actor_resolution_changed"))
+    memory = diagnostics.get("memory_retrieval_promotion") or {}
+    return {
+        "actor": {
+            "enabled": bool(diagnostics.get("actor_resolution_enabled")),
+            "applied": actor_applied,
+            "changed": actor_changed,
+            "source": (
+                "canonical"
+                if actor_changed
+                else "canonical_confirmed"
+                if actor_applied
+                else "legacy"
+            ),
+            "reason": diagnostics.get("actor_resolution_reason"),
+        },
+        "utility": {
+            "enabled": bool(diagnostics.get("utility_ai_live_selection_enabled")),
+            "applied": bool(diagnostics.get("utility_ai_live_selection_applied")),
+            "source": (
+                "canonical"
+                if diagnostics.get("utility_ai_live_selection_applied")
+                else "legacy"
+            ),
+            "winner_source": diagnostics.get("utility_ai_selected_live_winner_source"),
+            "diverged": bool(diagnostics.get("utility_ai_shadow_divergence")),
+        },
+        "memory": memory.get("memory_retrieval_blocker_code") or "shadow",
+        "flags": diagnostics.get("foundation_promotion_flags"),
+    }
+
+
 def prepare_action_turn(
     replayability_state: Optional[Mapping[str, Any]],
     turn_number: int,
@@ -668,6 +710,9 @@ def prepare_action_turn(
         state = foundation_integration.apply_prepared_to_replayability_state(state, foundation_bundle)
     except Exception as exc:
         diagnostics["foundation_eval_error"] = str(exc)[:200]
+
+    # Developer-only consolidated authority view (dev debug; never player-visible).
+    diagnostics["foundation_turn_authority"] = _summarize_turn_authority(diagnostics)
 
     return state, directives, diagnostics, threshold_fired, working_rolling
 
