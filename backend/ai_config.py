@@ -106,6 +106,13 @@ ENABLE_CANONICAL_MEMORY_RETRIEVAL: bool = _bool_env("ENABLE_CANONICAL_MEMORY_RET
 # NOT env-overridable: turning it on requires a code change plus acceptance.
 CANONICAL_MEMORY_RETRIEVAL_PROMPT_INJECTION_ACCEPTED: bool = False
 
+# Chapter 33 Phase 1 — NPC Lifecycle (aging/mortality/death). Default OFF. With
+# the flag OFF no live aging or mortality is applied and gameplay is unchanged;
+# the pure lifecycle functions in backend/npc_lifecycle.py remain available for
+# tests. Live turn-path wiring is deferred pending an authoritative simulation
+# clock (see docs/ch33-lifecycle-phase1.md).
+ENABLE_NPC_LIFECYCLE: bool = _bool_env("ENABLE_NPC_LIFECYCLE")
+
 # Cost mode. "normal" (default) or "low". When low, prose is compressed
 # and max_tokens is reduced — causality / continuity preserved.
 COST_MODE: str = os.environ.get("COST_MODE", "normal").lower()
@@ -161,4 +168,5 @@ def get_runtime_config() -> dict:
         "canonical_memory_retrieval_prompt_injection_accepted": (
             CANONICAL_MEMORY_RETRIEVAL_PROMPT_INJECTION_ACCEPTED
         ),
+        "enable_npc_lifecycle": ENABLE_NPC_LIFECYCLE,
     }

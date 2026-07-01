@@ -531,3 +531,26 @@ Memory Retrieval authoritative prompt use (blocked). See
 `backend/replayability.py`, `backend/memory.py`,
 `backend/foundation_integration.py`,
 `backend/tests/test_foundation_promotion.py`, `docs/foundation-promotion.md`.
+
+---
+
+## Chapter 33 — NPC Lifecycle, Phase 1 (Lifecycle Core) — 2026-07-02
+
+**Code + Tests.** Deterministic lifecycle core landed as a new module
+`backend/npc_lifecycle.py` (aging from explicit simulation days, Appendix A.7
+life stages, seeded natural mortality, one idempotent death transition for
+natural + unnatural death emitting structured events, tier-aware processing,
+deterministic migration/defaulting). Feature flag `ENABLE_NPC_LIFECYCLE`
+**default OFF**; with it off gameplay is byte-identical (nothing calls the
+module). 42 focused tests pass; affected foundation/gateway/death-registry
+regressions green.
+
+**Live integration status:** the `evaluate_lifecycle_tick` seam is **not wired
+into the turn path** — no authoritative simulation clock exists yet (cf.
+`D_GRACE — SIMULATION_TIME`). Live aging is a later-phase dependency; Phase 1
+never advances lifecycle from ordinary turns. Births, inheritance, grudges,
+succession, and burn-in turnover remain deferred. Chapter 33 is **not** complete.
+
+**Evidence:** `backend/npc_lifecycle.py`, `backend/ai_config.py`
+(`ENABLE_NPC_LIFECYCLE`), `backend/tests/test_npc_lifecycle.py`,
+`docs/ch33-lifecycle-phase1.md`.
