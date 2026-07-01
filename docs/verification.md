@@ -72,7 +72,7 @@ cd backend
 #   $env:DB_NAME="dice_reactions_ci"
 #   $env:ADMIN_API_KEY="test-admin-key"
 python -m pytest -m "not live" -q
-# 394 passed, 34 deselected (live)
+# 749 passed, 36 deselected (live) — 2026-06-27 @ f168dd2
 ```
 
 | File | What it covers |
@@ -124,10 +124,13 @@ yarn lint
 | `test_story_engine.py` | pytest | **Live only** — `@pytest.mark.live` (24 tests) |
 | `test_gateway_live_probe.py` | pytest | **Live only** — `@pytest.mark.live` (5 tests) |
 | `test_relationship_calculus_live.py` | pytest | **Live only** — `@pytest.mark.live` (2 tests) |
+| `test_live_20_turn_harness.py` | pytest | **Live only** — `@pytest.mark.live` (1 test, deterministic 20-turn endurance) |
 | `qa_live_20turn_hostile.py` | script | **Unverified** — live 20-turn stress |
 | `qa_live_20turn_full_stack.py` | script | **Unverified** — live full-stack stress |
 | `qa_live_20turn_p2_stack.py` | script | **Unverified** — live P2 stress |
 | `verify_p2_consequences_rumours.py` | pytest | ✅ Passed 2026-06-20 (offline, delayed consequences + rumour propagation) |
+| `test_context_budget.py` | pytest | ✅ Passed 2026-06-27 (offline, prompt-only `<prior_state>` projection caps; persisted state untouched) |
+| `foundation_acceptance/test_prompt_fingerprint.py` | pytest | ✅ Passed 2026-06-27 (offline, prompt-seam guard — modernised from a stale `git diff` tripwire) |
 
 `conftest.py` loads `backend/.env` and `frontend/.env` for `EXPO_PUBLIC_BACKEND_URL`.
 
@@ -154,9 +157,19 @@ cd backend
 python -m pytest tests/test_live_golden_path.py -m live -q -s
 ```
 
+20-turn endurance harness (deterministic fixed action script; emits a JSON + human telemetry report — run with `-s` to see it). Requires the admin raw export, so `ADMIN_API_KEY` must match the backend and its debug panel must be enabled:
+
+```bash
+cd backend
+export EXPO_PUBLIC_BACKEND_URL=http://localhost:8000
+export ADMIN_API_KEY=<same value configured on the backend>
+python -m pytest tests/test_live_20_turn_harness.py -m live -s
+```
+
 | Module | Count | Requires |
 |--------|-------|----------|
 | `test_live_golden_path.py` | 1 | Running FastAPI + MongoDB + OpenRouter + admin key |
+| `test_live_20_turn_harness.py` | 1 | Running FastAPI + MongoDB + OpenRouter + admin key (debug panel for raw export) |
 | `test_story_engine.py` | 24 | Running FastAPI + OpenRouter |
 | `test_custom_world_system.py` (live only) | 4 | Running FastAPI + OpenRouter |
 | `test_gateway_live_probe.py` | 5 | Running FastAPI + OpenRouter |
@@ -206,6 +219,8 @@ Security coverage: `test_security.py` — ownership (10), admin auth (5), export
 - New Chronicle frontend: Quick Start, Guided Start, Advanced Builder extraction, duplicate-submit, payload mapping, mode isolation, large font scale
 - Frontend API errors: typed `ApiError`, 409 friendly copy, legacy 402/429/5xx mappings
 - Play-screen action conflict: 409 preserves input, read-only sync, turn merge dedupe, bounded polling, control recovery
+- Prompt-only `<prior_state>` projection caps under budget pressure: high-cardinality registries capped in the prompt copy only, persisted `rolling_state` untouched, causal-spine keys never capped, `compressed_prior_state` / `projected_registry_caps` debug telemetry, determinism (`test_context_budget.py`, 2026-06-27)
+- Prompt construction seam guard: system prompt + truth/relationship blocks + `<prior_state>` + `enforce_context_budget` present, debug-only budget fields kept out of player-facing prompt text (`foundation_acceptance/test_prompt_fingerprint.py`, 2026-06-27)
 
 ## What CI does not prove
 
@@ -218,6 +233,7 @@ Security coverage: `test_security.py` — ownership (10), admin auth (5), export
 - Full `test_story_engine.py` API contract against real LLM output
 - Automatic secret reveal timing, NPC evidence discovery, or semantic confession inference
 - Natural provider prose quality when reacting to a confession
+- **PENDING:** live 20-turn prompt-budget projection behaviour against a real backend (`test_live_20_turn_harness.py`, `@pytest.mark.live`) — `compressed_prior_state` / `projected_registry_caps` in live debug, `estimated_prompt_tokens <= context_budget_tokens` every turn, persisted > projected counts across real LLM turns
 
 ## Observations / regressions
 

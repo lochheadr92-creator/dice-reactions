@@ -218,68 +218,28 @@ def update_relationship_calculus(
 ) -> List[str]:
     """Recompute every NPC→player relationship vector for this turn.
 
-    Reads the AUTHORITATIVE prior vectors from ``prior_rolling`` (so an LLM that
-    invents vectors cannot poison them), applies decay + detected events, and
-    writes the result into ``merged_rolling['relationship_vectors']``.
+    Phase 1 (Ch 29 / Ch 31) — deterministic event authority. Relationship
+    mutations are driven ONLY by the player's declared action, resolved into
+    structured events; generated narrative (``parsed``) is never read here, so
+    prose can never mutate a vector. Authoritative prior vectors are read from
+    ``prior_rolling`` (an LLM that invents vectors cannot poison them), untouched
+    relationships decay, and the result is written into
+    ``merged_rolling['relationship_vectors']``.
+
+    Delegates to the single authoritative mutation path,
+    ``relationship_provenance.update_from_player_action``. ``parsed`` is retained
+    for backwards-compatible call sites but intentionally ignored.
     """
-    if not isinstance(merged_rolling, dict):
-        return []
+    # Local import avoids a module-load circular import: relationship_provenance
+    # imports this module for its shared primitives.
+    import relationship_provenance as _rp
 
-    deceased = {str(d).strip().lower() for d in (merged_rolling.get("deceased") or [])}
-    text = f"{player_action or ''}\n{getattr(parsed, 'narrative', '') or ''}"
-
-    # Authoritative prior vectors keyed by lowercased name.
-    prior_vectors: Dict[str, Dict[str, Any]] = {}
-    src = prior_rolling.get("relationship_vectors") if isinstance(prior_rolling, dict) else None
-    for row in src or []:
-        if isinstance(row, dict) and row.get("name"):
-            prior_vectors[str(row["name"]).strip().lower()] = dict(row)
-
-    names = _candidate_names(prior_rolling, merged_rolling)
-    # Keep any prior-tracked NPC even if absent this turn (so they keep decaying).
-    for key in prior_vectors:
-        if key not in {n.lower() for n in names}:
-            names.append(prior_vectors[key].get("name", key))
-
-    out: List[Dict[str, Any]] = []
-    adjustments: List[str] = []
-
-    for name in names:
-        key = name.strip().lower()
-        if key in deceased:
-            continue
-        vec = prior_vectors.get(key) or _new_vector(name, current_turn)
-        # normalise shape
-        for d in DIMENSIONS:
-            vec[d] = _clamp(d, vec.get(d, 0))
-        vec.setdefault("bond", "neutral")
-        identity = vec.get("bond") == "identity"
-
-        events = _detect_events(text, _re.escape(name))
-
-        if events:
-            for ev in events:
-                for d, delta in EVENT_DELTAS[ev].items():
-                    vec[d] = _clamp(d, vec[d] + delta)
-            vec["last_turn"] = current_turn
-            adjustments.append(f"{name}:{'+'.join(events)}")
-        else:
-            # Neglect decay toward neutral.
-            factor = 0.1 if identity else 1.0
-            for d in DIMENSIONS:
-                vec[d] = _clamp(d, vec[d] * (1 - _DECAY[d] * factor))
-
-        vec["state"] = _derive_state(vec)
-        out.append(vec)
-
-    merged_rolling["relationship_vectors"] = out
-
-    # Assert coarse stance from strong relationship signals (engine writes truth).
-    _sync_stance(merged_rolling, out)
-
-    if adjustments:
-        return ["rel:" + " | ".join(adjustments[:8])]
-    return []
+    return _rp.update_from_player_action(
+        prior_rolling,
+        merged_rolling,
+        player_action,
+        current_turn,
+    )
 
 
 def _sync_stance(merged_rolling: Dict[str, Any], vectors: List[Dict[str, Any]]) -> None:
