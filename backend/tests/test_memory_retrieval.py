@@ -92,3 +92,39 @@ def test_concealed_secret_not_retrieved():
         rolling_state=rolling,
     )
     assert prepared["selected_memory_ids"] == []
+
+
+def test_developer_mode_cannot_disable_shadow_gate():
+    # Regression (source-of-truth): the prompt-injection safety gate is governed
+    # solely by shadow_mode. A diagnostics-only flag (developer_mode) must NEVER
+    # weaken it — otherwise dev mode could report the block as lifted (fail-open).
+    rolling = {
+        "npc_memory": [
+            {
+                "name": "Guard",
+                "remembers": [
+                    {"summary": "attack", "since_turn": 1, "weight": "major", "context": {"location": "gate"}}
+                ],
+            }
+        ],
+        "npcs": [{"name": "Guard", "npc_id": "g1", "stance": "ally"}],
+        "scene": "gate",
+    }
+    snapshot = FoundationTurnSnapshot.build(
+        run_seed="seed",
+        turn_sequence=5,
+        rolling_state=rolling,
+        replayability_state={"run_seed": "seed", "pressure_graph": {"nodes": []}},
+    )
+    actor_resolution = {"tiers_by_actor_id": {"g1": "hero"}, "acting_actor_ids": ["g1"]}
+    prepared = memory_retrieval.evaluate_memory_retrieval(
+        snapshot,
+        actor_resolution=actor_resolution,
+        gravity={},
+        rolling_state=rolling,
+        shadow_mode=True,
+        developer_mode=True,  # must NOT flip the gate
+    )
+    assert prepared["shadow_mode"] is True
+    for trace in prepared["retrieval_traces"]:
+        assert trace["shadow_mode"] is True

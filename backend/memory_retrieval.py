@@ -168,7 +168,14 @@ def evaluate_memory_retrieval(
     """
     Select bounded retrieval set. Shadow mode leaves prompt path unchanged.
     """
-    effective_shadow = shadow_mode and not developer_mode
+    # The prompt-injection safety gate is governed SOLELY by ``shadow_mode`` (the
+    # caller/seam derives it from the acceptance gate, which is blocked by
+    # default). ``developer_mode`` is a diagnostics-verbosity flag and must NEVER
+    # weaken this gate: coupling them let a dev-only flag silently report the
+    # block as lifted (fail-open), contradicting the D_MEMORY_RETRIEVAL_SHADOW
+    # invariant. Retrieval data is present in the output regardless, so devs lose
+    # nothing. Fail-closed: shadow stays on unless injection is truly accepted.
+    effective_shadow = bool(shadow_mode)
     tiers = actor_resolution.get("tiers_by_actor_id") or {}
     traces: List[Dict[str, Any]] = []
     all_selected_ids: List[str] = []
