@@ -9,6 +9,7 @@ import logging
 import uuid
 from pathlib import Path
 from pydantic import BaseModel, Field, conint, confloat
+from pymongo.errors import DuplicateKeyError
 from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, timezone
 
@@ -124,7 +125,7 @@ HARD OUTPUT VALIDATION (read this first)
 ============================
 Every turn MUST satisfy ALL of the following or the response is invalid:
   1. Exactly ONE <rolling_state> block FIRST. It must contain one complete valid JSON object, then close with </rolling_state> before any prose.
-  2. Exactly ONE <narrative> block containing 2–4 short paragraphs. Combined narrative text target 750-900 characters; hard max 1200 after formatting.
+  2. Exactly ONE <narrative> block of a few short paragraphs (paragraph count is a style preference — favour concise prose; more paragraphs are fine when the scene needs them). Combined narrative text target 750-900 characters; hard max 1200 after formatting.
   3. Exactly ONE <choices> block containing 4 to 6 choices, each on its own line, labelled exactly A. B. C. D. in order (E. F. optional).
   4. Choices must cover meaningfully different intents — include at least one CAUTIOUS option, one DIRECT/RISKY option, one INVESTIGATIVE option, and one SOCIAL/COMMUNICATION option where the scene supports it.
   5. NO `Roll:` / `Modifiers:` / `Final:` / `Active systems:` / `Delayed trigger:` / `Latent trigger:` / `Scale:` lines anywhere outside the <debug> block.
@@ -421,9 +422,9 @@ ANTI-STAGNATION + CHOICE QUALITY:
 ============================
 PARAGRAPH PRESERVATION RULE
 ============================
-Every turn MUST contain 2–4 SHORT paragraphs of immersive prose before Choices. Target 750-900 characters total; hard max 1200 after formatting.
+Every turn MUST contain several SHORT paragraphs of immersive prose before Choices. Target 750-900 characters total; hard max 1200 after formatting.
 Each paragraph must include action progression, sensory detail, consequence or reaction, and forward pressure.
-Never collapse into one dense block. Never degrade into bullet narration. A blank line starts a new paragraph, so the narrative must contain 2-4 blank-line-separated blocks and NEVER more than 4. If you have extra detail, merge it into an existing paragraph instead of adding a 5th.
+Never collapse into one dense block. Never degrade into bullet narration. A blank line starts a new paragraph. Paragraph count is a style preference, not a limit — favour tight, concentrated prose and stay within the character target rather than padding, but valid prose is never rejected merely for having more paragraphs.
 
 ============================
 CHOICE RANDOMISATION RULE
@@ -450,7 +451,7 @@ If space is tight, keep scene, character, objectives, unresolved, injuries, inve
 </rolling_state>
 
 <narrative>
-(2-4 short paragraphs of immersive prose, separated by blank lines. Target 750-900 characters total, hard max 1200 after formatting. Grounded sensory detail. No mechanics. No "What do you do?")
+(a few short paragraphs of immersive prose, separated by blank lines — favour concise prose within the character target; more paragraphs are acceptable when the scene needs them. Target 750-900 characters total, hard max 1200 after formatting. Grounded sensory detail. No mechanics. No "What do you do?")
 </narrative>
 
 <choices>
@@ -506,8 +507,8 @@ On subsequent turns the user message will start with a <prior_state> block conta
 
 MODE:
 Every user message includes [MODE: basic] or [MODE: advanced]. This is also engine-only and must never be referenced in prose.
-- basic: 4 choices, 2-3 short paragraphs, simpler rolling_state update (you may omit empty optional arrays), no nested NPC structures. The anti-loop fields (`topic_ledger`, `recent_choice_signatures`) MUST still be maintained when touched. The player experience is the SAME — only the simulation depth changes.
-- advanced: 4-6 choices, 2-4 short paragraphs, bounded rolling_state update, deeper NPC/faction simulation, longer memory persistence, stronger consequence propagation. STILL nothing about the engine is exposed.
+- basic: 4 choices, a few short paragraphs, simpler rolling_state update (you may omit empty optional arrays), no nested NPC structures. The anti-loop fields (`topic_ledger`, `recent_choice_signatures`) MUST still be maintained when touched. The player experience is the SAME — only the simulation depth changes.
+- advanced: 4-6 choices, a few short paragraphs, bounded rolling_state update, deeper NPC/faction simulation, longer memory persistence, stronger consequence propagation. STILL nothing about the engine is exposed.
 
 INVENTORY COMMAND:
 If the player asks to check inventory/gear/pack/pockets/weapons/supplies, still output all required sections. The narrative paragraphs should reflect the act of checking (a moment of pause, tactile detail) and the ledger must be fully populated.
@@ -529,6 +530,9 @@ class NewStoryRequest(BaseModel):
     mode: Optional[str] = None  # "basic" | "advanced"
     scenario_id: Optional[str] = None
     custom_world_setup: Optional[Dict[str, Any]] = None
+    # Client-generated idempotency key so a creation retry after a failed/lost
+    # first attempt cannot create a duplicate completed session. Optional.
+    creation_request_id: Optional[str] = Field(default=None, max_length=128)
 
 class ActionRequest(BaseModel):
     session_id: str
@@ -578,6 +582,9 @@ class SessionRecord(BaseModel):
     rolling_state_updated_at: Optional[datetime] = None
     mode: str = DEFAULT_MODE
     scenario_id: Optional[str] = None
+    # Client idempotency key for safe creation retry (engine-only; excluded from
+    # all player-facing payloads by the player_api allowlists).
+    creation_request_id: Optional[str] = None
     # ---- AI routing (per-session lock) ----
     active_model: Optional[str] = None
     fallback_chain: Optional[List[str]] = None
@@ -2216,7 +2223,6 @@ async def _generate_turn(
 # Output validation + single-shot retry
 # ----------------------------------------------------------------------
 MAX_NARRATION_CHARS = 1200
-MAX_PARAGRAPHS = 4
 MIN_CHOICES = 4
 MAX_CHOICES = 6
 REQUIRED_CHOICE_LABELS = {"A", "B", "C", "D"}
@@ -2384,11 +2390,12 @@ def _validate_parsed(
 
     paragraphs = parsed.paragraphs or []
 
-    # 2. Paragraph count cap
+    # 2. Narrative must be present. Paragraph COUNT is a style preference, not a
+    #    validity rule: narration is never rejected merely for containing five or
+    #    more paragraphs. System-protective length stays enforced by the total-
+    #    character cap below and by model output-token / context-budget limits.
     if len(paragraphs) == 0:
         return False, "no narrative paragraphs"
-    if len(paragraphs) > MAX_PARAGRAPHS:
-        return False, f"narration has {len(paragraphs)} paragraphs (max {MAX_PARAGRAPHS})"
 
     # 3. Total narration length cap.
     total_chars = sum(len(p) for p in paragraphs)
@@ -2443,7 +2450,7 @@ _RETRY_INSTRUCTION = (
     "[VALIDATION_RETRY: {reason}]\n"
     "Rewrite the previous response in valid player-facing format with "
     "<rolling_state> FIRST as one complete closed valid JSON object, then "
-    "2–4 short paragraphs (a blank line starts a new paragraph; use at most 4, never more — merge any extra detail into an existing paragraph) under 800 characters total (never over 1200 after formatting) and 4–6 A–F choices. "
+    "a few short paragraphs (a blank line starts a new paragraph; keep prose concise — paragraph count is a style preference, not a limit) under 800 characters total (never over 1200 after formatting) and 4–6 A–F choices. "
     "Do not reproduce the full prior_state; emit only a bounded continuity update. "
     "Every choice must be on its own line beginning with the letter and a period "
     "(A. B. C. D. and optionally E. F.). "
@@ -2815,6 +2822,16 @@ async def _persist_model_lock(
         await db.sessions.update_one({"id": session_id}, ops)
 
 
+async def ensure_story_creation_idempotency_indexes(db) -> None:
+    """Prevent duplicate in-flight/completed creations for one device request key."""
+    await db.sessions.create_index(
+        [("device_id", 1), ("creation_request_id", 1)],
+        unique=True,
+        name="sessions_device_creation_request_unique",
+        partialFilterExpression={"creation_request_id": {"$type": "string"}},
+    )
+
+
 @api_router.get("/")
 async def root():
     return {"message": "Dice Reaction Story Engine v3.3"}
@@ -2956,8 +2973,49 @@ async def admin_list_models(_: None = Depends(require_admin)):
 
 
 # -------- Story flow --------------------------------------------------------
+_CREATION_IN_PROGRESS_DETAIL = "Story creation already in progress"
+
+
+def _normalize_creation_request_id(value: Optional[str]) -> Optional[str]:
+    text = (value or "").strip()
+    return text or None
+
+
+async def _build_existing_creation_response(req: NewStoryRequest) -> Optional[Dict[str, Any]]:
+    """Return an existing completed creation for a client idempotency key."""
+    creation_request_id = _normalize_creation_request_id(req.creation_request_id)
+    if not creation_request_id:
+        return None
+    session_doc = await db.sessions.find_one(
+        {
+            "device_id": req.device_id,
+            "creation_request_id": creation_request_id,
+        },
+        {"_id": 0},
+    )
+    if not session_doc:
+        return None
+    if int(session_doc.get("turn_count") or 0) < 1:
+        raise HTTPException(status_code=409, detail=_CREATION_IN_PROGRESS_DETAIL)
+    turn_doc = await db.turns.find_one(
+        {"session_id": session_doc["id"], "turn_number": 1},
+        {"_id": 0},
+    )
+    if not turn_doc:
+        raise HTTPException(status_code=409, detail=_CREATION_IN_PROGRESS_DETAIL)
+    return {
+        "session_id": session_doc["id"],
+        "turn": build_player_turn(turn_doc),
+        "session": build_new_story_session_payload(session_doc),
+    }
+
+
 @api_router.post("/story/new")
 async def new_story(req: NewStoryRequest, request: Request):
+    existing = await _build_existing_creation_response(req)
+    if existing:
+        return existing
+
     client_ip = resolve_client_ip(request)
     consumed_buckets = await check_story_creation_limits(db, client_ip, req.device_id)
     acquired_slot = False
@@ -3169,6 +3227,7 @@ async def _create_new_story(req: NewStoryRequest):
         title=title,
         mode=effective_mode,
         scenario_id=req.scenario_id,
+        creation_request_id=_normalize_creation_request_id(req.creation_request_id),
         replayability_state=replayability_state,
         # ---- session-locked AI routing snapshot ----
         active_model=settings.get("model") or DEFAULT_MODEL,
@@ -3232,7 +3291,13 @@ async def _create_new_story(req: NewStoryRequest):
         + "."
     )
 
-    await db.sessions.insert_one(session.model_dump())
+    try:
+        await db.sessions.insert_one(session.model_dump())
+    except DuplicateKeyError:
+        existing = await _build_existing_creation_response(req)
+        if existing:
+            return existing
+        raise HTTPException(status_code=409, detail=_CREATION_IN_PROGRESS_DETAIL)
 
     try:
         parsed, raw, meta = await _generate_validated_turn(
@@ -3723,6 +3788,7 @@ logger = logging.getLogger(__name__)
 async def startup_rate_limit_indexes():
     await ensure_rate_limit_indexes(db)
     await ensure_action_concurrency_indexes(db)
+    await ensure_story_creation_idempotency_indexes(db)
 
 
 @app.on_event("shutdown")

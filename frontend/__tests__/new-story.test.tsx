@@ -213,6 +213,7 @@ describe("NewStoryScreen Quick Start", () => {
         difficulty: "standard",
         debug_mode: false,
         mode: "advanced",
+        creation_request_id: expect.stringMatching(/^story-create:/),
         custom_world_setup: {
           want: "justice",
           fear: "failure",
@@ -248,6 +249,7 @@ describe("NewStoryScreen Quick Start", () => {
     await waitFor(() => {
       expect(screen.getByTestId("new-story-error-banner")).toBeTruthy();
     });
+    const firstCreationRequestId = mockNewStory.mock.calls[0][0].creation_request_id;
     expect(screen.getByTestId("quick-start-review-value-world").props.children).toBe("Fantasy");
     expect(String(screen.getByTestId("new-story-error-banner").props.children)).not.toContain("backend trace");
     expect(String(screen.getByTestId("new-story-error-banner").props.children)).not.toContain("OpenAI");
@@ -257,6 +259,7 @@ describe("NewStoryScreen Quick Start", () => {
       expect(mockReplace).toHaveBeenCalledWith("/play/session-retry");
     });
     expect(mockNewStory).toHaveBeenCalledTimes(2);
+    expect(mockNewStory.mock.calls[1][0].creation_request_id).toBe(firstCreationRequestId);
   });
 
   it("shows no admin controls, no secret fields, and no raw rolling state", async () => {
@@ -307,6 +310,7 @@ describe("NewStoryScreen Quick Start", () => {
           role: "investigator",
           scenario_id: "modern-mystery",
           mode: "advanced",
+          creation_request_id: expect.stringMatching(/^story-create:/),
         })
       );
     });
@@ -416,6 +420,7 @@ describe("NewStoryScreen Quick Start", () => {
         debug_mode: false,
         custom_premise: "Fantasy: Magic is dying. The old power is draining away.",
         mode: "advanced",
+        creation_request_id: expect.stringMatching(/^story-create:/),
         custom_world_setup: {
           want: "knowledge",
           fear: "becoming-a-monster",
@@ -451,6 +456,7 @@ describe("NewStoryScreen Quick Start", () => {
     await waitFor(() => {
       expect(screen.getByTestId("new-story-error-banner")).toBeTruthy();
     });
+    const firstCreationRequestId = mockNewStory.mock.calls[0][0].creation_request_id;
     expect(screen.getByTestId("guided-start-review-value-world").props.children).toBe("Fantasy");
     expect(screen.getByTestId("guided-start-review-value-difficulty").props.children).toBe("Hard");
     expect(String(screen.getByTestId("new-story-error-banner").props.children)).not.toContain("trace");
@@ -460,6 +466,7 @@ describe("NewStoryScreen Quick Start", () => {
       expect(mockReplace).toHaveBeenCalledWith("/play/guided-retry");
     });
     expect(mockNewStory).toHaveBeenCalledTimes(2);
+    expect(mockNewStory.mock.calls[1][0].creation_request_id).toBe(firstCreationRequestId);
   });
 
   it("keeps Guided Start state isolated from Quick Start and Advanced Builder", async () => {

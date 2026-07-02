@@ -13,6 +13,7 @@ import sys
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from player_api import (  # noqa: E402
+    build_new_story_session_payload,
     build_player_choices,
     build_player_ledger,
     build_player_paragraphs,
@@ -42,6 +43,7 @@ def test_session_allowlist_drops_internal_fields():
         "model_switches": [{"from": "x"}],
         "cost_mode": "low",
         "custom_world_setup": {"worldConcept": "hidden"},
+        "creation_request_id": "story-create-secret",
         "future_internal_field": "must not leak",
         "mode": "advanced",
         "scenario_id": None,
@@ -57,7 +59,12 @@ def test_session_allowlist_drops_internal_fields():
     assert "model_switches" not in out
     assert "cost_mode" not in out
     assert "custom_world_setup" not in out
+    assert "creation_request_id" not in out
     assert "future_internal_field" not in out
+
+    new_story_out = build_new_story_session_payload(raw)
+    assert new_story_out["id"] == "sess-1"
+    assert "creation_request_id" not in new_story_out
 
 
 def test_turn_allowlist_drops_engine_payloads():
