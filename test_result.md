@@ -138,7 +138,7 @@ backend:
       - working: true
         agent: "testing"
         comment: |
-          Verified via /app/backend_test.py + /app/_retry_story.py (public URL https://narrative-hooks.preview.emergentagent.com/api).
+          Verified via /app/backend_test.py + /app/_retry_story.py (public URL https://emergent-preview-126.preview.emergentagent.com/api).
           - chat_completion exercised end-to-end through /api/story/new and /api/story/action against
             openai/gpt-oss-120b:free. Both calls returned 200 OK with valid <narrative>/<choices>/
             <state>/<ledger>/<debug> blocks (paragraphs=4 and 3, choices=6/6, debug present).
@@ -270,7 +270,7 @@ frontend:
           - backend/tests/test_onboarding_hooks.py: 16 passed
           - frontend/__tests__/new-story.test.tsx: 10 passed
           - npx tsc --noEmit: passed
-          - Manual preview regression passed on https://narrative-hooks.preview.emergentagent.com/new-story
+          - Manual preview regression passed on https://emergent-preview-126.preview.emergentagent.com/new-story
             including Quick Start completion, review edits, loading state, story creation, play-screen
             navigation, no secret/admin/mechanic leakage, preserved Advanced Builder access, and Settings
             font scaling still functional.
@@ -296,7 +296,7 @@ frontend:
           - backend/tests/test_onboarding_hooks.py: 16 passed
           - frontend/__tests__/new-story.test.tsx: 17 passed
           - npx tsc --noEmit: passed
-          - Manual preview regression passed on https://narrative-hooks.preview.emergentagent.com/new-story
+          - Manual preview regression passed on https://emergent-preview-126.preview.emergentagent.com/new-story
             covering Quick Start, Guided Start, Advanced Builder accessibility, play-screen navigation,
             no secret/admin/engine leakage, and Settings XL font scale.
   - task: "Admin AI controls in Settings screen"
@@ -367,7 +367,7 @@ frontend:
         agent: "testing"
         comment: |
           Regression test PASSED (5/6 tests, 1 blocked as expected). Tested against
-          https://narrative-hooks.preview.emergentagent.com.
+          https://emergent-preview-126.preview.emergentagent.com.
           
           PASS: Settings screen loads with testID "settings-screen", "· READING ·" section,
           and all four text-size chips (S/M/L/XL) with correct testIDs (font-scale-0.9,
@@ -459,7 +459,7 @@ agent_communication:
   - agent: "testing"
     message: |
       Backend OpenRouter migration validated end-to-end against the public ingress
-      (https://narrative-hooks.preview.emergentagent.com/api). Tests live in
+      (https://emergent-preview-126.preview.emergentagent.com/api). Tests live in
       /app/backend_test.py and /app/_retry_story.py. Summary:
 
       PASS — GET /api/health (provider=openrouter, llm_configured=true, all fields present)
@@ -616,7 +616,7 @@ agent_communication:
   - agent: "testing"
     message: |
       REGRESSION TEST COMPLETE: Settings screen & text-size wiring after security patch (ADR-012).
-      Tested against https://narrative-hooks.preview.emergentagent.com (Expo Router web).
+      Tested against https://emergent-preview-126.preview.emergentagent.com (Expo Router web).
       
       PASS (5/6 tests):
       1. ✅ SETTINGS LOADS: Settings screen (testID "settings-screen") renders without errors.
