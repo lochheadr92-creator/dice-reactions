@@ -300,4 +300,9 @@ Do not schedule without implementation evidence:
 - NPC↔NPC relationship edges
 - Vector retrieval RAG
 
+## Chapter 33 — NPC Lifecycle (status)
+
+- **Phase 1 closure (implemented, uncommitted in the current working tree):** deterministic lifecycle core (`backend/npc_lifecycle.py`) plus structured clock seam (`backend/simulation_clock.py`, `replayability.prepare_action_turn`). `ENABLE_NPC_LIFECYCLE` defaults OFF. Time advances only from engine-owned structured events; ordinary turns advance zero.
+- **Still deferred:** action-duration → structured-time mapping (so gameplay can stage time advances); births/pregnancy/family formation; inheritance (property, dispositions, grudges); leadership succession; disputed-inheritance pressure; 200-year burn-in turnover; player-facing lifecycle/death surfacing. Chapter 33 is **not** complete.
+
 **Not applicable to this repo (never existed):** historical scoring equivalence, NaN/infinity ranking guards.

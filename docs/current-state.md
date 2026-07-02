@@ -534,23 +534,39 @@ Memory Retrieval authoritative prompt use (blocked). See
 
 ---
 
-## Chapter 33 — NPC Lifecycle, Phase 1 (Lifecycle Core) — 2026-07-02
+## Chapter 33 - NPC Lifecycle, Phase 1 Closure - 2026-07-02
 
-**Code + Tests.** Deterministic lifecycle core landed as a new module
-`backend/npc_lifecycle.py` (aging from explicit simulation days, Appendix A.7
-life stages, seeded natural mortality, one idempotent death transition for
-natural + unnatural death emitting structured events, tier-aware processing,
-deterministic migration/defaulting). Feature flag `ENABLE_NPC_LIFECYCLE`
-**default OFF**; with it off gameplay is byte-identical (nothing calls the
-module). 42 focused tests pass; affected foundation/gateway/death-registry
-regressions green.
+**Code + Tests.** The deterministic lifecycle core and structured clock seam are
+present behind `ENABLE_NPC_LIFECYCLE` (default OFF). `backend/npc_lifecycle.py`
+owns lifecycle records, simulation-day aging, Appendix A.7 life stages, seeded
+natural mortality, and one idempotent natural/unnatural death transition.
+`backend/simulation_clock.py` supplies an integer simulation-day clock and the
+flag-gated `replayability.prepare_action_turn` seam. Time advances only from an
+engine-owned `replayability_state["pending_time_advance"]` event with an
+expected-previous-day precondition; ordinary turns advance zero days.
 
-**Live integration status:** the `evaluate_lifecycle_tick` seam is **not wired
-into the turn path** — no authoritative simulation clock exists yet (cf.
-`D_GRACE — SIMULATION_TIME`). Live aging is a later-phase dependency; Phase 1
-never advances lifecycle from ordinary turns. Births, inheritance, grudges,
-succession, and burn-in turnover remain deferred. Chapter 33 is **not** complete.
+Lifecycle commit is plan -> validate -> commit. Failed lifecycle planning leaves
+lifecycle records and the processing cursor unchanged. Accepted event replays,
+stale/out-of-order advances, and already-dead actors do not age or die twice.
+Committed lifecycle deaths preserve the historical lifecycle record, project the
+name to `rolling_state["deceased"]`, append a bounded transition receipt, and are
+excluded from future Living Cast / Utility AI actor selection through the
+existing liveness guard. Engine-internal clock/lifecycle diagnostics remain
+developer-only and do not enter prompts or player payloads.
 
-**Evidence:** `backend/npc_lifecycle.py`, `backend/ai_config.py`
-(`ENABLE_NPC_LIFECYCLE`), `backend/tests/test_npc_lifecycle.py`,
+**Verified in this session:** lifecycle + clock suites **77 passed**; clock
+hardening **11 passed**; affected replayability/world-move/Utility AI shadow/
+gateway/context-budget regression subset **91 passed**. Warnings were limited to
+existing deprecations and pytest cache write denial.
+
+**Not implemented / not verified:** no ordinary in-story action-duration producer
+stages `pending_time_advance`; no birth, family formation, inheritance, inherited
+grudges/dispositions, leadership succession, player-character death handling,
+200-year burn-in turnover, or live LLM gameplay/burn-in validation. Chapter 33 is
+**not** complete.
+
+**Evidence:** `backend/npc_lifecycle.py`, `backend/simulation_clock.py`,
+`backend/replayability.py`, `backend/ai_config.py` (`ENABLE_NPC_LIFECYCLE`),
+`backend/tests/test_npc_lifecycle.py`, `backend/tests/test_simulation_clock.py`,
+`backend/tests/test_simulation_clock_hardening.py`,
 `docs/ch33-lifecycle-phase1.md`.

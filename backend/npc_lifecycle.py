@@ -6,7 +6,7 @@ Pure, deterministic lifecycle layer. This module NEVER:
   • calls the LLM, constructs prompts, or touches the frontend,
   • mutates authoritative rolling_state registries in place — it operates on
     lifecycle *records* and RETURNS updated records + structured events, so the
-    (deferred) live integration seam applies them through approved engine paths.
+    structured clock seam applies them through approved engine paths.
 
 Scope (Phase 1 only): canonical lifecycle state + migration, simulation-day
 aging, Appendix A.7 life stages, deterministic natural mortality, an idempotent
@@ -15,17 +15,15 @@ Actor-Resolution-tier-aware processing contracts. Births, family formation,
 inheritance, grudges, succession, and burn-in turnover are OUT OF SCOPE and
 deferred to later Chapter 33 phases.
 
-Canon note: Source_of_Truth Chapter 33 / Appendix A.7 are stubs (TOC + intro
-only). The numeric constants below are therefore DESIGNED EXTENSIONS supplied by
-the Phase-1 specification (the same convention as backend/stress.py), kept in
-this single module rather than scattered. Life stage is *derived* from simulation
-time and is never independently mutable by the model.
+Canon note: Source_of_Truth_v1.2.md contains Chapter 33 and Appendix A.7
+lifecycle constants. The numeric defaults below mirror that default-human
+contract and stay centralized here rather than scattered. Life stage is
+*derived* from simulation time and is never independently mutable by the model.
 
 Time contract: lifecycle functions accept an EXPLICIT integer simulation day.
-There is no authoritative simulation clock in the repository yet (cf. D_GRACE
-BLOCKED_BY_MISSING_AUTHORITATIVE_INPUT — SIMULATION_TIME), so this module never
-invents live turn duration and never advances lifecycle from ordinary turns.
-Wiring a real clock into the turn path is a later-phase dependency.
+backend/simulation_clock.py supplies the structured clock seam. This module
+never invents live turn duration and never advances lifecycle from ordinary
+turns.
 """
 from __future__ import annotations
 
@@ -75,6 +73,7 @@ LIFECYCLE_PROFILES: Dict[str, Dict[str, Any]] = {
 BASE_ADULT_MORTALITY_PER_YEAR = 0.005   # 0.5% per simulation year
 HEALTH_FACTOR_MIN, HEALTH_FACTOR_MAX = 1.0, 5.0
 PRESSURE_FACTOR_MIN, PRESSURE_FACTOR_MAX = 1.0, 2.0
+LEGACY_DECEASED_REGISTRY_CAUSE = "preexisting_deceased_registry"
 
 # Actor-Resolution tiers that receive lifecycle processing, and how.
 _INDIVIDUAL_TIERS = ("hero", "active", "relevant")   # individual aging + mortality
@@ -366,6 +365,10 @@ def _has_valid_lifecycle(npc: Mapping[str, Any]) -> bool:
     return isinstance(birth, int) and not isinstance(birth, bool)
 
 
+def _valid_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def migrate_record(
     npc: Mapping[str, Any],
     *,
@@ -400,6 +403,11 @@ def migrate_record(
             record["alive"] = False  # never resurrect
         record.setdefault("death_simulation_day", None)
         record.setdefault("death_cause", None)
+        if not record.get("alive", True):
+            if not _valid_int(record.get("death_simulation_day")):
+                record["death_simulation_day"] = int(current_simulation_day)
+            if not record.get("death_cause"):
+                record["death_cause"] = LEGACY_DECEASED_REGISTRY_CAUSE
         record.setdefault("last_mortality_evaluation_day", None)
         record["life_stage"] = (
             "archived"
@@ -430,8 +438,8 @@ def migrate_record(
         "birth_simulation_day": birth_day,
         "lifecycle_profile": profile_id,
         "alive": not is_dead,
-        "death_simulation_day": None,
-        "death_cause": None,
+        "death_simulation_day": int(current_simulation_day) if is_dead else None,
+        "death_cause": LEGACY_DECEASED_REGISTRY_CAUSE if is_dead else None,
         "last_mortality_evaluation_day": None,
         "migrated": True,
     }
@@ -520,6 +528,77 @@ def process_dormant_batch(
     return updated_records, events, {"batch_evaluated": evaluated, "batch_deaths": len(events)}
 
 
+def due_mortality_periods(processed_through_day: int, current_simulation_day: int) -> List[int]:
+    """Sim-year periods strictly after the processed cursor, through the current day."""
+    last = mortality_evaluation_period(int(processed_through_day))
+    now = mortality_evaluation_period(int(current_simulation_day))
+    return list(range(last + 1, now + 1)) if now > last else []
+
+
+def process_due_periods(
+    record: Mapping[str, Any],
+    *,
+    processed_through_day: int,
+    current_simulation_day: int,
+    run_seed: str,
+    health_factor: float = 1.0,
+    pressure_factor: float = 1.0,
+    profile: Optional[Mapping[str, Any]] = None,
+    max_periods: Optional[int] = None,
+) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], int, Optional[int]]:
+    """
+    Catch-up processing for one record over the DUE sim-year mortality periods.
+
+    Ages the record to current_simulation_day and evaluates each due period
+    exactly once (deterministic, idempotent per the Phase-1 contract), stopping
+    at death. Bounded by max_periods; unprocessed periods are left for a later
+    deterministic retry. Returns (updated_record, death_event_or_None,
+    periods_evaluated, last_period_processed). Archived/dead records are never
+    processed. Stage is derived from the final day (never one loop per day).
+    """
+    prof = dict(profile or DEFAULT_HUMAN_PROFILE)
+    updated = dict(record)
+    if not record.get("alive", True) or str(record.get("life_stage") or "") == "archived":
+        return updated, None, 0, None
+
+    periods = due_mortality_periods(processed_through_day, current_simulation_day)
+    if max_periods is not None:
+        periods = periods[: max(0, int(max_periods))]
+
+    death_event: Optional[Dict[str, Any]] = None
+    evaluated = 0
+    last_period: Optional[int] = None
+    for period in periods:
+        period_day = period * DAYS_PER_SIMULATION_YEAR
+        mortality = evaluate_natural_mortality(
+            updated,
+            current_simulation_day=period_day,
+            run_seed=run_seed,
+            health_factor=health_factor,
+            pressure_factor=pressure_factor,
+            profile=prof,
+        )
+        last_period = period
+        if mortality.get("evaluated"):
+            evaluated += 1
+            updated["last_mortality_evaluation_day"] = period_day
+        if mortality.get("died"):
+            updated, death_event = apply_death(
+                updated,
+                death_simulation_day=period_day,
+                cause="natural_causes",
+                natural=True,
+                seed_provenance=mortality.get("seed_material"),
+            )
+            break
+
+    if updated.get("alive", True):
+        updated["life_stage"] = life_stage(
+            int(updated.get("birth_simulation_day") or 0), current_simulation_day, profile=prof
+        )
+    return updated, death_event, evaluated, last_period
+
+
 def _empty_tick_diagnostics() -> Dict[str, Any]:
     return {
         "lifecycle_flag_enabled": is_enabled(),
@@ -555,8 +634,8 @@ def evaluate_lifecycle_tick(
 
     Fail-closed: the flag OFF, a missing simulation day, or any internal error
     yields a no-op (empty records + events) with a developer diagnostic — never
-    a raised exception and never mutated NPC state. This is the function a future
-    live-clock integration will call once an authoritative simulation day exists.
+    a raised exception and never mutated NPC state. Structured-clock integration
+    calls this pure seam only with an authoritative simulation day.
     """
     diag = _empty_tick_diagnostics()
     if not is_enabled():

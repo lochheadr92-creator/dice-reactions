@@ -233,6 +233,8 @@ def test_migration_never_resurrects_deceased():
     npc = {"npc_id": "d1", "name": "Ghost"}
     r, _ = L.migrate_record(npc, current_simulation_day=100 * Y, run_seed=SEED, deceased_names=["Ghost"])
     assert r["alive"] is False and r["life_stage"] == "archived"
+    assert r["death_simulation_day"] == 100 * Y
+    assert r["death_cause"] == L.LEGACY_DECEASED_REGISTRY_CAUSE
 
 
 def test_migration_clamps_impossible_negative_age():
