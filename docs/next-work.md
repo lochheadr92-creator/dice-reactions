@@ -302,7 +302,8 @@ Do not schedule without implementation evidence:
 
 ## Chapter 33 — NPC Lifecycle (status)
 
-- **Phase 1 closure (implemented, uncommitted in the current working tree):** deterministic lifecycle core (`backend/npc_lifecycle.py`) plus structured clock seam (`backend/simulation_clock.py`, `replayability.prepare_action_turn`). `ENABLE_NPC_LIFECYCLE` defaults OFF. Time advances only from engine-owned structured events; ordinary turns advance zero.
-- **Still deferred:** action-duration → structured-time mapping (so gameplay can stage time advances); births/pregnancy/family formation; inheritance (property, dispositions, grudges); leadership succession; disputed-inheritance pressure; 200-year burn-in turnover; player-facing lifecycle/death surfacing. Chapter 33 is **not** complete.
+- **Phase 1 closure (implemented and committed):** deterministic lifecycle core (`backend/npc_lifecycle.py`) plus structured clock seam (`backend/simulation_clock.py`, `replayability.prepare_action_turn`). `ENABLE_NPC_LIFECYCLE` defaults OFF. Time advances only from engine-owned structured events; ordinary turns advance zero.
+- **Current blocker:** accepted action duration has no existing engine-owned structured action-result authority. Do not infer time from client payloads, player wording, LLM output, parsed model fields, wall-clock time, or `turn_number * duration`; see `docs/ch33-action-duration-authority-brief.md` and blocker `D_ACTION_DURATION_AUTHORITY`.
+- **Still deferred:** action-duration -> structured-time mapping (so gameplay can stage time advances); births/pregnancy/family formation; inheritance (property, dispositions, grudges); leadership succession; disputed-inheritance pressure; 200-year burn-in turnover; player-facing lifecycle/death surfacing. Chapter 33 is **not** complete.
 
 **Not applicable to this repo (never existed):** historical scoring equivalence, NaN/infinity ranking guards.
