@@ -54,6 +54,7 @@ import pacing  # noqa: E402  — Early-Game Pacing Governor v1 (deterministic)
 import secrets  # noqa: E402  — Secret Reveal Trigger v1 (deterministic)
 import replayability  # noqa: E402  — Replayability Engine v1 (deterministic)
 import stress  # noqa: E402  — Ch 14 Stress substrate v1 (deterministic)
+import causal_history  # noqa: E402  — player-safe "Why this happened" projection
 from security import fetch_owned_session, require_admin, require_device_id  # noqa: E402
 from rate_limit import (  # noqa: E402
     _rollback_bucket_reservations,
@@ -3659,6 +3660,26 @@ async def set_session_mode(
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"mode": req.mode}
+
+
+@api_router.get("/story/session/{session_id}/history")
+async def session_causal_history(session_id: str, device_id: str = Depends(require_device_id)):
+    """Player-safe "Why this happened" causal chain — built from engine state only.
+
+    Reads guard receipts, transition receipts, consequence-echo logs, and
+    relationship vectors from persisted documents; never narrative prose.
+    Output contains no internal identifiers or engine field names.
+    """
+    session = await fetch_owned_session(db, session_id, device_id)
+    turns = await db.turns.find(
+        {"session_id": session_id},
+        {"_id": 0, "turn_number": 1, "player_action": 1, "debug": 1, "rolling_state": 1},
+    ).sort("turn_number", 1).to_list(length=500)
+    return {
+        "session_id": session_id,
+        "title": session.get("title"),
+        "history": causal_history.build_causal_history(session, turns),
+    }
 
 
 @api_router.get("/story/session/{session_id}/export")
