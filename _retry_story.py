@@ -1,7 +1,7 @@
 """Retry only the story flow tests with smaller max_tokens to fit within preview ingress timeout."""
 import sys, uuid, requests, time
 
-BACKEND_URL = "https://narrative-hooks.preview.emergentagent.com"
+BACKEND_URL = "https://emergent-preview-126.preview.emergentagent.com"
 API = f"{BACKEND_URL}/api"
 FREE_MODEL = "openai/gpt-oss-120b:free"
 DEFAULT_MODEL = "gryphe/mythomax-l2-13b"
