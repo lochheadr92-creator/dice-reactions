@@ -3,17 +3,17 @@
 ## Phase 1: Lifecycle Core — Aging, Mortality, and Death Events
 
 **Branch:** `emergent` · **Feature flag:** `ENABLE_NPC_LIFECYCLE` (default **OFF**)
-**Module:** `backend/npc_lifecycle.py` (pure, deterministic) · **Tests:** `backend/tests/test_npc_lifecycle.py`
+**Modules:** `backend/npc_lifecycle.py`, `backend/simulation_clock.py` · **Tests:** `backend/tests/test_npc_lifecycle.py`, `backend/tests/test_simulation_clock.py`, `backend/tests/test_simulation_clock_hardening.py`
 
-Phase 1 delivers the deterministic lifecycle core that later phases extend. It is
-a **new self-contained module** with no live wiring into `server.py` /
-`replayability.py` — see *Live integration status* below. With the flag OFF,
-gameplay is byte-identical; the pure functions and tests remain available.
+Phase 1 delivers the deterministic lifecycle core that later phases extend. The
+core remains a pure module; the current working tree also includes a structured
+clock seam in `backend/simulation_clock.py` and `replayability.prepare_action_turn`.
+With the flag OFF, no clock/lifecycle state is created and no player-visible
+gameplay behavior changes.
 
-> **Canon note.** `Source_of_Truth_v1.2.md` Chapter 33 and Appendix A.7 are
-> currently stubs (table-of-contents + intro only). The numeric constants here
-> are therefore **designed extensions** supplied by the Phase-1 specification —
-> the same convention used for `backend/stress.py` — kept in one module.
+> **Canon note.** `Source_of_Truth_v1.2.md` contains detailed Chapter 33 text
+> and Appendix A.7 lifecycle constants. The default-human constants here mirror
+> that contract and remain centralized in `backend/npc_lifecycle.py`.
 
 ---
 
@@ -41,8 +41,10 @@ and is never independently mutable by the model.
 
 Lifecycle functions accept an **explicit integer simulation day**
 (`current_simulation_day`, `birth_simulation_day`, …). `1 year = 365 days`.
-There is **no `turn_number × 60`** and no invented turn duration anywhere. See
-*Live integration status* for the missing-clock dependency.
+There is **no `turn_number × 60`** and no invented turn duration anywhere. The
+structured clock seam advances time only from an engine-owned
+`pending_time_advance` event with an expected-previous-day precondition; ordinary
+turns advance zero days.
 
 ### Life stages (Appendix A.7 default-human profile)
 
@@ -90,9 +92,9 @@ structured event:
 
 Events are **returned** from the pure layer. This repository has **no formal
 Chapter 22 event store** (system-doctrine candidate invariant, unimplemented), so
-Phase 1 does not persist events itself and invents no competing store; the
-deferred live seam will append a minimal receipt via the existing append-only
-`transition_receipts` path and record deaths in the engine-owned
+Phase 1 does not invent a competing event store. The structured clock seam
+appends a minimal bounded receipt via the existing `transition_receipts` path
+and records committed lifecycle deaths in the engine-owned
 `rolling_state["deceased"]` registry.
 
 ### Actor-Resolution-tier contracts
@@ -104,31 +106,37 @@ does not change actor enumeration.
 |------|-------|-----------|
 | Hero / Active | individual | individual |
 | Relevant | individual | individual (regional-heartbeat cadence set by caller) |
-| Dormant | — | batch API (`process_dormant_batch`); every death still emits an event; aggregate births NOT implemented |
+| Dormant | batch / catch-up | batch API (`process_dormant_batch`) and structured-clock catch-up; every death still emits an event; aggregate births NOT implemented |
 | Archived | none | none (no-op) |
 
 ### Feature-flag behaviour
 
 `ENABLE_NPC_LIFECYCLE` default **OFF** (env-overridable). OFF → no live aging or
-mortality; pure functions/tests still available; gameplay unchanged. ON → only
-`evaluate_lifecycle_tick` acts (fail-closed: a missing simulation day or any
-internal error yields a no-op with a developer diagnostic, never a raise, never
-mutated NPC state). Diagnostics are developer-only and never enter the prompt.
+mortality; pure functions/tests still available; no player-visible gameplay
+change. ON → lifecycle work runs only through pure lifecycle functions or the
+structured clock seam (fail-closed: invalid time input or lifecycle planning
+failure leaves lifecycle records unchanged and emits developer diagnostics).
+Diagnostics are developer-only and never enter the prompt.
 
-### Live integration status (blocker)
+### Structured clock seam status
 
-`evaluate_lifecycle_tick` is the wired-seam entry point but is **not called from
-the turn path**: there is no authoritative simulation clock in the repository
-(cf. `D_GRACE` — `BLOCKED_BY_MISSING_AUTHORITATIVE_INPUT — SIMULATION_TIME`).
-Wiring live aging requires an authoritative `current_simulation_day` source; this
-is a later-phase dependency. Phase 1 deliberately does **not** advance lifecycle
-from ordinary turns.
+`backend/simulation_clock.py` provides an authoritative integer simulation-day
+clock and a flag-gated, fail-closed seam in `replayability.prepare_action_turn`.
+Time advances only from an engine-owned structured event; ordinary turns advance
+the clock by zero. The seam persists lifecycle records in `replayability_state`,
+projects deaths to `rolling_state["deceased"]`, and appends bounded receipts.
+
+This is **offline deterministic integration**, not full gameplay time passage:
+there is still no action-duration/in-story-time producer that stages
+`pending_time_advance` during ordinary play, and burn-in integration is not
+implemented.
 
 ### Deferred to later Chapter 33 phases (NOT in Phase 1)
 
 Births · pregnancy · partnership/family formation · family trees · property
 inheritance · inherited dispositions · inherited grudges · leadership succession ·
 disputed-inheritance pressure · 200-year burn-in turnover · prompt injection ·
-player-facing death announcements · authoritative simulation-clock integration.
+player-facing death announcements · action-duration to structured-time mapping ·
+live/burn-in lifecycle producers.
 
 Chapter 33 is **not** complete. This is Phase 1 (lifecycle core) only.

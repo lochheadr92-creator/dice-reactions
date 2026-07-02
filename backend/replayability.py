@@ -31,6 +31,7 @@ import npc_world_moves as world_moves
 import opening_state
 import pressure_graph
 import relationships
+import simulation_clock
 import stress
 from run_identity import derive_run_identity, is_closed_enum_identity
 
@@ -713,6 +714,22 @@ def prepare_action_turn(
 
     # Developer-only consolidated authority view (dev debug; never player-visible).
     diagnostics["foundation_turn_authority"] = _summarize_turn_authority(diagnostics)
+
+    # Chapter 33 lifecycle structured-clock seam.
+    # Flag-gated (ENABLE_NPC_LIFECYCLE, default OFF -> complete no-op) and
+    # fail-closed. Time advances only from an engine-owned structured event in
+    # state["pending_time_advance"]; ordinary turns advance the clock by zero.
+    try:
+        state, working_rolling, sim_lifecycle_diag = simulation_clock.integrate_turn(
+            state,
+            working_rolling,
+            run_seed=run_seed,
+            turn_number=turn_number,
+            append_receipt=_append_transition_receipt,
+        )
+        diagnostics.update(sim_lifecycle_diag)
+    except Exception as exc:
+        diagnostics["simulation_lifecycle_error"] = str(exc)[:200]
 
     return state, directives, diagnostics, threshold_fired, working_rolling
 
