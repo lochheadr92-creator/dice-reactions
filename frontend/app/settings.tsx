@@ -134,7 +134,7 @@ export default function SettingsScreen() {
 
         <Text style={[styles.section, { marginTop: 36 }]}>· ABOUT ·</Text>
         <TouchableOpacity activeOpacity={1} onPress={bumpVersionTap} style={styles.aboutBox} testID="version-tap">
-          <Text style={styles.aboutTitle}>Dice Reaction Story Engine</Text>
+          <Text style={styles.aboutTitle}>Statebound</Text>
           <Text style={styles.aboutVer}>
             Master Runtime · v3.4{devUnlocked ? "  ·  DEV" : ""}
           </Text>
