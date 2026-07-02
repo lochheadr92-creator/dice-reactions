@@ -445,3 +445,21 @@ Promote to ADR when implementation and tests exist.
 | **Amends** | ADR-020 (Living Cast / `npc_world_moves`); relates to ADR-022, ADR-023. |
 | **Non-goals** | No `npc_world_moves` replacement; no default deployment activation; no `TURN_INTEGRATION_VERIFIED`; no P3/P4, relationship-provenance, event-sourcing, retrieval, pressure, pacing, or server changes. |
 | **Full ADR** | `docs/adr-024-npc-scoring-bridge.md` |
+
+
+---
+
+## ADR-025: Action-duration authority — engine-owned structured time commands, zero-day ordinary actions
+
+| Field | Detail |
+|-------|--------|
+| **Date** | Proposed 2026-07-04 |
+| **Status** | Proposed — awaiting owner approval; documentation-only ADR (no code/test changes). Blocker `D_ACTION_DURATION_AUTHORITY` stays open until the implementation task lands and is verified. |
+| **Context** | Ch 33 Phase 1 shipped a replay-safe integer-day clock with a consumer (`simulation_clock.integrate_turn`) but no approved producer mapping accepted actions to elapsed simulation days. Duration must never come from client payloads, player wording, LLM output, parsed fields, wall-clock, or turn arithmetic (`docs/ch33-action-duration-authority-brief.md`). |
+| **Decision** | (1) Ordinary actions advance exactly 0 days — no category→duration table in v1. (2) Time advances only via an explicit structured `time_command` (`rest`/`wait`/`travel`, integer `requested_days` 1..`MAX_TIME_COMMAND_DAYS`, proposed 30); the engine validates/clamps and deterministically produces the `pending_time_advance` event — the engine event, not the client value, is the authority. (3) Same-turn integration: production post-acceptance (after guards/finalize), explicit second `integrate_turn` consumption before the session update, committed in the existing `_persist_story_action_turn` CAS. (4) Sub-day: 0 days, no rounding, no accumulation; an explicit structured sub-day command may stage a deterministic zero-day no-op only if audit traceability is needed (not in v1); fractional clock deferred to a schema change. |
+| **Idempotency** | Deterministic `event_id = time_advance:{session_id}:{next_turn_number}` (lease-stable across retries); at most one event per accepted action; refuse-overwrite of an existing pending event; permanent replay barrier via `expected_previous_simulation_day`; lease-loss/CAS failure discards working copies so no time survives independently. |
+| **Gating** | Behind `ENABLE_NPC_LIFECYCLE` (default OFF): flag OFF rejects `time_command` deterministically (never silently ignored); default deployed behaviour byte-identical to today. |
+| **Rejected** | Category duration tables (no approved source of truth); LLM/parser-derived duration (violates state authority + determinism); trusting client values directly; next-turn staged consumption (visible cause/effect mismatch — owner selected same-turn); sub-day rounding/accumulation (schema migration deferred). |
+| **Files (impl task)** | `backend/server.py`, `backend/replayability.py`, possibly `backend/time_commands.py`; `backend/simulation_clock.py` expected unchanged. Tests per brief §12 (producer determinism, rejected/uncommitted actions stage nothing, CAS rollback, injection-ignored, flag-OFF rejection). |
+| **Non-goals** | No code in this ADR; no fractional clock; no duration mappings; no births/inheritance/succession/burn-in; no default activation; no frontend UI yet. |
+| **Full ADR** | `docs/adr-025-action-duration-authority.md` |
