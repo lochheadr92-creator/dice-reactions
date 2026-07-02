@@ -335,6 +335,34 @@ frontend:
           Added getAdminSettings(), saveAdminSettings(patch), getHealth().
           Existing story APIs unchanged.
 
+  - task: "Why this happened causal-history modal"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/play/[id].tsx, /app/backend/causal_history.py, /app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Verified against http://localhost:3000 on mobile viewport 390x844. Read-only test
+          against pre-existing session 85311260-31e1-46a9-90fd-4cc4003e7d60 (device:
+          contest-demo-smoke-1). ALL 12 requirements PASSED: device ID injection worked,
+          play screen loaded, menu opened (testID: open-menu-btn), "Why this happened" button
+          present (testID: why-history-btn, gold text, git-branch icon), modal opened (testID:
+          why-history-modal), title correct ("· WHY · THIS · HAPPENED ·"), intro text correct
+          ("Every line below is recorded world state — written by the engine, not by the
+          narrator."), all 6 turns present (TURN · 01 through TURN · 06), specific content
+          verified (CAST: "Marlene Cho acted on their own", CHANGE: "Greg Stahl will no longer
+          stand with you", RETURN: "Set in motion on turn 4" with "Greg Stahl"), scroll works
+          (testID: why-history-scroll), NO raw JSON/internal identifiers (no npc-, evt-,
+          replayability, rolling_state, underscores), close button works (testID: close-why-btn).
+          Backend endpoint GET /api/story/session/{id}/history working correctly, returns
+          player-safe causal chain from engine state only. Module: /app/backend/causal_history.py.
+          Feature fully functional with proper chip labels (WORLD, YOU, CHANGE, CAST, SET, RETURN),
+          humanized text, smooth scrolling. 5 screenshots captured.
+
   - task: "Settings screen repair after security patch (restore legitimate user settings)"
     implemented: true
     working: true
@@ -407,13 +435,13 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "1.1"
-  test_sequence: 1
+  version: "1.2"
+  test_sequence: 2
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Chronicle Creation Phase 3 — Guided Start and three-mode New Chronicle structure"
+    - "Why this happened causal-history modal"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -759,3 +787,44 @@ agent_communication:
       complete and working correctly across home screen, story-creation flow, and settings.
       No text clipping, overlapping, or navigation issues detected. No POST endpoints called
       (read-only verification as requested).
+
+  - agent: "testing"
+    message: |
+      "WHY THIS HAPPENED" CAUSAL-HISTORY MODAL VERIFICATION COMPLETE (2026-07-02).
+      Tested against http://localhost:3000 (Expo web, React Native Web / expo-router) on mobile
+      viewport 390x844. Read-only verification against pre-existing session
+      85311260-31e1-46a9-90fd-4cc4003e7d60 (device: contest-demo-smoke-1).
+
+      ✅ ALL 12 VERIFICATION REQUIREMENTS PASSED:
+      1. Device ID injection: localStorage.setItem('dice_device_id', 'contest-demo-smoke-1')
+         worked correctly — session loaded without errors.
+      2. Play screen loaded successfully (testID: play-screen).
+      3. Menu opened via testID "open-menu-btn" (⋯ icon at top right).
+      4. "Why this happened" button present with testID "why-history-btn" (gold text, git-branch icon).
+      5. Modal opened with testID "why-history-modal".
+      6. Modal title correct: "· WHY · THIS · HAPPENED ·".
+      7. Intro text correct: "Every line below is recorded world state — written by the engine,
+         not by the narrator."
+      8. All 6 turns present: TURN · 01 through TURN · 06.
+      9. Specific content verified:
+         - CAST chip: "Marlene Cho acted on their own" ✅
+         - CHANGE chip: "Greg Stahl will no longer stand with you" ✅
+         - RETURN chip: "Set in motion on turn 4" with "Greg Stahl" ✅
+      10. Scroll functionality works (testID: why-history-scroll) — scrolled to TURN · 06 successfully.
+      11. NO raw JSON or internal identifiers found:
+          - No "npc-", "evt-", "replayability", "rolling_state" ✅
+          - No JSON brackets or underscores in visible sentences ✅
+          - All text properly humanized ✅
+      12. Close button works (testID: close-why-btn) — returned to play screen successfully.
+
+      EVIDENCE: 5 screenshots captured showing play screen, menu, modal (turns 1-3), modal scrolled
+      (turns 4-6), and modal closed state.
+
+      BACKEND INTEGRATION: GET /api/story/session/{id}/history endpoint working correctly.
+      Returns player-safe causal chain built from engine state only (guard receipts, transition
+      receipts, consequence echoes, relationship vectors). Module: /app/backend/causal_history.py.
+
+      CONCLUSION: "Why this happened" feature is fully functional. Modal displays engine-recorded
+      causal history with proper chip labels (WORLD, YOU, CHANGE, CAST, SET, RETURN), humanized
+      text, no internal identifiers, and smooth scrolling. All testIDs present for automation.
+      No POST endpoints called (read-only verification as requested).

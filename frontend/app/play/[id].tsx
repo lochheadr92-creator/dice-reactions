@@ -20,6 +20,8 @@ import { COLORS, FONTS } from "../../src/theme";
 import {
   ApiError,
   getSession,
+  getSessionHistory,
+  HistoryTurn,
   sendAction,
   deleteSession,
   exportSession,
@@ -70,6 +72,16 @@ const MOMENTUM_COLOR_MAP: Record<string, string> = {
   lost: COLORS.danger,
 };
 
+// "Why this happened" — display chips for player-safe causal event kinds.
+const WHY_CHIPS: Record<string, { label: string; color: string }> = {
+  opening: { label: "WORLD", color: COLORS.textSecondary },
+  action: { label: "YOU", color: COLORS.primary },
+  change: { label: "CHANGE", color: COLORS.objective },
+  cast: { label: "CAST", color: COLORS.stress },
+  seed: { label: "SET", color: COLORS.textMuted },
+  return: { label: "RETURN", color: COLORS.danger },
+};
+
 function chip(state: Record<string, string>, key: string, label: string, colorMap?: Record<string, string>) {
   const v = state[key];
   if (!v) return null;
@@ -91,6 +103,9 @@ export default function PlayScreen() {
   const [customAction, setCustomAction] = useState("");
   const [showLedger, setShowLedger] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
+  const [showWhy, setShowWhy] = useState(false);
+  const [whyHistory, setWhyHistory] = useState<HistoryTurn[]>([]);
+  const [whyLoading, setWhyLoading] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
   const [mode, setMode] = useState<"basic" | "advanced">("advanced");
@@ -646,6 +661,31 @@ export default function PlayScreen() {
             <TouchableOpacity
               style={styles.menuRow}
               onPress={async () => {
+                setShowMenu(false);
+                setShowWhy(true);
+                setWhyLoading(true);
+                try {
+                  const deviceId = deviceIdRef.current || (await getDeviceId());
+                  const res = await getSessionHistory(sessionId, deviceId);
+                  setWhyHistory(res.history || []);
+                } catch (e: any) {
+                  const { title, message } = friendlyError(e);
+                  if (Platform.OS === "web") alert(`${title}\n\n${message}`);
+                  else Alert.alert(title, message);
+                  setShowWhy(false);
+                } finally {
+                  setWhyLoading(false);
+                }
+              }}
+              testID="why-history-btn"
+            >
+              <Ionicons name="git-branch-outline" size={18} color={COLORS.primary} />
+              <Text style={[styles.menuText, { color: COLORS.primary }]}>Why this happened</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={async () => {
                 try {
                   const deviceId = deviceIdRef.current || (await getDeviceId());
                   const data = await exportSession(sessionId, deviceId);
@@ -722,6 +762,52 @@ export default function PlayScreen() {
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
+      </Modal>
+
+      {/* Why this happened — engine-recorded causal history (player-safe) */}
+      <Modal visible={showWhy} animationType="slide" transparent onRequestClose={() => setShowWhy(false)}>
+        <View style={styles.modalRoot}>
+          <View style={styles.ledgerSheet} testID="why-history-modal">
+            <View style={styles.whyHead}>
+              <Text style={styles.ledgerTitle}>· WHY · THIS · HAPPENED ·</Text>
+              <TouchableOpacity onPress={() => setShowWhy(false)} hitSlop={12} testID="close-why-btn">
+                <Ionicons name="close" size={20} color={COLORS.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.whyIntro}>
+              Every line below is recorded world state — written by the engine, not by the narrator.
+            </Text>
+            {whyLoading ? (
+              <ActivityIndicator color={COLORS.primary} style={{ marginTop: 28 }} />
+            ) : (
+              <ScrollView showsVerticalScrollIndicator={false} testID="why-history-scroll">
+                {whyHistory.map((row) => (
+                  <View key={row.turn} style={styles.whyTurnBlock}>
+                    <Text style={styles.whyTurnHead}>TURN · {String(row.turn).padStart(2, "0")}</Text>
+                    {row.events.map((ev, i) => {
+                      const chipCfg = WHY_CHIPS[ev.kind] || {
+                        label: ev.kind.toUpperCase(),
+                        color: COLORS.textSecondary,
+                      };
+                      return (
+                        <View key={`${row.turn}-${i}`} style={styles.whyRow}>
+                          <Text style={[styles.whyChip, { color: chipCfg.color, borderColor: chipCfg.color }]}>
+                            {chipCfg.label}
+                          </Text>
+                          <Text style={styles.whyText}>{ev.text}</Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                ))}
+                {whyHistory.length === 0 && (
+                  <Text style={styles.whyEmpty}>— the chronicle has no recorded turns yet —</Text>
+                )}
+                <View style={{ height: 30 }} />
+              </ScrollView>
+            )}
+          </View>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -953,6 +1039,68 @@ const styles = StyleSheet.create({
     color: COLORS.primary,
     fontSize: 11,
     letterSpacing: 4,
+  },
+  whyHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.borderDim,
+  },
+  whyIntro: {
+    fontFamily: FONTS.bodyItalic,
+    color: COLORS.textSecondary,
+    fontSize: 13,
+    lineHeight: 19,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 4,
+  },
+  whyTurnBlock: {
+    paddingHorizontal: 16,
+    paddingTop: 14,
+  },
+  whyTurnHead: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.textMuted,
+    fontSize: 10,
+    letterSpacing: 3,
+    marginBottom: 8,
+  },
+  whyRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    marginBottom: 8,
+  },
+  whyChip: {
+    fontFamily: FONTS.monoBold,
+    fontSize: 9,
+    letterSpacing: 1,
+    borderWidth: 1,
+    borderRadius: 3,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    marginTop: 1,
+    width: 62,
+    textAlign: "center",
+    overflow: "hidden",
+  },
+  whyText: {
+    fontFamily: FONTS.body,
+    color: COLORS.textProse,
+    fontSize: 13,
+    lineHeight: 19,
+    flex: 1,
+  },
+  whyEmpty: {
+    fontFamily: FONTS.mono,
+    color: COLORS.textMuted,
+    fontSize: 11,
+    letterSpacing: 2,
+    textAlign: "center",
+    marginTop: 28,
   },
   ledgerEmpty: {
     fontFamily: FONTS.bodyItalic,

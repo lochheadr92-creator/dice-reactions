@@ -154,6 +154,19 @@ export async function exportSession(sessionId: string, deviceId: string): Promis
   return handle(res);
 }
 
+export type HistoryEvent = { kind: string; text: string };
+export type HistoryTurn = { turn: number; events: HistoryEvent[] };
+
+export async function getSessionHistory(
+  sessionId: string,
+  deviceId: string
+): Promise<{ history: HistoryTurn[] }> {
+  const res = await fetch(`${API}/story/session/${sessionId}/history`, {
+    headers: deviceHeaders(deviceId),
+  });
+  return handle(res);
+}
+
 export async function resetSession(sessionId: string, deviceId: string): Promise<{ reset: boolean }> {
   const res = await fetch(`${API}/story/session/${sessionId}/reset`, {
     method: "POST",
