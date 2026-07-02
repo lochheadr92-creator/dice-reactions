@@ -107,7 +107,7 @@ export default function HomeScreen() {
         }
       >
         <View style={styles.topRow}>
-          <Text style={styles.brandMono} testID="brand-mono">DICE · REACTION · v3.3</Text>
+          <Text style={styles.brandMono} testID="brand-mono">STATEBOUND · v3.3</Text>
           <TouchableOpacity onPress={() => router.push("/settings")} testID="open-settings-btn" hitSlop={12}>
             <Ionicons name="settings-outline" size={20} color={COLORS.textSecondary} />
           </TouchableOpacity>
@@ -118,9 +118,9 @@ export default function HomeScreen() {
           <Animated.View style={heroStyle}>
             <Image source={{ uri: D20_IMAGE }} style={styles.hero} resizeMode="contain" />
           </Animated.View>
-          <Text style={styles.title} testID="app-title">The Dice Reaction</Text>
+          <Text style={styles.title} testID="app-title">Statebound</Text>
           <Text style={styles.subtitle}>
-            A persistent causal simulation.{"\n"}Hidden rolls. Lasting consequences.
+            A world that remembers.{"\n"}Independent characters. Lasting consequences.
           </Text>
           <View style={styles.ruleLine} />
         </View>
@@ -131,7 +131,7 @@ export default function HomeScreen() {
           testID="new-story-btn"
           activeOpacity={0.75}
         >
-          <Text style={styles.primaryBtnText}>[ NEW · STORY ]</Text>
+          <Text style={styles.primaryBtnText}>[ ENTER · WORLD ]</Text>
         </TouchableOpacity>
 
         <View style={styles.sectionHead}>
