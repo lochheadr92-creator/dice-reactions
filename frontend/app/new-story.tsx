@@ -13,7 +13,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONTS } from "../src/theme";
 import { getDeviceId, getSettings } from "../src/storage";
-import { newStory, listScenarios, Scenario, CustomWorldSetup } from "../src/api";
+import { newStory, listScenarios } from "../src/api";
+import type { Scenario, CustomWorldSetup, NewStoryPayload } from "../src/api";
 import { friendlyError } from "../src/errors";
 import { clampIndex } from "../src/sanitize";
 import { AdvancedBuilder } from "../src/newstory/AdvancedBuilder";
@@ -31,9 +32,26 @@ import type {
   GuidedStartSelections,
 } from "../src/newstory/types";
 
+function createCreationRequestId(): string {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === "function") {
+    return `story-create:${cryptoApi.randomUUID()}`;
+  }
+  if (typeof cryptoApi?.getRandomValues === "function") {
+    const bytes = new Uint8Array(16);
+    cryptoApi.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    return `story-create:${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  return `story-create:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export default function NewStoryScreen() {
   const router = useRouter();
   const submitLockRef = useRef(false);
+  const creationRequestRef = useRef<{ fingerprint: string; id: string } | null>(null);
   const [creationFlow, setCreationFlow] = useState<"quick" | "guided" | "advanced">("quick");
   const [genre, setGenre] = useState<string>("");
   const [customGenre, setCustomGenre] = useState("");
@@ -166,6 +184,17 @@ export default function NewStoryScreen() {
     setLoading(false);
   };
 
+  const withCreationRequestId = (payload: NewStoryPayload): NewStoryPayload => {
+    const fingerprintPayload = { ...payload, creation_request_id: undefined };
+    const fingerprint = JSON.stringify(fingerprintPayload);
+    let creationRequest = creationRequestRef.current;
+    if (!creationRequest || creationRequest.fingerprint !== fingerprint) {
+      creationRequest = { fingerprint, id: createCreationRequestId() };
+      creationRequestRef.current = creationRequest;
+    }
+    return { ...payload, creation_request_id: creationRequest.id };
+  };
+
   const creationFailure = (error: unknown) => {
     const { message } = friendlyError(error);
     setSubmitError(message);
@@ -189,7 +218,7 @@ export default function NewStoryScreen() {
     try {
       const device_id = await getDeviceId();
       const settings = await getSettings();
-      const res = await newStory({
+      const requestPayload: NewStoryPayload = {
         device_id,
         genre: resolvedGenre || (scenarios.find((s) => s.id === scenarioId)?.genre ?? ""),
         role: role.trim() || customSetup.origin?.trim() || undefined,
@@ -200,7 +229,8 @@ export default function NewStoryScreen() {
         mode,
         scenario_id: scenarioId || undefined,
         custom_world_setup: genre === "custom" ? customSetup : undefined,
-      });
+      };
+      const res = await newStory(withCreationRequestId(requestPayload));
       if (!res?.session_id) {
         creationFailure(new Error("invalid-session"));
         return;
@@ -223,7 +253,7 @@ export default function NewStoryScreen() {
 
     try {
       const device_id = await getDeviceId();
-      const res = await newStory({
+      const requestPayload: NewStoryPayload = {
         device_id,
         genre: payload.genre,
         role: payload.role,
@@ -232,7 +262,8 @@ export default function NewStoryScreen() {
         debug_mode: settings.debugDefault,
         mode: payload.mode,
         custom_world_setup: payload.custom_world_setup,
-      });
+      };
+      const res = await newStory(withCreationRequestId(requestPayload));
       if (!res?.session_id) {
         creationFailure(new Error("invalid-session"));
         return;
@@ -259,7 +290,7 @@ export default function NewStoryScreen() {
 
     try {
       const device_id = await getDeviceId();
-      const res = await newStory({
+      const requestPayload: NewStoryPayload = {
         device_id,
         genre: payload.genre,
         role: payload.role,
@@ -269,7 +300,8 @@ export default function NewStoryScreen() {
         custom_premise: payload.custom_premise,
         mode: payload.mode,
         custom_world_setup: payload.custom_world_setup,
-      });
+      };
+      const res = await newStory(withCreationRequestId(requestPayload));
       if (!res?.session_id) {
         creationFailure(new Error("invalid-session"));
         return;

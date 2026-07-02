@@ -104,7 +104,7 @@ function deviceHeaders(deviceId: string): Record<string, string> {
   return { [DEVICE_ID_HEADER]: deviceId };
 }
 
-export async function newStory(payload: {
+export type NewStoryPayload = {
   device_id: string;
   genre: string;
   role?: string;
@@ -115,7 +115,12 @@ export async function newStory(payload: {
   mode?: string;
   scenario_id?: string;
   custom_world_setup?: CustomWorldSetup;
-}): Promise<{ session_id: string; turn: Turn; session: SessionSummary }> {
+  creation_request_id?: string;
+};
+
+export async function newStory(
+  payload: NewStoryPayload
+): Promise<{ session_id: string; turn: Turn; session: SessionSummary }> {
   const res = await fetch(`${API}/story/new`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

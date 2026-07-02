@@ -6,6 +6,7 @@ No OpenRouter credits or live external model required.
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from datetime import datetime, timezone
@@ -167,6 +168,64 @@ class TestHermeticHttpIntegration:
         raw_data = raw.json()
         assert raw_data["session"]["device_id"] == device
         assert raw_data["turns"][0].get("raw") or raw_data["turns"][0].get("debug")
+
+    def test_creation_request_id_returns_existing_completed_session_without_duplicate(
+        self, client, mongo_env, monkeypatch
+    ):
+        monkeypatch.setattr(rate_limit, "RATE_LIMIT_DEVICE_MAX", 1)
+        device = f"retry-{uuid.uuid4()}"
+        creation_request_id = f"story-create:{uuid.uuid4()}"
+        payload = {
+            **_new_payload(device),
+            "creation_request_id": creation_request_id,
+        }
+
+        first = client.post("/api/story/new", json=payload)
+        assert first.status_code == 200, first.text
+        first_body = first.json()
+        sid = first_body["session_id"]
+        calls_after_first = client.llm_calls["n"]  # type: ignore[attr-defined]
+
+        second = client.post("/api/story/new", json=payload)
+        assert second.status_code == 200, second.text
+        second_body = second.json()
+        assert second_body["session_id"] == sid
+        assert second_body["session"]["id"] == sid
+        assert second_body["turn"]["session_id"] == sid
+        assert client.llm_calls["n"] == calls_after_first  # type: ignore[attr-defined]
+        assert mongo_env.sessions.count_documents(
+            {"device_id": device, "creation_request_id": creation_request_id}
+        ) == 1
+        assert mongo_env.turns.count_documents({"session_id": sid}) == 1
+        assert "creation_request_id" not in json.dumps(second_body)
+
+    def test_creation_request_id_pending_duplicate_does_not_start_second_llm(
+        self, client, mongo_env
+    ):
+        device = f"pending-{uuid.uuid4()}"
+        creation_request_id = f"story-create:{uuid.uuid4()}"
+        now = datetime.now(timezone.utc)
+        mongo_env.sessions.insert_one({
+            "id": str(uuid.uuid4()),
+            "device_id": device,
+            "genre": "fantasy",
+            "difficulty": "standard",
+            "debug_mode": False,
+            "title": "Pending Chronicle",
+            "turn_count": 0,
+            "creation_request_id": creation_request_id,
+            "created_at": now,
+            "updated_at": now,
+        })
+        calls_before = client.llm_calls["n"]  # type: ignore[attr-defined]
+
+        duplicate = client.post(
+            "/api/story/new",
+            json={**_new_payload(device), "creation_request_id": creation_request_id},
+        )
+        assert duplicate.status_code == 409
+        assert duplicate.json()["detail"] == "Story creation already in progress"
+        assert client.llm_calls["n"] == calls_before  # type: ignore[attr-defined]
 
     def test_wrong_owner_rejected_indistinguishably(self, client, mongo_env):
         owner = f"owner-{uuid.uuid4()}"
