@@ -29,6 +29,7 @@ import player_api  # noqa: E402
 import pressure_graph  # noqa: E402
 import replayability  # noqa: E402
 import server  # noqa: E402
+import world_state_consumers  # noqa: E402
 from memory import enforce_context_budget  # noqa: E402
 from security import DEVICE_ID_HEADER  # noqa: E402
 
@@ -90,6 +91,28 @@ def test_init_new_story_returns_state_and_directives():
     assert state["opening"]["archetype_id"]
     assert directives["opening"]
     assert opening_state.OPENING_DIRECTIVE_MARKER in directives["opening"]
+
+
+def test_init_new_story_seeds_pressure_from_structured_setup_only():
+    state, _ = replayability.init_new_story(
+        genre="custom-world",
+        role="courier",
+        tone="grim",
+        difficulty="standard",
+        scenario_id=None,
+        custom_premise="",
+        custom_world_setup={
+            "danger": "flood sirens trigger stampedes",
+            "pressures": ["scarcity", "civil unrest"],
+        },
+        run_seed=FIXED_SEED,
+    )
+
+    nodes = state["pressure_graph"]["nodes"]
+    custom_nodes = [node for node in nodes if node.get("origin_type") == "custom_setup"]
+    assert any(node.get("origin_id") == "danger" for node in custom_nodes)
+    assert any(node.get("origin_id") == "pressure:0" for node in custom_nodes)
+    assert all(node.get("evidence_refs") for node in custom_nodes)
 
 
 def test_init_uses_transition_receipts_not_engine_events():
@@ -170,10 +193,15 @@ def test_enforce_authoritative_strips_model_replayability_fields():
     )
     rolling = {"pressure_graph": copy.deepcopy(state["pressure_graph"]), "scene": "dock"}
     tampered = rolling["pressure_graph"]["nodes"][0]
+    tampered_id = tampered["id"]
     tampered["magnitude"] = 99
     tampered["trend"] = 1
     adj = replayability.enforce_authoritative(rolling, state)
-    assert "pressure_graph" not in rolling
+    projected = {node["id"]: node for node in rolling["pressure_graph"]["nodes"]}
+    authoritative = {node["id"]: node for node in state["pressure_graph"]["nodes"]}
+    assert projected[tampered_id]["magnitude"] == authoritative[tampered_id]["magnitude"]
+    assert projected[tampered_id]["trend"] == authoritative[tampered_id]["trend"]
+    assert "rolling_pressure_graph_engine_derived" in adj
     assert adj
 
 
@@ -226,6 +254,486 @@ def test_pressure_threshold_references_canonical_event_id():
     assert thresholds[0]["event_id"]
     scheduled = updated["consequence_echoes"]["scheduled"]
     assert any(e.get("source_event_id") == thresholds[0]["event_id"] for e in scheduled)
+
+
+def _state_with_high_pressure():
+    state, _ = replayability.init_new_story(
+        genre="noir", role="d", tone="t", difficulty="standard",
+        scenario_id=None, custom_premise=None, custom_world_setup=None, run_seed=FIXED_SEED,
+    )
+    state["pressure_graph"]["nodes"] = [
+        {
+            "id": "p-danger-world",
+            "kind": "danger",
+            "origin_type": "structured_event",
+            "origin_id": "evt-danger-world",
+            "origin": {"type": "structured_event", "id": "evt-danger-world"},
+            "scope": "local",
+            "status": "active",
+            "magnitude": 80,
+            "trend": 1,
+            "trend_label": "rising",
+            "actor_ids": [],
+            "location_ids": ["dock"],
+            "faction_ids": [],
+            "tags": [],
+            "linked_node_ids": [],
+            "linked_pressure_ids": [],
+            "created_turn": 1,
+            "updated_turn": 1,
+            "last_foreground_turn": None,
+            "threshold": 95,
+            "last_threshold": "below",
+            "evidence_refs": ["evt-danger-world"],
+            "label": "dock danger",
+        }
+    ]
+    state["pressure_graph"]["foreground_node_id"] = "p-danger-world"
+    state["pressure_graph"]["threshold_crossings"] = []
+    state["pressure_graph"]["evolution_receipts"] = []
+    state["engine_world_events"] = []
+    return state
+
+
+def test_prepare_action_turn_records_pressure_world_event_and_receipts():
+    state = _state_with_high_pressure()
+
+    updated, _, diag, _, working_rolling = replayability.prepare_action_turn(
+        state,
+        3,
+        rolling_state={"scene": "dock"},
+    )
+
+    events = updated["engine_world_events"]
+    assert len(events) == 1
+    assert events[0]["event_type"] == "pressure_world_event"
+    assert events[0]["pressure_node_id"] == "p-danger-world"
+    assert "engine_world_events" not in working_rolling
+    assert working_rolling["locations"][0]["id"] == "dock"
+    assert working_rolling["locations"][0]["status"] == "unstable"
+    assert diag["pressure_spawned_events"] == 1
+    assert diag["world_state_events_consumed"] == 1
+    receipt_types = {r["receipt_type"] for r in updated["pressure_graph"]["evolution_receipts"]}
+    assert {"pressure_escalated", "pressure_spawned_event"} <= receipt_types
+    assert any(r["receipt_type"] == "location_updated" for r in updated["world_state_receipts"])
+    assert any(
+        r.get("receipt_type") == "pressure_spawned_event"
+        and r.get("source_event_id") == events[0]["event_id"]
+        for r in updated["transition_receipts"]
+    )
+
+
+def test_pressure_world_event_replay_is_deterministic():
+    state = _state_with_high_pressure()
+    a, _, _, _, _ = replayability.prepare_action_turn(copy.deepcopy(state), 3, rolling_state={"scene": "dock"})
+    b, _, _, _, _ = replayability.prepare_action_turn(copy.deepcopy(state), 3, rolling_state={"scene": "dock"})
+
+    assert a["engine_world_events"] == b["engine_world_events"]
+    assert a["pressure_graph"] == b["pressure_graph"]
+    assert a["transition_receipts"] == b["transition_receipts"]
+
+
+def _pressure_world_event(event_id, kind, *, location_ids=None, faction_ids=None, actor_ids=None, turn=3):
+    return {
+        "event_id": event_id,
+        "event_type": "pressure_world_event",
+        "pressure_event_kind": kind,
+        "pressure_node_id": f"p-{kind}",
+        "pressure_kind": "danger",
+        "turn": turn,
+        "magnitude": 80,
+        "location_ids": list(location_ids or []),
+        "faction_ids": list(faction_ids or []),
+        "actor_ids": list(actor_ids or []),
+        "tags": ["pressure_world_event"],
+    }
+
+
+def _consume_world_events(events, rolling=None, turn=3):
+    state = {
+        "run_seed": FIXED_SEED,
+        "engine_world_events": copy.deepcopy(events),
+        "world_state_consumed_event_ids": [],
+        "world_state_receipts": [],
+    }
+    world = copy.deepcopy(rolling or {})
+    result = world_state_consumers.consume_pressure_world_events(state, world, turn)
+    return state, world, result
+
+
+def test_world_state_consumer_bridge_collapse_updates_location():
+    state, world, result = _consume_world_events([
+        _pressure_world_event("evt-collapse", "collapse", location_ids=["bridge-east"])
+    ])
+
+    assert result["diagnostics"]["world_state_events_consumed"] == 1
+    assert world["locations"][0]["id"] == "bridge-east"
+    assert world["locations"][0]["status"] == "blocked"
+    assert "collapsed" in world["locations"][0]["conditions"]
+    assert world["infrastructure_state"][0]["status"] == "damaged"
+    assert world["travel_routes"][0]["status"] == "blocked"
+    receipt_types = {receipt["receipt_type"] for receipt in state["world_state_receipts"]}
+    assert {"location_updated", "infrastructure_changed", "travel_network_changed"} <= receipt_types
+
+
+def test_world_state_consumer_raid_changes_structured_resources():
+    state, world, result = _consume_world_events([
+        _pressure_world_event("evt-raid", "raid", location_ids=["market"], faction_ids=["watch"])
+    ])
+
+    assert result["diagnostics"]["world_state_mutation_count"] == 3
+    assert world["world_resources"][0]["quantity_delta"] == -2
+    assert world["world_resources"][0]["trend"] == "decreasing"
+    faction = world["faction_pressure"][0]
+    assert faction["id"] == "watch"
+    assert faction["ticks"]["security"] == -1
+    receipt_types = {receipt["receipt_type"] for receipt in state["world_state_receipts"]}
+    assert {"resource_changed", "faction_changed", "settlement_changed"} <= receipt_types
+
+
+def test_world_state_consumer_trader_arrival_updates_market_state():
+    state, world, result = _consume_world_events([
+        _pressure_world_event("evt-trader", "trader_arrival", location_ids=["market"])
+    ])
+
+    assert result["diagnostics"]["world_state_events_consumed"] == 1
+    assert world["world_resources"][0]["quantity_delta"] == 2
+    assert world["world_resources"][0]["trend"] == "increasing"
+    assert world["market_state"][0]["status"] == "active"
+    assert "trader_arrived" in world["market_state"][0]["conditions"]
+
+
+def test_world_state_consumer_duplicate_replay_ignored():
+    event = _pressure_world_event("evt-raid", "raid", location_ids=["market"], faction_ids=["watch"])
+    state, world, first = _consume_world_events([event])
+    receipts_after_first = copy.deepcopy(state["world_state_receipts"])
+    resources_after_first = copy.deepcopy(world["world_resources"])
+
+    second = world_state_consumers.consume_pressure_world_events(state, world, 3)
+
+    assert first["diagnostics"]["world_state_events_consumed"] == 1
+    assert second["diagnostics"]["world_state_replay_suppressed"] == 1
+    assert state["world_state_receipts"] == receipts_after_first
+    assert world["world_resources"] == resources_after_first
+
+
+def test_world_state_consumer_unrelated_event_ignored():
+    state, world, result = _consume_world_events([
+        {"event_id": "evt-other", "event_type": "npc_move", "turn": 3}
+    ])
+
+    assert result["diagnostics"]["world_state_consumer_executed"] is False
+    assert result["diagnostics"]["world_state_mutation_count"] == 0
+    assert state["world_state_consumed_event_ids"] == []
+    assert world == {}
+
+
+def test_world_state_consumer_missing_target_handled_safely():
+    state, world, result = _consume_world_events([
+        _pressure_world_event("evt-collapse-missing", "collapse")
+    ])
+
+    assert result["diagnostics"]["world_state_events_consumed"] == 1
+    assert result["diagnostics"]["world_state_skipped_mutations"] == 1
+    assert state["world_state_consumed_event_ids"] == ["evt-collapse-missing"]
+    assert state["world_state_receipts"] == []
+    assert world == {}
+
+
+def test_world_state_consumer_multiple_events_are_deterministic():
+    events = [
+        _pressure_world_event("evt-trader", "trader_arrival", location_ids=["market"]),
+        _pressure_world_event("evt-raid", "raid", location_ids=["market"], faction_ids=["watch"]),
+    ]
+
+    first_state, first_world, first_result = _consume_world_events(events)
+    second_state, second_world, second_result = _consume_world_events(events)
+
+    assert first_world == second_world
+    assert first_state["world_state_receipts"] == second_state["world_state_receipts"]
+    assert first_result == second_result
+
+
+def test_world_state_consumer_duplicate_event_in_history_suppressed():
+    event = _pressure_world_event("evt-raid", "raid", location_ids=["market"])
+    state, world, result = _consume_world_events([event, dict(event)])
+
+    assert result["diagnostics"]["world_state_events_consumed"] == 1
+    assert result["diagnostics"]["world_state_duplicate_suppressed"] == 1
+    assert world["world_resources"][0]["quantity_delta"] == -2
+    assert state["world_state_consumed_event_ids"] == ["evt-raid"]
+
+
+def test_world_state_consumer_mutations_remain_bounded():
+    state, world, result = _consume_world_events([
+        _pressure_world_event("evt-collapse", "collapse", location_ids=["bridge-east"])
+    ])
+
+    assert result["diagnostics"]["world_state_mutation_count"] <= (
+        world_state_consumers.MAX_WORLD_STATE_MUTATIONS_PER_EVENT
+    )
+    assert len(state["world_state_receipts"]) <= world_state_consumers.MAX_WORLD_STATE_MUTATIONS_PER_EVENT
+
+
+def test_world_state_consumer_updates_actor_registries_when_present():
+    state, world, _ = _consume_world_events([
+        _pressure_world_event("evt-disease", "disease", location_ids=["camp"], actor_ids=["npc-a"]),
+        _pressure_world_event("evt-missing", "unexplained_disappearance", location_ids=["camp"], actor_ids=["npc-b"]),
+    ])
+
+    health = {row["id"]: row for row in world["actor_health_registry"]}
+    locations = {row["id"]: row for row in world["actor_location_registry"]}
+    assert health["npc-a"]["health_status"] == "sick"
+    assert locations["npc-b"]["status"] == "missing"
+    assert locations["npc-b"]["location_id"] == "camp"
+    assert state["world_state_receipts"]
+
+
+def _guard_fixture():
+    authoritative = {
+        "world_resources": [
+            {
+                "id": "resource-market",
+                "quantity_delta": -2,
+                "trend": "decreasing",
+                "status": "shortage",
+                "source_event_ids": ["evt-raid"],
+                "updated_turn": 3,
+            }
+        ],
+        "travel_routes": [
+            {
+                "id": "route-east",
+                "location_id": "bridge-east",
+                "status": "blocked",
+                "conditions": ["route_obstructed"],
+                "source_event_ids": ["evt-collapse"],
+                "updated_turn": 3,
+            }
+        ],
+        "infrastructure_state": [
+            {
+                "id": "infrastructure-east",
+                "location_id": "bridge-east",
+                "status": "damaged",
+                "conditions": ["structural_failure"],
+                "source_event_ids": ["evt-collapse"],
+                "updated_turn": 3,
+            }
+        ],
+        "settlement_conditions": [
+            {
+                "id": "settlement-east",
+                "location_id": "bridge-east",
+                "status": "unstable",
+                "conditions": ["security_decreased"],
+                "source_event_ids": ["evt-raid"],
+                "updated_turn": 3,
+            }
+        ],
+        "faction_pressure": [
+            {
+                "id": "watch",
+                "name": "watch",
+                "ticks": {"security": -1, "influence": -1},
+                "source_event_ids": ["evt-raid"],
+                "updated_turn": 3,
+            }
+        ],
+        "actor_health_registry": [
+            {
+                "id": "npc-a",
+                "health_status": "sick",
+                "source_event_ids": ["evt-disease"],
+                "updated_turn": 3,
+            }
+        ],
+        "actor_location_registry": [
+            {
+                "id": "npc-b",
+                "location_id": "camp",
+                "status": "missing",
+                "source_event_ids": ["evt-missing"],
+                "updated_turn": 3,
+            }
+        ],
+    }
+    replay = {"run_seed": FIXED_SEED, "world_state_guard_receipts": []}
+    return authoritative, replay
+
+
+def test_post_llm_guard_restores_consumer_owned_world_resources():
+    authoritative, replay = _guard_fixture()
+    merged = copy.deepcopy(authoritative)
+    merged["world_resources"][0]["quantity_delta"] = 0
+    merged["world_resources"][0]["trend"] = "stable"
+    merged["world_resources"][0]["status"] = "stable"
+    merged["scene"] = "market"
+
+    result = world_state_consumers.enforce_consumer_world_state(merged, authoritative, replay, 4)
+
+    assert merged["world_resources"][0]["quantity_delta"] == -2
+    assert merged["world_resources"][0]["trend"] == "decreasing"
+    assert merged["world_resources"][0]["status"] == "shortage"
+    assert merged["scene"] == "market"
+    receipt = next(r for r in replay["world_state_guard_receipts"] if r["receipt_type"] == "world_state_row_restored")
+    assert receipt["collection"] == "world_resources"
+    assert receipt["row_id"] == "resource-market"
+    assert receipt["source_event_ids"] == ["evt-raid"]
+    assert receipt["attempted_value_summary"]
+    assert receipt["authoritative_value_summary"]
+    assert result["diagnostics"]["world_state_guard_rows_restored"] == 1
+
+
+def test_post_llm_guard_reinserts_or_restores_route_infrastructure_settlement_and_faction():
+    authoritative, replay = _guard_fixture()
+    merged = {
+        "travel_routes": [],
+        "infrastructure_state": [],
+        "settlement_conditions": [],
+        "faction_pressure": [{"id": "watch", "name": "watch", "ticks": {"security": 0, "influence": 0, "goodwill": 2}}],
+    }
+
+    world_state_consumers.enforce_consumer_world_state(merged, authoritative, replay, 4)
+
+    assert merged["travel_routes"][0]["status"] == "blocked"
+    assert merged["infrastructure_state"][0]["status"] == "damaged"
+    assert merged["settlement_conditions"][0]["status"] == "unstable"
+    assert merged["faction_pressure"][0]["ticks"]["security"] == -1
+    assert merged["faction_pressure"][0]["ticks"]["influence"] == -1
+    assert merged["faction_pressure"][0]["ticks"]["goodwill"] == 2
+    receipt_types = {row["receipt_type"] for row in replay["world_state_guard_receipts"]}
+    assert "world_state_row_reinserted" in receipt_types
+    assert "world_state_field_restored" in receipt_types
+    reinserted = [row for row in replay["world_state_guard_receipts"] if row["receipt_type"] == "world_state_row_reinserted"]
+    assert any(row["attempted_value_summary"] == '{"attempt":"delete_or_omit"}' for row in reinserted)
+
+
+def test_post_llm_guard_is_idempotent_and_replay_safe():
+    authoritative, replay = _guard_fixture()
+    merged = copy.deepcopy(authoritative)
+    merged["world_resources"][0]["quantity_delta"] = 0
+
+    first = world_state_consumers.enforce_consumer_world_state(merged, authoritative, replay, 4)
+    receipts_after_first = copy.deepcopy(replay["world_state_guard_receipts"])
+    merged_after_first = copy.deepcopy(merged)
+    second = world_state_consumers.enforce_consumer_world_state(merged, authoritative, replay, 4)
+
+    assert merged == merged_after_first
+    assert replay["world_state_guard_receipts"] == receipts_after_first
+    assert first["diagnostics"]["world_state_guard_rows_restored"] == 1
+    assert second["diagnostics"]["world_state_guard_rows_restored"] == 0
+
+
+def test_post_llm_guard_survives_two_consecutive_merge_cycles():
+    authoritative, replay = _guard_fixture()
+    merged_turn_4 = copy.deepcopy(authoritative)
+    merged_turn_4["world_resources"][0]["quantity_delta"] = 0
+    merged_turn_4["travel_routes"][0]["status"] = "open"
+
+    first = world_state_consumers.enforce_consumer_world_state(merged_turn_4, authoritative, replay, 4)
+    authoritative_turn_4 = copy.deepcopy(merged_turn_4)
+
+    merged_turn_5 = copy.deepcopy(authoritative_turn_4)
+    merged_turn_5["world_resources"][0]["trend"] = "stable"
+    merged_turn_5["infrastructure_state"][0]["conditions"] = []
+    merged_turn_5["settlement_conditions"][0]["status"] = "stable"
+    merged_turn_5["faction_pressure"][0]["ticks"]["security"] = 0
+
+    second = world_state_consumers.enforce_consumer_world_state(merged_turn_5, authoritative_turn_4, replay, 5)
+
+    assert merged_turn_5["world_resources"][0]["quantity_delta"] == -2
+    assert merged_turn_5["world_resources"][0]["trend"] == "decreasing"
+    assert merged_turn_5["travel_routes"][0]["status"] == "blocked"
+    assert merged_turn_5["infrastructure_state"][0]["conditions"] == ["structural_failure"]
+    assert merged_turn_5["settlement_conditions"][0]["status"] == "unstable"
+    assert merged_turn_5["faction_pressure"][0]["ticks"]["security"] == -1
+    assert first["diagnostics"]["world_state_guard_rows_restored"] >= 1
+    assert second["diagnostics"]["world_state_guard_rows_restored"] >= 1
+
+
+def test_post_llm_guard_preserves_legitimate_unrelated_updates():
+    authoritative, replay = _guard_fixture()
+    merged = copy.deepcopy(authoritative)
+    merged["recent_beats"] = ["new beat"]
+    merged["world_resources"].append(
+        {
+            "id": "resource-harbor",
+            "quantity_delta": 3,
+            "trend": "increasing",
+            "status": "improving",
+        }
+    )
+
+    world_state_consumers.enforce_consumer_world_state(merged, authoritative, replay, 4)
+
+    assert merged["recent_beats"] == ["new beat"]
+    assert any(row["id"] == "resource-harbor" for row in merged["world_resources"])
+    assert replay["world_state_guard_receipts"] == []
+
+
+def test_post_llm_guard_preserves_unrelated_rows_in_same_container_across_two_cycles():
+    authoritative, replay = _guard_fixture()
+    merged_turn_4 = copy.deepcopy(authoritative)
+    merged_turn_4["world_resources"].append(
+        {"id": "resource-harbor", "quantity_delta": 3, "trend": "increasing", "status": "improving"}
+    )
+    merged_turn_4["world_resources"][0]["status"] = "stable"
+
+    world_state_consumers.enforce_consumer_world_state(merged_turn_4, authoritative, replay, 4)
+    assert next(row for row in merged_turn_4["world_resources"] if row["id"] == "resource-harbor")["status"] == "improving"
+
+    authoritative_turn_4 = copy.deepcopy(merged_turn_4)
+    merged_turn_5 = copy.deepcopy(authoritative_turn_4)
+    harbor = next(row for row in merged_turn_5["world_resources"] if row["id"] == "resource-harbor")
+    harbor["status"] = "scarce-but-recovering"
+    merged_turn_5["world_resources"][0]["quantity_delta"] = 99
+
+    world_state_consumers.enforce_consumer_world_state(merged_turn_5, authoritative_turn_4, replay, 5)
+
+    assert next(row for row in merged_turn_5["world_resources"] if row["id"] == "resource-harbor")["status"] == "scarce-but-recovering"
+    assert merged_turn_5["world_resources"][0]["quantity_delta"] == -2
+
+
+def test_post_llm_guard_restores_actor_health_and_location_rows():
+    authoritative, replay = _guard_fixture()
+    merged = copy.deepcopy(authoritative)
+    merged["actor_health_registry"][0]["health_status"] = "healthy"
+    merged["actor_location_registry"][0]["status"] = "present"
+    merged["actor_location_registry"][0]["location_id"] = "safehouse"
+
+    world_state_consumers.enforce_consumer_world_state(merged, authoritative, replay, 4)
+
+    assert merged["actor_health_registry"][0]["health_status"] == "sick"
+    assert merged["actor_location_registry"][0]["status"] == "missing"
+    assert merged["actor_location_registry"][0]["location_id"] == "camp"
+    assert any(row["collection"] == "actor_health_registry" for row in replay["world_state_guard_receipts"])
+    assert any(row["collection"] == "actor_location_registry" for row in replay["world_state_guard_receipts"])
+
+
+def test_prompt_safe_rolling_hides_consumer_metadata():
+    safe = server._prompt_safe_rolling(
+        {
+            "world_resources": [
+                {
+                    "id": "resource-market",
+                    "quantity_delta": -2,
+                    "source_event_ids": ["evt-raid"],
+                    "updated_turn": 3,
+                }
+            ],
+            "actor_location_registry": [
+                {"id": "npc-b", "location_id": "camp", "status": "missing", "source_event_ids": ["evt-missing"], "updated_turn": 3}
+            ],
+            "world_state_guard_receipts": [{"receipt_id": "guard-1"}],
+        }
+    )
+
+    assert "source_event_ids" not in safe["world_resources"][0]
+    assert "updated_turn" not in safe["world_resources"][0]
+    assert "source_event_ids" not in safe["actor_location_registry"][0]
+    assert "updated_turn" not in safe["actor_location_registry"][0]
+    assert "world_state_guard_receipts" not in safe
 
 
 def test_replayability_state_is_not_second_event_history():
