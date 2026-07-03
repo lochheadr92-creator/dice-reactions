@@ -128,8 +128,12 @@ def test_strip_neutralises_deceased_npc_revival():
 # update_death_registry
 # ---------------------------------------------------------------------------
 def test_death_registry_records_clear_death():
+    # Contract: prose death + STRUCTURED corroboration (stance dead) → canonical.
     prior = {"npc_memory": [{"name": "Mira"}]}
-    merged = {"npc_memory": [{"name": "Mira"}]}
+    merged = {
+        "npc_memory": [{"name": "Mira"}],
+        "npcs": [{"name": "Mira", "stance": "dead"}],
+    }
     parsed = _Parsed(narrative="The blade finds its mark and Mira lies dead on the cold stone.")
     adj = gateway.update_death_registry(parsed, prior, merged, "stab Mira")
     assert "Mira" in merged.get("deceased", [])

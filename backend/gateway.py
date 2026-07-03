@@ -347,6 +347,54 @@ def strip_illegal_state_changes(
 # ---------------------------------------------------------------------------
 # Death registry — record new deaths into engine-owned `deceased`
 # ---------------------------------------------------------------------------
+# Structured (state-level) death markers. A death becomes canonical only when
+# the STRUCTURED state corroborates it — prose alone never creates authority
+# ("State is truth. Narrative is output.").
+_NPC_DEAD_MARKERS = {"dead", "deceased", "slain", "killed"}
+# Structured exit / absence markers on an NPC row (matches npc_liveness
+# conventions: `absent` / `removed` booleans plus explicit stance strings).
+_NPC_EXIT_MARKERS = {"left", "departed", "exited", "gone", "fled", "absent"}
+
+
+def _npc_row_marks_death(row: Any) -> bool:
+    """True if a structured NPC row explicitly marks this NPC as dead."""
+    if not isinstance(row, dict):
+        return False
+    if row.get("alive") is False:
+        return True
+    for field in ("stance", "status"):
+        if str(row.get(field) or "").strip().lower() in _NPC_DEAD_MARKERS:
+            return True
+    return "deceased" in str(row.get("next_move") or "").lower()
+
+
+def _npc_row_marks_exit(row: Any) -> bool:
+    """True if a structured NPC row explicitly marks an exit from the scene."""
+    if not isinstance(row, dict):
+        return False
+    if row.get("absent") is True or row.get("removed") is True:
+        return True
+    for field in ("stance", "status"):
+        if str(row.get(field) or "").strip().lower() in _NPC_EXIT_MARKERS:
+            return True
+    return False
+
+
+def structured_death_names(*states: Any) -> set:
+    """Lower-cased NPC names marked dead in STRUCTURED rolling state."""
+    out: set = set()
+    for state in states:
+        if not isinstance(state, dict):
+            continue
+        for key in ("npcs", "npc_memory"):
+            for row in state.get(key) or []:
+                if _npc_row_marks_death(row):
+                    name = _npc_name(row)
+                    if name:
+                        out.add(name.lower())
+    return out
+
+
 def update_death_registry(
     parsed: Any,
     prior_rolling: Optional[Dict[str, Any]],
@@ -357,6 +405,13 @@ def update_death_registry(
 
     Conservative: only fires when a KNOWN named NPC is the clear subject/object
     of a death verb, and the statement is not hypothetical/threatening.
+
+    Authorisation gate: a prose death becomes canonical ONLY when the model's
+    STRUCTURED state also marks the NPC dead (stance/status dead, alive=False,
+    or a deceased next_move). Prose-only deaths are blocked and reported via a
+    `gateway:prose_only_death_blocked` diagnostic instead of entering the
+    engine-owned `deceased` registry. Engine-authorised lifecycle deaths write
+    to the registry directly (simulation_clock) and do not pass through here.
     """
     if not isinstance(merged_rolling, dict):
         return []
@@ -383,7 +438,7 @@ def update_death_registry(
         return []
 
     already = {str(d).strip().lower() for d in (merged_rolling.get("deceased") or [])}
-    newly_dead: List[str] = []
+    prose_dead: List[str] = []
 
     for name in names:
         if name.lower() in already:
@@ -399,12 +454,28 @@ def update_death_registry(
             window = text[max(0, m.start() - 40): m.end()]
             if _DEATH_NEGATION_RE.search(window):
                 continue
-            newly_dead.append(name)
+            prose_dead.append(name)
             already.add(name.lower())
             break
 
-    if not newly_dead:
+    if not prose_dead:
         return []
+
+    # Authorisation gate — prose alone is never authoritative. Require an
+    # explicit structured death marker in the fresh or merged rolling state.
+    structured = structured_death_names(
+        getattr(parsed, "rolling_state", None), merged_rolling
+    )
+    newly_dead = [n for n in prose_dead if n.lower() in structured]
+    blocked = [n for n in prose_dead if n.lower() not in structured]
+
+    adjustments: List[str] = []
+    if blocked:
+        adjustments.append(
+            "gateway:prose_only_death_blocked:" + " | ".join(blocked[:6])
+        )
+    if not newly_dead:
+        return adjustments
 
     registry = list(merged_rolling.get("deceased") or [])
     registry.extend(newly_dead)
@@ -417,7 +488,76 @@ def update_death_registry(
             seen.add(k)
             deduped.append(n)
     merged_rolling["deceased"] = deduped
-    return ["gateway:death_recorded:" + " | ".join(newly_dead[:6])]
+    adjustments.append("gateway:death_recorded:" + " | ".join(newly_dead[:6]))
+    return adjustments
+
+
+# ---------------------------------------------------------------------------
+# Active scene cast — engine-owned protection for `rolling_state["npcs"]`
+# ---------------------------------------------------------------------------
+def _norm_scene(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    raw = _re.sub(r"^(?:the|a|an)\s+", "", raw)
+    return _re.sub(r"\s+", " ", raw)
+
+
+def preserve_active_scene_cast(
+    prior_rolling: Optional[Dict[str, Any]],
+    merged_rolling: Optional[Dict[str, Any]],
+) -> List[str]:
+    """Restore active-scene NPCs the model silently dropped this turn.
+
+    `rolling_state["npcs"]` is the active scene cast. The model re-emits it
+    each turn, so an NPC can vanish without any exit, movement, or death. This
+    guard (mirroring `secrets.enforce_authoritative_registry` /
+    `stress.enforce_authoritative_stress`) runs AFTER consolidation and the
+    death registry, and restores any prior cast member missing from the merged
+    state unless an explicit, engine-recognised departure exists:
+
+      • the NPC is in the engine-owned `deceased` registry (authorised death;
+        lifecycle deaths and corroborated deaths both land there), or
+      • the prior row already carried an explicit death/exit marker
+        (`absent`/`removed`/dead or departed stance — the NPC left earlier), or
+      • the scene changed this turn (movement — cast turnover is legitimate).
+
+    A fresh row carrying an explicit exit marker is kept as-is (the NPC is
+    present in the merged list with its marker), so explicit exits are allowed
+    while silent drops are reverted.
+    """
+    if not isinstance(prior_rolling, dict) or not isinstance(merged_rolling, dict):
+        return []
+    prior_rows = [r for r in (prior_rolling.get("npcs") or []) if _npc_name(r)]
+    if not prior_rows:
+        return []
+
+    prior_scene = _norm_scene(prior_rolling.get("scene") or prior_rolling.get("location"))
+    merged_scene = _norm_scene(merged_rolling.get("scene") or merged_rolling.get("location"))
+    if prior_scene and merged_scene and prior_scene != merged_scene:
+        # Explicit movement to a different scene — the cast may turn over.
+        return []
+
+    merged_rows = merged_rolling.get("npcs")
+    if not isinstance(merged_rows, list):
+        merged_rows = []
+    present = {_npc_name(r).lower() for r in merged_rows if _npc_name(r)}
+    deceased = {str(d).strip().lower() for d in (merged_rolling.get("deceased") or [])}
+
+    restored: List[str] = []
+    for row in prior_rows:
+        name = _npc_name(row)
+        key = name.lower()
+        if key in present or key in deceased:
+            continue
+        if _npc_row_marks_death(row) or _npc_row_marks_exit(row):
+            continue
+        merged_rows.append(dict(row) if isinstance(row, dict) else {"name": name})
+        present.add(key)
+        restored.append(name)
+
+    if not restored:
+        return []
+    merged_rolling["npcs"] = merged_rows
+    return ["gateway:scene_cast_npc_restored:" + " | ".join(restored[:6])]
 
 
 # ---------------------------------------------------------------------------

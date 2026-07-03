@@ -3,7 +3,7 @@ End-to-end Anti-Hallucination Gateway test (Ch 31) through the real routes.
 
 Drives `new_story` + `story_action` with a SCRIPTED LLM (chat_completion_with_meta
 is monkeypatched) so the test is fully deterministic. Verifies:
-  • death registry records a clear NPC death on turn 1,
+  • death registry records a clear, state-corroborated NPC death on turn 1,
   • immutable-truth block is injected into the turn-2 prompt,
   • a contradictory turn-2 draft (revived object + dead NPC speaking) triggers the
     hallucination correction re-prompt,
@@ -71,7 +71,9 @@ TURN1 = _raw(
         "active_pressures": ["roof beams cracking overhead"],
         "objectives": ["escape before the chamber seals"],
         "object_locations": [{"object": "iron key", "status": "destroyed", "where": "furnace"}],
-        "npcs": [{"name": "Garrett", "stance": "unknown"}, {"name": "Mira", "stance": "neutral"}],
+        # Garrett's death is corroborated in structured state (stance dead) —
+        # prose-only deaths no longer enter the engine-owned deceased registry.
+        "npcs": [{"name": "Garrett", "stance": "dead"}, {"name": "Mira", "stance": "neutral"}],
         "npc_memory": [
             {"name": "Garrett", "remembers": [{"event": "crushed in the collapse", "severity": "major", "since_turn": 1}]},
             {"name": "Mira", "remembers": [{"event": "survived beside the player", "severity": "major", "since_turn": 1}], "goal": "escape", "next_move": "follow the player"},

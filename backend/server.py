@@ -54,6 +54,7 @@ import pacing  # noqa: E402  — Early-Game Pacing Governor v1 (deterministic)
 import secrets  # noqa: E402  — Secret Reveal Trigger v1 (deterministic)
 import replayability  # noqa: E402  — Replayability Engine v1 (deterministic)
 import stress  # noqa: E402  — Ch 14 Stress substrate v1 (deterministic)
+import time_commands  # noqa: E402
 import causal_history  # noqa: E402  — player-safe "Why this happened" projection
 from security import fetch_owned_session, require_admin, require_device_id  # noqa: E402
 from rate_limit import (  # noqa: E402
@@ -539,6 +540,7 @@ class ActionRequest(BaseModel):
     session_id: str
     action_text: str
     debug_mode: bool = False
+    time_command: Optional[Dict[str, Any]] = None
 
 class ParsedTurn(BaseModel):
     narrative: str
@@ -3424,6 +3426,11 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
     lease_token: Optional[str] = None
     session_id = req.session_id
     try:
+        approved_time_command = time_commands.validate_time_command_request(req.time_command)
+    except time_commands.TimeCommandError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
         session, lease_token = await acquire_action_lease(db, session_id, device_id)
         expected_turn_count = session.get("turn_count", 0)
         next_turn_number = expected_turn_count + 1
@@ -3442,14 +3449,33 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
         frozen_rb_directives: Optional[Dict[str, str]] = None
         working_replayability = copy.deepcopy(session.get("replayability_state"))
         rb_diag: Dict[str, Any] = {}
+        time_command_diag: Dict[str, Any] = {}
         if replayability.replayability_active(session):
+            if approved_time_command:
+                try:
+                    working_replayability, time_event = time_commands.stage_time_advance(
+                        working_replayability,
+                        session_id=session_id,
+                        turn_number=next_turn_number,
+                        command=approved_time_command,
+                    )
+                    time_command_diag["time_command"] = {
+                        "accepted": True,
+                        "event_id": time_event["event_id"],
+                        "elapsed_simulation_days": time_event["elapsed_simulation_days"],
+                    }
+                except time_commands.TimeCommandError as exc:
+                    raise HTTPException(status_code=409, detail=str(exc))
             working_replayability, frozen_rb_directives, rb_diag, _rb_thresholds, cast_rolling = (
                 replayability.prepare_action_turn(
                     working_replayability, next_turn_number, rolling_state=working_rolling
                 )
             )
+            rb_diag.update(time_command_diag)
             if cast_rolling:
                 working_rolling = cast_rolling
+        elif approved_time_command:
+            raise HTTPException(status_code=400, detail="time_command_requires_replayability_state")
 
         gen_session = dict(session)
         gen_session["rolling_state"] = working_rolling
@@ -3520,6 +3546,13 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
             gateway.update_death_registry(
                 parsed, prior_rolling, merged_rolling, req.action_text
             )
+        )
+        # Ch 31 extension — active scene cast is engine-protected: NPCs the
+        # model silently dropped are restored unless an engine-authorised
+        # exit, movement, or death exists. Runs after the death registry so
+        # it sees this turn's final `deceased` state.
+        guard_adjustments.extend(
+            gateway.preserve_active_scene_cast(prior_rolling, merged_rolling)
         )
         guard_adjustments.extend(
             gateway.update_destruction_registry(
