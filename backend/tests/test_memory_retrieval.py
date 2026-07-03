@@ -128,3 +128,45 @@ def test_developer_mode_cannot_disable_shadow_gate():
     assert prepared["shadow_mode"] is True
     for trace in prepared["retrieval_traces"]:
         assert trace["shadow_mode"] is True
+
+
+def test_retrieval_exposes_capped_pressure_context():
+    rolling = {
+        "npc_memory": [
+            {
+                "name": "Guard",
+                "remembers": [
+                    {"summary": "alarm", "since_turn": 1, "weight": "major", "context": {"pressure_kind": "danger"}}
+                ],
+            }
+        ],
+        "npcs": [{"name": "Guard", "npc_id": "g1", "stance": "ally"}],
+    }
+    replay = {
+        "run_seed": "seed",
+        "pressure_graph": {
+            "foreground_node_id": "p2",
+            "nodes": [
+                {"id": "p1", "kind": "danger", "status": "active", "magnitude": 80, "label": "alarm spreading"},
+                {"id": "p2", "kind": "resource", "status": "active", "magnitude": 20, "label": "torch failing"},
+                {"id": "p3", "kind": "social", "status": "active", "magnitude": 70, "label": "guard suspicion"},
+                {"id": "p4", "kind": "danger", "status": "active", "magnitude": 60, "label": "roof strain"},
+            ],
+        },
+    }
+    snapshot = FoundationTurnSnapshot.build(
+        run_seed="seed",
+        turn_sequence=5,
+        rolling_state=rolling,
+        replayability_state=replay,
+    )
+    prepared = memory_retrieval.evaluate_memory_retrieval(
+        snapshot,
+        actor_resolution={"tiers_by_actor_id": {"g1": "hero"}, "acting_actor_ids": ["g1"]},
+        gravity={},
+        rolling_state=rolling,
+    )
+
+    nodes = prepared["pressure_context"]["nodes"]
+    assert [node["id"] for node in nodes] == ["p2", "p1", "p3"]
+    assert len(nodes) == memory_retrieval.MAX_RETRIEVAL_PRESSURE_NODES

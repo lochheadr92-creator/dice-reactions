@@ -1,7 +1,7 @@
 """
 Replayability Engine v1 — orchestration, state container, directives, enforcement.
 
-Session document field ``replayability_state`` (NOT rolling_state).
+Session document field ``replayability_state`` owns replayability truth.
 Legacy sessions without the field skip replayability processing (Policy A).
 
 Canonical transitions live in rolling_state structures (relationship vectors,
@@ -33,6 +33,7 @@ import pressure_graph
 import relationships
 import simulation_clock
 import stress
+import world_state_consumers as world_consumers
 from run_identity import derive_run_identity, is_closed_enum_identity
 
 logger = logging.getLogger(__name__)
@@ -40,11 +41,13 @@ logger = logging.getLogger(__name__)
 REPLAYABILITY_VERSION = 1
 TRANSITION_RECEIPTS_MAX = 32
 RELATIONSHIP_EFFECT_RECEIPTS_MAX = 32
+MAX_ENGINE_WORLD_EVENTS = 24
 # Documented hard budget for full replayability_state at simultaneous caps.
 # Measured capped fixture ~53 KiB; 64 KiB leaves ~21% headroom without truncation.
 REPLAYABILITY_STATE_BUDGET_BYTES = 65_536
 
-# Keys the LLM must never own in rolling_state.
+# Keys the LLM must never own in rolling_state. `pressure_graph` is stripped here
+# and then re-added by `enforce_authoritative` as an engine-owned projection.
 ROLLING_REPLAYABILITY_KEYS = frozenset({
     "replayability_identity",
     "run_identity",
@@ -59,6 +62,9 @@ ROLLING_REPLAYABILITY_KEYS = frozenset({
     "arc_diversity",
     "pending_npc_move",
     "engine_world_events",
+    "world_state_consumed_event_ids",
+    "world_state_receipts",
+    "world_state_guard_receipts",
     "npc_move_receipts",
 })
 
@@ -204,6 +210,10 @@ def empty_replayability_state() -> Dict[str, Any]:
         "arc_diversity": arc.init_arc_diversity(),
         "frozen_npc_move": None,
         "npc_move_receipts": [],
+        "engine_world_events": [],
+        "world_state_consumed_event_ids": [],
+        "world_state_receipts": [],
+        "world_state_guard_receipts": [],
         "relationship_effect_receipts": [],
         "lc_relationship_applied_receipt_id": None,
     }
@@ -237,6 +247,64 @@ def _append_transition_receipt(
     return True
 
 
+def _append_engine_world_event(state: Dict[str, Any], event: Mapping[str, Any]) -> bool:
+    event_id = str(event.get("event_id") or "").strip()
+    if not event_id:
+        return False
+    events = state.setdefault("engine_world_events", [])
+    if any(isinstance(row, dict) and row.get("event_id") == event_id for row in events):
+        return False
+    events.append(dict(event))
+    if len(events) > MAX_ENGINE_WORLD_EVENTS:
+        state["engine_world_events"] = events[-MAX_ENGINE_WORLD_EVENTS:]
+    return True
+
+
+def _engine_world_event_ids(state: Mapping[str, Any]) -> List[str]:
+    return [
+        str(row.get("event_id") or "")
+        for row in state.get("engine_world_events") or []
+        if isinstance(row, dict) and row.get("event_id")
+    ]
+
+
+def _pressure_mitigations_from_committed_move(
+    committed_move: Optional[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not isinstance(committed_move, Mapping):
+        return []
+    effects = committed_move.get("effects") or (committed_move.get("receipt") or {}).get("effects") or []
+    out: List[Dict[str, Any]] = []
+    for effect in effects:
+        if not isinstance(effect, Mapping) or effect.get("effect_type") != "pressure_magnitude":
+            continue
+        delta = int(effect.get("delta") or 0)
+        if delta >= 0:
+            continue
+        out.append(
+            {
+                "pressure_node_id": str(effect.get("target_id") or ""),
+                "delta": delta,
+                "before": effect.get("before"),
+                "after": effect.get("after"),
+                "source_event_id": str(effect.get("effect_id") or committed_move.get("receipt_id") or ""),
+            }
+        )
+    out.sort(key=lambda row: (row["pressure_node_id"], row["source_event_id"]))
+    return out
+
+
+def _pressure_event_to_echo_source(event: Mapping[str, Any]) -> Dict[str, Any]:
+    label = str(event.get("pressure_event_kind") or "pressure consequence").replace("_", " ")
+    return {
+        "source_kind": "pressure_spawned_event",
+        "source_event_id": str(event.get("event_id") or ""),
+        "echo_kind": "pressure_world_consequence",
+        "label": label[:80],
+        "mature_in": 1,
+    }
+
+
 def _build_setup_context(
     *,
     genre: Optional[str],
@@ -260,6 +328,73 @@ def _build_setup_context(
     if scenario and scenario.get("hidden_threat"):
         ctx["hidden_threat"] = scenario.get("hidden_threat")
     return ctx
+
+
+def _seed_structured_pressure_inputs(
+    graph: Dict[str, Any],
+    *,
+    run_seed: str,
+    custom_world_setup: Optional[Mapping[str, Any]],
+    scenario: Optional[Mapping[str, Any]],
+    created_turn: int = 1,
+) -> None:
+    if scenario and scenario.get("starting_pressure"):
+        pressure_graph.upsert_pressure_node(
+            graph,
+            run_seed=run_seed,
+            kind="danger",
+            origin_type="scenario_pressure",
+            origin_id=str(scenario.get("id") or "scenario_starting_pressure"),
+            scope="local",
+            magnitude=44,
+            trend=0,
+            turn_number=created_turn,
+            tags=["scenario", "starting_pressure"],
+            evidence_refs=[f"scenario:{scenario.get('id') or 'unknown'}:starting_pressure"],
+            label=str(scenario.get("starting_pressure") or "")[:80],
+        )
+
+    if not isinstance(custom_world_setup, dict):
+        pressure_graph.cap_pressure_graph(graph)
+        return
+
+    danger = custom_world_setup.get("danger")
+    if danger:
+        pressure_graph.upsert_pressure_node(
+            graph,
+            run_seed=run_seed,
+            kind="danger",
+            origin_type="custom_setup",
+            origin_id="danger",
+            scope="local",
+            magnitude=46,
+            trend=1,
+            turn_number=created_turn,
+            tags=["custom_setup", "danger"],
+            evidence_refs=["custom_setup:danger"],
+            label=str(danger)[:80],
+        )
+
+    pressures = custom_world_setup.get("pressures")
+    if isinstance(pressures, list):
+        for idx, item in enumerate(pressures[:3]):
+            if not item:
+                continue
+            pressure_graph.upsert_pressure_node(
+                graph,
+                run_seed=run_seed,
+                kind="unresolved_thread",
+                origin_type="custom_setup",
+                origin_id=f"pressure:{idx}",
+                scope="local",
+                magnitude=34 + idx * 3,
+                trend=0,
+                turn_number=created_turn,
+                tags=["custom_setup", "pressure"],
+                evidence_refs=[f"custom_setup:pressures:{idx}"],
+                label=str(item)[:80],
+            )
+    pressure_graph.cap_pressure_graph(graph)
 
 
 def _opening_unresolved_source(opening: Mapping[str, Any], run_seed: str) -> Dict[str, Any]:
@@ -306,6 +441,14 @@ def init_new_story(
     identity = derive_run_identity(seed, setup)
     opening = opening_state.select_opening_archetype(seed, setup, identity=identity, scenario=scenario)
     pg = pressure_graph.init_pressure_graph(seed, identity, opening, created_turn=1)
+    _seed_structured_pressure_inputs(
+        pg,
+        run_seed=seed,
+        custom_world_setup=custom_world_setup,
+        scenario=scenario,
+        created_turn=1,
+    )
+    pressure_graph.select_foreground(pg, identity=identity, turn_number=1)
     echo_state = echoes.init_consequence_echoes()
 
     state: Dict[str, Any] = {
@@ -320,6 +463,10 @@ def init_new_story(
         "arc_diversity": arc.init_arc_diversity(),
         "frozen_npc_move": None,
         "npc_move_receipts": [],
+        "engine_world_events": [],
+        "world_state_consumed_event_ids": [],
+        "world_state_receipts": [],
+        "world_state_guard_receipts": [],
         "relationship_effect_receipts": [],
         "lc_relationship_applied_receipt_id": None,
     }
@@ -614,6 +761,82 @@ def prepare_action_turn(
                             receipt_type="echo_scheduled",
                             turn_number=turn_number,
                         )
+
+    pressure_evolution = pressure_graph.evolve_pressure_graph(
+        pg,
+        turn_number,
+        run_seed=run_seed,
+        recent_mitigations=_pressure_mitigations_from_committed_move(committed_move),
+        existing_event_ids=_engine_world_event_ids(state),
+        identity=identity,
+    )
+    pressure_evolution_receipts = pressure_evolution.get("receipts") or []
+    pressure_spawned_events = pressure_evolution.get("events") or []
+    if pressure_evolution_receipts:
+        diagnostics["pressure_evolution_receipts"] = len(pressure_evolution_receipts)
+    if pressure_evolution.get("evaluated_node_ids"):
+        diagnostics["pressure_evolution_evaluated"] = len(pressure_evolution.get("evaluated_node_ids") or [])
+    for receipt in pressure_evolution_receipts:
+        if not isinstance(receipt, Mapping):
+            continue
+        source_id = str(receipt.get("event_id") or receipt.get("receipt_id") or "")
+        if source_id:
+            _append_transition_receipt(
+                state,
+                source_event_id=source_id,
+                receipt_type=str(receipt.get("receipt_type") or "pressure_evolved"),
+                turn_number=turn_number,
+            )
+
+    added_pressure_events: List[Dict[str, Any]] = []
+    for event in pressure_spawned_events:
+        if isinstance(event, Mapping) and _append_engine_world_event(state, event):
+            added_pressure_events.append(dict(event))
+    if added_pressure_events:
+        diagnostics["pressure_spawned_events"] = len(added_pressure_events)
+        processed = echoes.processed_source_event_ids(echo_state)
+        echo_sources = [_pressure_event_to_echo_source(event) for event in added_pressure_events]
+        echo_sources = [src for src in echo_sources if provenance.validate_provenance(src)]
+        added = echoes.schedule_from_structured_events(
+            echo_state,
+            echo_sources,
+            turn_number,
+            processed_source_ids=processed,
+        )
+        for entry in added:
+            src = entry.get("source_event_id")
+            if src:
+                _append_transition_receipt(
+                    state,
+                    source_event_id=src,
+                    receipt_type="echo_scheduled",
+                    turn_number=turn_number,
+                )
+
+    world_consumption = world_consumers.consume_pressure_world_events(
+        state,
+        working_rolling,
+        turn_number,
+    )
+    world_diag = world_consumption.get("diagnostics") or {}
+    diagnostics.update(
+        {
+            key: value
+            for key, value in world_diag.items()
+            if value not in (False, 0, None, [], {})
+        }
+    )
+    for receipt in world_consumption.get("receipts") or []:
+        if not isinstance(receipt, Mapping):
+            continue
+        receipt_id = str(receipt.get("receipt_id") or "")
+        if receipt_id:
+            _append_transition_receipt(
+                state,
+                source_event_id=receipt_id,
+                receipt_type=str(receipt.get("receipt_type") or "world_state_consumed"),
+                turn_number=turn_number,
+            )
 
     _log_utility_ai_live_diagnostics(diagnostics)
 
@@ -1012,22 +1235,18 @@ def enforce_authoritative(
     authoritative_replayability: Optional[Mapping[str, Any]],
 ) -> List[str]:
     """
-    Ensure rolling_state does not contain replayability engine ownership.
+    Ensure rolling_state contains only engine-owned replayability projections.
 
-    Replayability truth lives on the session document only.
+    Replayability truth lives on the session document; rolling_state gets a
+    capped pressure_graph projection so retrieval/prompt-state consumers can
+    read pressure without trusting model output.
     """
     adjustments = strip_replayability_from_rolling(merged_rolling)
     if authoritative_replayability:
         auth_pg = (authoritative_replayability or {}).get("pressure_graph")
-        if isinstance(auth_pg, dict) and isinstance(merged_rolling.get("pressure_graph"), dict):
-            adjustments.extend(
-                pressure_graph.strip_model_pressure_mutations(
-                    merged_rolling["pressure_graph"], auth_pg
-                )
-            )
-            del merged_rolling["pressure_graph"]
-            adjustments.append("rolling_pressure_graph_stripped")
         if isinstance(auth_pg, dict):
+            merged_rolling["pressure_graph"] = pressure_graph.project_pressure_graph_for_rolling(auth_pg)
+            adjustments.append("rolling_pressure_graph_engine_derived")
             # ADR-023: active_pressures is a read-only projection of the canonical
             # pressure_graph; overwrite any model-emitted value so pressure has a
             # single authoritative source (no narrative/LLM pressure authority).

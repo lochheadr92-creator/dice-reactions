@@ -49,10 +49,17 @@ def test_projection_orders_by_magnitude_after_foreground():
 def test_enforce_overwrites_model_active_pressures():
     auth = {"run_seed": "s", "pressure_graph": _graph(
         [{"id": "n1", "status": "active", "label": "generator dying", "magnitude": 50}], fg="n1")}
-    merged = {"active_pressures": ["LLM-invented pressure not grounded in the graph"]}
+    merged = {
+        "active_pressures": ["LLM-invented pressure not grounded in the graph"],
+        "pressure_graph": {"nodes": [{"id": "fake", "status": "active", "magnitude": 100}]},
+    }
     adj = replayability.enforce_authoritative(merged, auth)
     assert merged["active_pressures"] == ["generator dying"]          # engine-derived
     assert "active_pressures" in merged                                # key preserved
+    assert merged["pressure_graph"]["nodes"][0]["id"] == "n1"          # engine-derived
+    assert merged["pressure_graph"]["nodes"][0]["magnitude"] == 50
+    assert "rolling_pressure_graph_stripped" in adj
+    assert "rolling_pressure_graph_engine_derived" in adj
     assert "rolling_active_pressures_engine_derived" in adj
 
 
@@ -65,3 +72,15 @@ def test_enforce_active_pressures_deterministic_across_inputs():
     replayability.enforce_authoritative(m1, auth)
     replayability.enforce_authoritative(m2, auth)
     assert m1["active_pressures"] == m2["active_pressures"] == ["B", "A"]
+    assert m1["pressure_graph"] == m2["pressure_graph"]
+
+
+def test_prompt_pressure_projection_respects_cap_and_order():
+    nodes = [
+        {"id": f"n{i}", "status": "active", "label": f"L{i}", "magnitude": i}
+        for i in range(6)
+    ]
+    graph = _graph(nodes, fg="n2")
+    projected = pressure_graph.project_pressure_graph_for_prompt(graph, limit=3)
+    assert [node["id"] for node in projected["nodes"]] == ["n2", "n5", "n4"]
+    assert len(projected["nodes"]) == 3

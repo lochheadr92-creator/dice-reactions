@@ -83,6 +83,8 @@ from player_api import (  # noqa: E402
 )
 
 import json as _json  # noqa: E402
+import pressure_graph  # noqa: E402
+import world_state_consumers as world_consumers  # noqa: E402
 
 # Engine-wide rolling-state-aware defaults
 DEFAULT_MODE = "advanced"
@@ -874,6 +876,9 @@ _PROMPT_HIDDEN_SETUP_KEYS = frozenset({"secret"})
 _PROMPT_HIDDEN_ROLLING_KEYS = frozenset({
     "secret_registry",
     "engine_world_events",
+    "world_state_consumed_event_ids",
+    "world_state_receipts",
+    "world_state_guard_receipts",
     "npc_move_receipts",
     "npc_agendas",
     "arc_diversity",
@@ -903,7 +908,12 @@ def _prompt_safe_rolling(rolling: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     persisted state."""
     if not isinstance(rolling, dict):
         return {}
-    return {k: v for k, v in rolling.items() if k not in _PROMPT_HIDDEN_ROLLING_KEYS}
+    safe = {k: v for k, v in rolling.items() if k not in _PROMPT_HIDDEN_ROLLING_KEYS}
+    if isinstance(safe.get("pressure_graph"), dict):
+        safe["pressure_graph"] = pressure_graph.project_pressure_graph_for_prompt(
+            safe["pressure_graph"]
+        )
+    return world_consumers.prompt_safe_world_state(safe)
 
 
 def _clean_setup(value: Any) -> Any:
@@ -3632,6 +3642,17 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
                 working_rolling.get("actor_stress"),
             )
         )
+        if replayability.replayability_active(session) and working_replayability:
+            world_guard = world_consumers.enforce_consumer_world_state(
+                merged_rolling,
+                prior_rolling,
+                working_replayability,
+                next_turn_number,
+            )
+            guard_adjustments.extend(world_guard.get("adjustments") or [])
+            for key, value in (world_guard.get("diagnostics") or {}).items():
+                if value not in (0, False, None, [], {}):
+                    rb_diag[key] = value
 
         guard_adjustments.extend(
             _apply_ledger_object_permanence(parsed, authoritative_state=merged_rolling)

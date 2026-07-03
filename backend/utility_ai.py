@@ -28,6 +28,7 @@ from utility_dimensions import (
 
 UTILITY_AI_SCHEMA_VERSION = 2
 DECISION_VERSION = 1
+PRESSURE_SCORING_BRIDGE_VERSION = 1
 
 # Appendix A.4 base weights (Ch 27.4.2)
 BASE_WEIGHTS = {
@@ -45,6 +46,78 @@ WHIM_NOISE_HIGH = 0.5
 TIE_WINDOW = 0.01
 
 DIMENSION_ORDER = tuple(sorted(BASE_WEIGHTS.keys()))
+
+# Stage 2 Pressure Graph bridge: conservative bounded score modifiers only.
+# Pressure never selects actions directly; it can only adjust the candidate score
+# that Utility AI already ranks.
+MAX_PRESSURE_NODES_PER_UTILITY_ACTOR = 4
+MAX_PRESSURE_NODE_SCORE_MODIFIER = 4.0
+MAX_PRESSURE_TOTAL_SCORE_MODIFIER = 8.0
+
+PRESSURE_ACTION_MODIFIERS: Dict[str, Dict[str, float]] = {
+    "danger": {
+        "investigate": 4.0,
+        "withdraw": 3.0,
+        "flee": 3.0,
+        "fortify": 2.5,
+        "prepare": 2.5,
+        "protect": 2.0,
+        "idle": -3.0,
+    },
+    "opportunity": {
+        "pursue": 4.0,
+        "explore": 3.0,
+        "trade": 2.5,
+        "negotiate": 2.0,
+        "gather": 1.5,
+        "idle": -1.5,
+    },
+    "conflict": {
+        "confront": 3.0,
+        "avoid": 3.0,
+        "pressure": 2.5,
+        "withdraw": 2.0,
+        "negotiate": 1.5,
+        "conceal": 1.0,
+        "idle": -2.0,
+    },
+    "scarcity": {
+        "gather": 4.0,
+        "steal": 3.0,
+        "request_help": 3.0,
+        "trade": 2.5,
+        "negotiate": 1.5,
+        "idle": -2.0,
+    },
+    "unknown": {
+        "investigate": 4.0,
+        "explore": 2.0,
+        "idle": -1.5,
+    },
+}
+
+PRESSURE_KIND_GROUPS = {
+    "danger": "danger",
+    "environmental": "danger",
+    "environmental_threat": "danger",
+    "pursuit": "danger",
+    "injury_or_fatigue": "danger",
+    "opportunity": "opportunity",
+    "social_tension": "conflict",
+    "conflict": "conflict",
+    "suspicion": "conflict",
+    "resource": "scarcity",
+    "resource_pressure": "scarcity",
+    "scarcity": "scarcity",
+    "unresolved_thread": "unknown",
+    "unknown": "unknown",
+}
+
+_PRESSURE_SCORE_KEYS = (
+    "pressure_modifier",
+    "pressure_node_ids",
+    "pressure_bridge_version",
+)
 
 
 # --- P2 stress behavioural integration (Ch 14 P2 -- shadow-only) -----------
@@ -69,6 +142,238 @@ def apply_stress_band_modifiers(
     return {
         name: float(weight) * float(modifiers.get(name, 1.0))
         for name, weight in weights.items()
+    }
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def _str_list(values: Any) -> List[str]:
+    if values is None:
+        return []
+    if isinstance(values, (str, int, float)):
+        values = [values]
+    if not isinstance(values, Sequence) or isinstance(values, (bytes, bytearray)):
+        return []
+    out: List[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def _token_set(*values: Any) -> set:
+    tokens = set()
+    for value in values:
+        for text in _str_list(value):
+            tokens.add(text)
+            tokens.add(text.lower())
+    return {token for token in tokens if token}
+
+
+def _pressure_kind_group(kind: Any) -> str:
+    return PRESSURE_KIND_GROUPS.get(str(kind or "").strip().lower(), "unknown")
+
+
+def _actor_row(snapshot: FoundationTurnSnapshot, actor_id: str) -> Dict[str, Any]:
+    for actor in snapshot.actor_registry:
+        if str(actor.get("actor_id") or "") == actor_id:
+            return dict(actor)
+    return {"actor_id": actor_id}
+
+
+def _pressure_context(
+    snapshot: FoundationTurnSnapshot,
+    *,
+    actor_id: str,
+    target_kind: str = "",
+    target_id: str = "",
+) -> Dict[str, set]:
+    actor = _actor_row(snapshot, actor_id)
+    target_kind = str(target_kind or "")
+    target_id = str(target_id or "")
+    actor_tokens = _token_set(actor_id, actor.get("display_name"), actor.get("name"))
+    location_tokens = _token_set(
+        snapshot.location_ref,
+        actor.get("location_id"),
+        actor.get("location"),
+        actor.get("last_seen"),
+    )
+    faction_tokens = _token_set(
+        actor.get("faction_id"),
+        actor.get("faction"),
+        actor.get("factions"),
+    )
+    event_tokens = set()
+    pressure_tokens = set()
+    if target_id:
+        if target_kind in {"actor", "npc", "character"}:
+            actor_tokens.update(_token_set(target_id))
+        elif target_kind in {"location", "region", "place"}:
+            location_tokens.update(_token_set(target_id))
+        elif target_kind == "faction":
+            faction_tokens.update(_token_set(target_id))
+        elif target_kind in {"event", "world_event"}:
+            event_tokens.update(_token_set(target_id))
+        elif target_kind == "pressure":
+            pressure_tokens.update(_token_set(target_id))
+    return {
+        "actor": actor_tokens,
+        "location": location_tokens,
+        "faction": faction_tokens,
+        "event": event_tokens,
+        "pressure": pressure_tokens,
+    }
+
+
+def _pressure_node_ref_sets(node: Mapping[str, Any]) -> Dict[str, set]:
+    return {
+        "actor": _token_set(node.get("actor_ids"), node.get("linked_actor_ids")),
+        "location": _token_set(
+            node.get("location_ids"),
+            node.get("region_ids"),
+            node.get("linked_location_ids"),
+            node.get("linked_region_ids"),
+        ),
+        "faction": _token_set(node.get("faction_ids"), node.get("linked_faction_ids")),
+        "event": _token_set(node.get("event_ids"), node.get("linked_event_ids")),
+        "pressure": _token_set(node.get("id"), node.get("linked_node_ids"), node.get("linked_pressure_ids")),
+    }
+
+
+def _pressure_node_applies(node: Mapping[str, Any], context: Mapping[str, set]) -> bool:
+    refs = _pressure_node_ref_sets(node)
+    # Every node has a pressure id; that should support direct pressure-target
+    # matches, but must not make otherwise-global pressure actor-specific.
+    has_specific_refs = any(refs[key] for key in ("actor", "location", "faction", "event"))
+    for key, values in refs.items():
+        if values and values.intersection(context.get(key, set())):
+            return True
+    return not has_specific_refs
+
+
+def _pressure_equivalence_key(node: Mapping[str, Any]) -> Tuple[str, str, str, str]:
+    origin = node.get("origin") if isinstance(node.get("origin"), Mapping) else {}
+    return (
+        str(node.get("kind") or ""),
+        str(node.get("origin_type") or origin.get("type") or ""),
+        str(node.get("origin_id") or origin.get("id") or node.get("id") or ""),
+        str(node.get("scope") or ""),
+    )
+
+
+def _active_pressure_nodes_for_actor(
+    snapshot: FoundationTurnSnapshot,
+    *,
+    actor_id: str,
+    target_kind: str = "",
+    target_id: str = "",
+) -> List[Dict[str, Any]]:
+    graph = snapshot.pressure_state_ref if isinstance(snapshot.pressure_state_ref, Mapping) else {}
+    context = _pressure_context(
+        snapshot,
+        actor_id=actor_id,
+        target_kind=target_kind,
+        target_id=target_id,
+    )
+    candidates: List[Dict[str, Any]] = []
+    for raw in graph.get("nodes") or []:
+        if not isinstance(raw, Mapping) or raw.get("status") != "active":
+            continue
+        node = dict(raw)
+        if not _pressure_node_applies(node, context):
+            continue
+        try:
+            node["_magnitude"] = _clamp(float(node.get("magnitude") or 0.0), 0.0, 100.0)
+        except (TypeError, ValueError):
+            node["_magnitude"] = 0.0
+        candidates.append(node)
+
+    deduped: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
+    for node in sorted(
+        candidates,
+        key=lambda n: (-float(n.get("_magnitude") or 0.0), str(n.get("id") or "")),
+    ):
+        deduped.setdefault(_pressure_equivalence_key(node), node)
+
+    ordered = sorted(
+        deduped.values(),
+        key=lambda n: (-float(n.get("_magnitude") or 0.0), str(n.get("id") or "")),
+    )
+    return ordered[:MAX_PRESSURE_NODES_PER_UTILITY_ACTOR]
+
+
+def _action_modifier_for_pressure(
+    *,
+    pressure_kind: str,
+    action_kind: str,
+    personality_order: Sequence[str],
+) -> float:
+    action = str(action_kind or "").strip().lower()
+    group = _pressure_kind_group(pressure_kind)
+    if group == "conflict" and action in {"confront", "avoid"}:
+        order = [str(item) for item in personality_order or []]
+        if "confront" in order and "avoid" in order:
+            preferred = "confront" if order.index("confront") < order.index("avoid") else "avoid"
+            return 3.0 if action == preferred else 1.0
+    return PRESSURE_ACTION_MODIFIERS.get(group, {}).get(action, 0.0)
+
+
+def pressure_score_modifier(
+    snapshot: FoundationTurnSnapshot,
+    *,
+    actor_id: str,
+    action_kind: str,
+    target_kind: str = "",
+    target_id: str = "",
+    personality_order: Sequence[str] = (),
+) -> Dict[str, Any]:
+    """Return the bounded deterministic Utility AI score adjustment from pressure.
+
+    This is a read-only bridge over the authoritative pressure graph. It never
+    mutates pressure and never chooses an action; callers add the returned
+    modifier to an already computed Utility AI score before normal ranking.
+    """
+    matched = _active_pressure_nodes_for_actor(
+        snapshot,
+        actor_id=actor_id,
+        target_kind=target_kind,
+        target_id=target_id,
+    )
+    total = 0.0
+    contributing_ids: List[str] = []
+    for node in matched:
+        raw_modifier = _action_modifier_for_pressure(
+            pressure_kind=str(node.get("kind") or ""),
+            action_kind=action_kind,
+            personality_order=personality_order,
+        )
+        if raw_modifier == 0.0:
+            continue
+        magnitude_factor = _clamp(float(node.get("_magnitude") or 0.0) / 100.0, 0.0, 1.0)
+        contribution = _clamp(
+            raw_modifier * magnitude_factor,
+            -MAX_PRESSURE_NODE_SCORE_MODIFIER,
+            MAX_PRESSURE_NODE_SCORE_MODIFIER,
+        )
+        if contribution == 0.0:
+            continue
+        total += contribution
+        node_id = str(node.get("id") or "")
+        if node_id and node_id not in contributing_ids:
+            contributing_ids.append(node_id)
+
+    total = _clamp(
+        total,
+        -MAX_PRESSURE_TOTAL_SCORE_MODIFIER,
+        MAX_PRESSURE_TOTAL_SCORE_MODIFIER,
+    )
+    return {
+        "bridge_version": PRESSURE_SCORING_BRIDGE_VERSION,
+        "modifier": round(total, 4),
+        "node_ids": contributing_ids,
     }
 
 
@@ -191,6 +496,44 @@ def _score_record(row: DimensionScore) -> Dict[str, Any]:
     }
 
 
+def _selected_output(row: Mapping[str, Any]) -> Dict[str, Any]:
+    out = {
+        "actor_id": row["actor_id"],
+        "action_kind": row["action_kind"],
+        "target_kind": row["target_kind"],
+        "target_id": row["target_id"],
+        "base_utility": row["base_utility"],
+        "noisy_utility": row["noisy_utility"],
+        "replacement_authorised": row.get("replacement_authorised"),
+        "stress_band": row.get("stress_band"),
+        "stress_input_valid": row.get("stress_input_valid"),
+        "stress_blocker_code": row.get("stress_blocker_code"),
+    }
+    for key in _PRESSURE_SCORE_KEYS:
+        if key in row:
+            out[key] = row[key]
+    return out
+
+
+def _score_table_output(row: Mapping[str, Any]) -> Dict[str, Any]:
+    out = {
+        "actor_id": row["actor_id"],
+        "action_kind": row["action_kind"],
+        "target_kind": row["target_kind"],
+        "target_id": row["target_id"],
+        "base_utility": row["base_utility"],
+        "noisy_utility": row["noisy_utility"],
+        "replacement_authorised": row.get("replacement_authorised"),
+        "stress_band": row.get("stress_band"),
+        "stress_input_valid": row.get("stress_input_valid"),
+        "stress_blocker_code": row.get("stress_blocker_code"),
+    }
+    for key in _PRESSURE_SCORE_KEYS:
+        if key in row:
+            out[key] = row[key]
+    return out
+
+
 def select_action(
     candidates: Sequence[Mapping[str, Any]],
     *,
@@ -234,6 +577,17 @@ def select_action(
         # authorisation and reshapes weights; selection stays argmax-with-noise.
         replacement_authorised = bool(raw.get("replacement_authorised")) and stress_input_valid
         base_utility = compute_utility_score(dimension_scores, weights)
+        pressure_adjustment = pressure_score_modifier(
+            snapshot,
+            actor_id=actor_id,
+            action_kind=action_kind,
+            target_kind=target_kind,
+            target_id=target_id,
+            personality_order=raw.get("personality_order") or (),
+        )
+        pressure_modifier = float(pressure_adjustment.get("modifier") or 0.0)
+        if pressure_modifier != 0.0:
+            base_utility = _clamp(base_utility + pressure_modifier, 0.0, 100.0)
         c_hash = candidate_set_hash(
             actor_id=actor_id,
             action_kind=action_kind,
@@ -250,27 +604,32 @@ def select_action(
             candidate_set_hash_value=c_hash,
         )
         noisy = apply_whim_noise(base_utility, seed_material=seed_material, draw_index=seed_draw_start)
-        feasible.append(
-            {
-                "actor_id": actor_id,
-                "action_kind": action_kind,
-                "target_kind": target_kind,
-                "target_id": target_id,
-                "base_utility": base_utility,
-                "noisy_utility": noisy,
-                "weights": weights,
-                "dimension_scores": dimension_scores,
-                "dimension_score_records": list(raw.get("dimension_score_records") or []),
-                "replacement_authorised": replacement_authorised,
-                "personality_order": list(raw.get("personality_order") or []),
-                "candidate_set_hash": c_hash,
-                "seed_material": seed_material,
-                # P2 diagnostic-only (shadow) -- excluded from state_hash.
-                "stress_band": stress_behaviour["band"],
-                "stress_input_valid": stress_input_valid,
-                "stress_blocker_code": stress_behaviour["blocker_code"],
-            }
-        )
+        evaluated = {
+            "actor_id": actor_id,
+            "action_kind": action_kind,
+            "target_kind": target_kind,
+            "target_id": target_id,
+            "base_utility": base_utility,
+            "noisy_utility": noisy,
+            "weights": weights,
+            "dimension_scores": dimension_scores,
+            "dimension_score_records": list(raw.get("dimension_score_records") or []),
+            "replacement_authorised": replacement_authorised,
+            "personality_order": list(raw.get("personality_order") or []),
+            "candidate_set_hash": c_hash,
+            "seed_material": seed_material,
+            # P2 diagnostic-only (shadow) -- excluded from state_hash.
+            "stress_band": stress_behaviour["band"],
+            "stress_input_valid": stress_input_valid,
+            "stress_blocker_code": stress_behaviour["blocker_code"],
+        }
+        if pressure_modifier != 0.0:
+            evaluated.update(
+                pressure_modifier=pressure_modifier,
+                pressure_node_ids=list(pressure_adjustment.get("node_ids") or []),
+                pressure_bridge_version=pressure_adjustment.get("bridge_version"),
+            )
+        feasible.append(evaluated)
 
     if not feasible:
         return {
@@ -305,18 +664,7 @@ def select_action(
         "schema_version": UTILITY_AI_SCHEMA_VERSION,
         "numeric_contract_version": NUMERIC_CONTRACT_VERSION,
         "source_state_hash": snapshot.source_state_hash,
-        "selected": {
-            "actor_id": winner["actor_id"],
-            "action_kind": winner["action_kind"],
-            "target_kind": winner["target_kind"],
-            "target_id": winner["target_id"],
-            "base_utility": winner["base_utility"],
-            "noisy_utility": winner["noisy_utility"],
-            "replacement_authorised": winner.get("replacement_authorised"),
-            "stress_band": winner.get("stress_band"),
-            "stress_input_valid": winner.get("stress_input_valid"),
-            "stress_blocker_code": winner.get("stress_blocker_code"),
-        },
+        "selected": _selected_output(winner),
         "selected_actor_id": winner["actor_id"],
         "selected_action_kind": winner["action_kind"],
         "selected_target_kind": winner["target_kind"],
@@ -324,18 +672,7 @@ def select_action(
         "candidate_set_hash": winner["candidate_set_hash"],
         "candidates_evaluated": len(feasible),
         "score_table": [
-            {
-                "actor_id": row["actor_id"],
-                "action_kind": row["action_kind"],
-                "target_kind": row["target_kind"],
-                "target_id": row["target_id"],
-                "base_utility": row["base_utility"],
-                "noisy_utility": row["noisy_utility"],
-                "replacement_authorised": row.get("replacement_authorised"),
-                "stress_band": row.get("stress_band"),
-                "stress_input_valid": row.get("stress_input_valid"),
-                "stress_blocker_code": row.get("stress_blocker_code"),
-            }
+            _score_table_output(row)
             for row in sorted(
                 feasible,
                 key=lambda r: (

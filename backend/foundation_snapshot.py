@@ -98,6 +98,9 @@ def _build_actor_registry(rolling: Mapping[str, Any]) -> list:
             "life_status": "deceased" if name.lower() in deceased else "alive",
             "stance": str(row.get("stance") or ""),
             "last_seen": str(row.get("last_seen") or ""),
+            "location_id": str(row.get("location_id") or row.get("location") or row.get("last_seen") or ""),
+            "faction_id": str(row.get("faction_id") or row.get("faction") or ""),
+            "faction": str(row.get("faction") or row.get("faction_id") or ""),
         }
     for row in rolling.get("npc_memory") or []:
         if not isinstance(row, dict):
@@ -144,6 +147,42 @@ def _build_actor_registry(rolling: Mapping[str, Any]) -> list:
                 "life_status": "deceased",
             },
         )
+    for row in rolling.get("actor_location_registry") or []:
+        if not isinstance(row, dict):
+            continue
+        actor_id = str(row.get("id") or "")
+        if not actor_id:
+            continue
+        entry = registry.setdefault(
+            actor_id,
+            {
+                "actor_id": actor_id,
+                "display_name": actor_id,
+                "referenceable": True,
+                "life_status": "alive",
+            },
+        )
+        if row.get("location_id"):
+            entry["location_id"] = str(row.get("location_id") or "")
+        if row.get("status"):
+            entry["location_status"] = str(row.get("status") or "")
+    for row in rolling.get("actor_health_registry") or []:
+        if not isinstance(row, dict):
+            continue
+        actor_id = str(row.get("id") or "")
+        if not actor_id:
+            continue
+        entry = registry.setdefault(
+            actor_id,
+            {
+                "actor_id": actor_id,
+                "display_name": actor_id,
+                "referenceable": True,
+                "life_status": "alive",
+            },
+        )
+        if row.get("health_status"):
+            entry["health_status"] = str(row.get("health_status") or "")
     return sorted(registry.values(), key=lambda row: row["actor_id"])
 
 
@@ -241,7 +280,13 @@ def _utility_input_refs(
         actor_id = str(vec.get("npc_id") or _actor_id_from_name(str(vec.get("name") or "")))
         rel_by_actor[actor_id] = vec
     highest_pressure = _highest_pressure_intensity(replay.get("pressure_graph") or {})
-    resource_scarcity = _resource_scarcity(replay.get("pressure_graph") or {})
+    pressure_resource_scarcity = _resource_scarcity(replay.get("pressure_graph") or {})
+    structured_resource_scarcity = _structured_resource_scarcity(rolling)
+    scarcity_values = [
+        value for value in (pressure_resource_scarcity, structured_resource_scarcity)
+        if value is not None
+    ]
+    resource_scarcity = max(scarcity_values) if scarcity_values else None
     stress_by_actor: Dict[str, Any] = {}
     raw_stress = rolling.get("actor_stress")
     if isinstance(raw_stress, dict):
@@ -297,6 +342,24 @@ def _resource_scarcity(pressure_graph: Mapping[str, Any]) -> Optional[float]:
         if node.get("kind") == "resource":
             return min(1.0, float(node.get("magnitude", 0)) / 100.0)
     return None
+
+
+def _structured_resource_scarcity(rolling: Mapping[str, Any]) -> Optional[float]:
+    peak = 0.0
+    found = False
+    for row in rolling.get("world_resources") or []:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status") or "").lower()
+        trend = str(row.get("trend") or "").lower()
+        try:
+            delta = int(row.get("quantity_delta") or 0)
+        except (TypeError, ValueError):
+            delta = 0
+        if status in {"shortage", "reduced", "exhausted"} or trend == "decreasing" or delta < 0:
+            found = True
+            peak = max(peak, min(1.0, abs(delta) / 10.0 if delta else 0.25))
+    return peak if found else None
 
 
 def _memory_signatures(npc_memory_row: Mapping[str, Any]) -> Tuple[Dict[str, Any], ...]:

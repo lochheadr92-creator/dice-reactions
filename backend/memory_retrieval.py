@@ -18,8 +18,10 @@ from engine_determinism import (
     stable_hash,
 )
 from foundation_snapshot import FoundationTurnSnapshot
+import pressure_graph
 
 MEMORY_RETRIEVAL_SCHEMA_VERSION = 1
+MAX_RETRIEVAL_PRESSURE_NODES = 3
 
 # Appendix A.5
 WORKING_MEMORY_SIZE = {
@@ -179,6 +181,15 @@ def evaluate_memory_retrieval(
     tiers = actor_resolution.get("tiers_by_actor_id") or {}
     traces: List[Dict[str, Any]] = []
     all_selected_ids: List[str] = []
+    pressure_context = pressure_graph.project_pressure_graph_for_prompt(
+        snapshot.pressure_state_ref,
+        limit=MAX_RETRIEVAL_PRESSURE_NODES,
+    )
+    pressure_node_ids = [
+        str(node.get("id") or "")
+        for node in pressure_context.get("nodes") or []
+        if isinstance(node, dict) and node.get("id")
+    ]
 
     for actor in snapshot.actor_registry:
         actor_id = str(actor.get("actor_id") or "")
@@ -194,6 +205,8 @@ def evaluate_memory_retrieval(
             "actors_present": [actor_id],
             "activity": "decision",
             "pressure_kind": _primary_pressure_kind(snapshot),
+            "pressure_node_ids": pressure_node_ids,
+            "pressure_nodes": pressure_context.get("nodes") or [],
         }
         weighted: List[Dict[str, Any]] = []
         numerators: List[float] = []
@@ -242,6 +255,7 @@ def evaluate_memory_retrieval(
         "source_state_hash": snapshot.source_state_hash,
         "shadow_mode": effective_shadow,
         "selected_memory_ids": all_selected_ids,
+        "pressure_context": pressure_context,
         "working_memory_size": sum(trace["working_memory_size"] for trace in traces),
         "retrieval_traces": traces,
         "state_hash": stable_hash(

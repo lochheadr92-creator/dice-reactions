@@ -168,6 +168,10 @@ class TestHermeticHttpIntegration:
         raw_data = raw.json()
         assert raw_data["session"]["device_id"] == device
         assert raw_data["turns"][0].get("raw") or raw_data["turns"][0].get("debug")
+        rolling = (raw_data.get("summary") or {}).get("rolling_state") or {}
+        pressure = rolling.get("pressure_graph") or {}
+        assert pressure.get("nodes"), "engine pressure_graph missing from rolling_state"
+        assert all(node.get("status") == "active" for node in pressure.get("nodes") or [])
 
     def test_creation_request_id_returns_existing_completed_session_without_duplicate(
         self, client, mongo_env, monkeypatch
