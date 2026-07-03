@@ -971,6 +971,48 @@ def _dedupe_world_instability_entries(entries: List[Any]) -> List[str]:
     return out
 
 
+def _simulation_hook_dedupe_key(value: Any) -> Tuple[str, Any]:
+    if isinstance(value, str):
+        return ("str", value)
+    if isinstance(value, dict):
+        return (
+            "dict",
+            _json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ),
+        )
+    try:
+        hash(value)
+    except TypeError:
+        return (
+            type(value).__name__,
+            _json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ),
+        )
+    return (type(value).__name__, value)
+
+
+def _dedupe_simulation_hooks(hooks: List[Any]) -> List[Any]:
+    out: List[Any] = []
+    seen = set()
+    for hook in hooks:
+        key = _simulation_hook_dedupe_key(hook)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(hook)
+    return out
+
+
 def _seed_custom_setup_into_rolling(
     rolling: Dict[str, Any], setup: Optional[Dict[str, Any]]
 ) -> Dict[str, Any]:
@@ -1008,7 +1050,7 @@ def _seed_custom_setup_into_rolling(
     who = _humanize_hook(setup.get("whoMatters"))
     if who and who != "nobody":
         hooks.append(f"person who matters most: {who}")
-    out["simulation_hooks"] = list(dict.fromkeys(hooks))[:16]
+    out["simulation_hooks"] = _dedupe_simulation_hooks(hooks)[:16]
 
     existing_instability = out.get("world_instability")
     if isinstance(existing_instability, list):

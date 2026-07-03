@@ -199,6 +199,71 @@ class TestHermeticHttpIntegration:
         assert mongo_env.turns.count_documents({"session_id": sid}) == 1
         assert "creation_request_id" not in json.dumps(second_body)
 
+    def test_custom_setup_dedupes_dict_simulation_hooks_without_crashing(
+        self, client, mongo_env, monkeypatch
+    ):
+        custom_turn = (
+            "<narrative>The gate creaks.</narrative>"
+            "<paragraphs><p>The gate creaks.</p><p>Dust hangs in the air.</p></paragraphs>"
+            "<choices>"
+            "<choice label=\"A\">Enter</choice>"
+            "<choice label=\"B\">Listen</choice>"
+            "<choice label=\"C\">Retreat</choice>"
+            "<choice label=\"D\">Call out</choice>"
+            "</choices>"
+            "<state><Health>stable</Health><Stress>clear</Stress><Fatigue>rested</Fatigue>"
+            "<Position>at the gate</Position><Inventory Summary>torch</Inventory Summary>"
+            "<Pressure>wind rising</Pressure></state>"
+            "<ledger><Carried>torch</Carried><Load>light</Load></ledger>"
+            "<rolling_state>"
+            "{\"simulation_hooks\":"
+            "[\"keep watch\","
+            "{\"kind\":\"omen\",\"value\":\"storm\",\"tags\":[\"weather\",\"risk\"]},"
+            "{\"value\":\"storm\",\"tags\":[\"weather\",\"risk\"],\"kind\":\"omen\"},"
+            "\"keep watch\"]}"
+            "</rolling_state>"
+        )
+
+        async def fake_custom_chat(**kwargs):
+            return {
+                "content": custom_turn,
+                "model_used": "test",
+                "model_requested": "test",
+                "telemetry": {"provider": "test"},
+                "fallback_events": [],
+                "attempts_per_model": {},
+            }
+
+        monkeypatch.setattr(gateway, "invoke_llm", fake_custom_chat)
+        device = f"custom-hooks-{uuid.uuid4()}"
+        payload = {
+            **_new_payload(device),
+            "mode": "advanced",
+            "custom_world_setup": {
+                "danger": "sirens trigger stampedes",
+                "want": "keep the convoy alive",
+            },
+        }
+
+        created = client.post("/api/story/new", json=payload)
+        assert created.status_code == 200, created.text
+
+        sid = created.json()["session_id"]
+        exported = client.get(
+            f"/api/story/session/{sid}/export/raw",
+            headers={ADMIN_API_KEY_HEADER: TEST_ADMIN_KEY},
+        )
+        assert exported.status_code == 200, exported.text
+        rolling = ((exported.json().get("summary") or {}).get("rolling_state") or {})
+        hooks = rolling.get("simulation_hooks") or []
+
+        assert hooks.count("keep watch") == 1
+        dict_hooks = [hook for hook in hooks if isinstance(hook, dict)]
+        assert dict_hooks == [
+            {"kind": "omen", "value": "storm", "tags": ["weather", "risk"]}
+        ]
+        assert "core desire: keep the convoy alive" in hooks
+
     def test_creation_request_id_pending_duplicate_does_not_start_second_llm(
         self, client, mongo_env
     ):
