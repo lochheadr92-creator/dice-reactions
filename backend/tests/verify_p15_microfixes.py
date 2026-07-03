@@ -234,44 +234,41 @@ def scenario_f4_live_output_contract() -> bool:
 
     prompt = srv.STORY_ENGINE_SYSTEM_PROMPT
     ok &= _expect(
-        "Prompt uses shorter narration target",
-        srv.MAX_NARRATION_CHARS == 1200
-        and "750-900 characters" in prompt
-        and "hard max 1200 after formatting" in prompt,
-        detail=f"MAX_NARRATION_CHARS={srv.MAX_NARRATION_CHARS}",
+        "Prompt defers narration length to the prose-mode directive",
+        "[PROSE MODE:" in prompt
+        and "700-1200 characters" in prompt
+        and "750-900 characters" not in prompt
+        and "hard max 1200 after formatting" not in prompt,
+        detail="prose-mode deferral wording missing from prompt",
     )
     ok &= _expect(
-        "Retry prompt uses lower narration target",
-        "under 800 characters" in srv._RETRY_INSTRUCTION
-        and "never over 1200 after formatting" in srv._RETRY_INSTRUCTION
+        "Retry prompt defers to the prose-mode budget",
+        "prose-mode budget" in srv._RETRY_INSTRUCTION
+        and "{length_clause}" in srv._RETRY_INSTRUCTION
         and "never omit rolling_state" in srv._RETRY_INSTRUCTION,
         detail=srv._RETRY_INSTRUCTION,
     )
-    narration_retry = srv._build_format_retry_instruction(
-        f"narration 1838 chars exceeds {srv.MAX_NARRATION_CHARS}",
+    format_retry = srv._build_format_retry_instruction(
+        "missing required choice labels: D",
         "",
+        prose_mode="standard",
     )
     ok &= _expect(
-        "Narration-length retry prompt includes measured count",
-        "Your previous narrative was 1838 characters. The hard cap is 1200. Rewrite the narrative under 900 characters."
-        in narration_retry
-        and "Preserve facts and consequences" in narration_retry
-        and "keep <rolling_state> valid and first" in narration_retry
-        and "do not add new events just to compress" in narration_retry,
-        detail=narration_retry,
+        "Format retry note carries the active prose-mode budget",
+        "(2-3 paragraphs, approx 700-1200 characters)" in format_retry
+        and "never omit rolling_state" in format_retry,
+        detail=format_retry,
     )
     ok &= _expect(
-        "Prompt caps narration at 4 blank-line paragraphs with merge guidance",
+        "Prompt keeps blank-line paragraphing with count as style preference",
         "A blank line starts a new paragraph" in prompt
-        and "NEVER more than 4" in prompt
-        and "merge it into an existing paragraph" in prompt,
-        detail="paragraph-cap wording missing from prompt",
+        and "Paragraph count is a style preference" in prompt,
+        detail="paragraph wording missing from prompt",
     )
     ok &= _expect(
-        "Retry restates 2-4 paragraph cap (blank lines create paragraphs; merge extra)",
+        "Retry keeps blank-line paragraphing with count as style preference",
         "a blank line starts a new paragraph" in srv._RETRY_INSTRUCTION
-        and "at most 4, never more" in srv._RETRY_INSTRUCTION
-        and "merge any extra detail into an existing paragraph" in srv._RETRY_INSTRUCTION,
+        and "paragraph count is a style preference" in srv._RETRY_INSTRUCTION,
         detail=srv._RETRY_INSTRUCTION,
     )
     ok &= _expect(
@@ -297,11 +294,14 @@ def scenario_f4_live_output_contract() -> bool:
         detail="missing bounded update contract",
     )
 
-    too_long = _mk_parsed(["x" * (srv.MAX_NARRATION_CHARS + 1)])
+    # Prose Length System v2: over-budget narration is NOT a validation
+    # failure (no LLM retry for length) — it is trimmed locally at a sentence
+    # boundary in _finalize_validated_turn instead.
+    too_long = _mk_parsed(["x" * 1201])
     valid, reason = _validate_parsed(too_long)
     ok &= _expect(
-        "Validator rejects narration over shorter cap",
-        not valid and "exceeds 1200" in reason,
+        "Validator accepts over-budget narration (length handled by local trim)",
+        valid and reason == "",
         detail=f"valid={valid} reason={reason!r}",
     )
 
@@ -451,7 +451,7 @@ def scenario_f4_live_output_contract() -> bool:
 
     oversized_without_rolling_raw = (
         "<narrative>\n"
-        + ("x" * (srv.MAX_NARRATION_CHARS + 200))
+        + ("x" * 1400)
         + "\n</narrative>\n"
         "<choices>\nA. Try the door\nB. Wait\nC. Call out\nD. Retreat\n</choices>\n"
         "<state>\nHealth: stable\n</state>\n"
