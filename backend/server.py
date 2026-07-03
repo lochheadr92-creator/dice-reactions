@@ -51,10 +51,10 @@ import gateway  # noqa: E402  — Anti-Hallucination Gateway (Ch 31)
 import relationships  # noqa: E402  — Relationship Calculus (Ch 29)
 import hud  # noqa: E402  — player-facing HUD shaping (status chips + Pressure)
 import pacing  # noqa: E402  — Early-Game Pacing Governor v1 (deterministic)
+import prose_modes  # noqa: E402  — Prose Length System v2 (presentation-only)
 import secrets  # noqa: E402  — Secret Reveal Trigger v1 (deterministic)
 import replayability  # noqa: E402  — Replayability Engine v1 (deterministic)
 import stress  # noqa: E402  — Ch 14 Stress substrate v1 (deterministic)
-import time_commands  # noqa: E402
 import causal_history  # noqa: E402  — player-safe "Why this happened" projection
 from security import fetch_owned_session, require_admin, require_device_id  # noqa: E402
 from rate_limit import (  # noqa: E402
@@ -127,14 +127,14 @@ HARD OUTPUT VALIDATION (read this first)
 ============================
 Every turn MUST satisfy ALL of the following or the response is invalid:
   1. Exactly ONE <rolling_state> block FIRST. It must contain one complete valid JSON object, then close with </rolling_state> before any prose.
-  2. Exactly ONE <narrative> block of a few short paragraphs (paragraph count is a style preference — favour concise prose; more paragraphs are fine when the scene needs them). Combined narrative text target 750-900 characters; hard max 1200 after formatting.
+  2. Exactly ONE <narrative> block. Narrative structure and length follow the [PROSE MODE: …] directive in the user message — it defines the paragraph count, sentence count, and character budget for this chronicle. If no directive is present, default to 2-3 paragraphs, 700-1200 characters.
   3. Exactly ONE <choices> block containing 4 to 6 choices, each on its own line, labelled exactly A. B. C. D. in order (E. F. optional).
   4. Choices must cover meaningfully different intents — include at least one CAUTIOUS option, one DIRECT/RISKY option, one INVESTIGATIVE option, and one SOCIAL/COMMUNICATION option where the scene supports it.
   5. NO `Roll:` / `Modifiers:` / `Final:` / `Active systems:` / `Delayed trigger:` / `Latent trigger:` / `Scale:` lines anywhere outside the <debug> block.
   6. NO `<prior_state>` echo. NO bare JSON outside `<rolling_state>` / `<debug>`. NO preamble or meta.
   7. <state>, <ledger>, and <rolling_state> blocks are present. <debug> is present ONLY when the user message contains `[DEV_MODE: ON]`.
 
-If space is limited, preserve a complete closed <rolling_state> block first and shorten narrative, choices, state, and ledger. If choices or state consume space, shorten prose; never omit rolling_state. On retry, cut narrative under 800 characters.
+If space is limited, preserve a complete closed <rolling_state> block first and shorten narrative, choices, state, and ledger. If choices or state consume space, shorten prose; never omit rolling_state. On retry, stay at the LOW end of the active [PROSE MODE: …] character budget.
 
 If any of these would be violated, regenerate internally before responding.
 
@@ -429,9 +429,9 @@ ANTI-STAGNATION + CHOICE QUALITY:
 ============================
 PARAGRAPH PRESERVATION RULE
 ============================
-Every turn MUST contain several SHORT paragraphs of immersive prose before Choices. Target 750-900 characters total; hard max 1200 after formatting.
+Every turn MUST contain immersive prose paragraphs before Choices. Paragraph count, sentence count, and total character budget follow the [PROSE MODE: …] directive in the user message (default when absent: 2-3 paragraphs, 700-1200 characters).
 Each paragraph must include action progression, sensory detail, consequence or reaction, and forward pressure.
-Never collapse into one dense block. Never degrade into bullet narration. A blank line starts a new paragraph. Paragraph count is a style preference, not a limit — favour tight, concentrated prose and stay within the character target rather than padding, but valid prose is never rejected merely for having more paragraphs.
+Never collapse into one dense block. Never degrade into bullet narration. A blank line starts a new paragraph. Paragraph count is a style preference, not a limit — favour tight, concentrated prose and stay within the character budget rather than padding, but valid prose is never rejected merely for having more paragraphs.
 
 ============================
 CHOICE RANDOMISATION RULE
@@ -458,7 +458,7 @@ If space is tight, keep scene, character, objectives, unresolved, injuries, inve
 </rolling_state>
 
 <narrative>
-(a few short paragraphs of immersive prose, separated by blank lines — favour concise prose within the character target; more paragraphs are acceptable when the scene needs them. Target 750-900 characters total, hard max 1200 after formatting. Grounded sensory detail. No mechanics. No "What do you do?")
+(immersive prose paragraphs separated by blank lines — follow the [PROSE MODE: …] directive for paragraph count, sentence count, and character budget; default 2-3 paragraphs, 700-1200 characters when absent. Grounded sensory detail. No mechanics. No "What do you do?")
 </narrative>
 
 <choices>
@@ -535,6 +535,9 @@ class NewStoryRequest(BaseModel):
     debug_mode: bool = False
     custom_premise: Optional[str] = None
     mode: Optional[str] = None  # "basic" | "advanced"
+    # Presentation-only narration budget. Accepts new mode names
+    # (brief/standard/story/cinematic) and legacy S/M/L aliases.
+    prose_mode: Optional[str] = None
     scenario_id: Optional[str] = None
     custom_world_setup: Optional[Dict[str, Any]] = None
     # Client-generated idempotency key so a creation retry after a failed/lost
@@ -589,6 +592,9 @@ class SessionRecord(BaseModel):
     rolling_state: Optional[Dict[str, Any]] = None  # latest compressed packet
     rolling_state_updated_at: Optional[datetime] = None
     mode: str = DEFAULT_MODE
+    # Presentation-only narration budget (Prose Length System v2). Never
+    # affects simulation truth, canonical events, or replay.
+    prose_mode: str = prose_modes.DEFAULT_PROSE_MODE
     scenario_id: Optional[str] = None
     # Client idempotency key for safe creation retry (engine-only; excluded from
     # all player-facing payloads by the player_api allowlists).
@@ -1991,11 +1997,48 @@ def _scrub_parsed_for_persistence(parsed: ParsedTurn) -> Tuple[ParsedTurn, List[
 def _finalize_validated_turn(
     parsed: ParsedTurn, raw: str, meta: Dict[str, Any]
 ) -> Tuple[ParsedTurn, str, Dict[str, Any]]:
-    """Scrub parsed player/replay fields before any persistence path."""
+    """Scrub parsed player/replay fields, then enforce the prose-mode length
+    budget LOCALLY before any persistence path.
+
+    Prose Length System v2: over-budget narration is trimmed here at the
+    nearest safe sentence boundary. This never requests a new simulation,
+    never regenerates canonical events, and never makes another provider
+    request — presentation only. Canonical state (rolling_state, ledger,
+    choices, state) is untouched by trimming.
+    """
     scrubbed, adjustments = _scrub_parsed_for_persistence(parsed)
     out_meta = dict(meta)
     if adjustments:
         out_meta["persistence_scrub"] = "; ".join(adjustments)
+
+    mode = prose_modes.resolve_prose_mode(out_meta.get("prose_mode"))
+    returned = prose_modes.measure_narration(scrubbed.paragraphs)
+    trimmed_paragraphs, trimming_occurred = prose_modes.trim_narration(
+        scrubbed.paragraphs, mode.max_chars
+    )
+    if trimming_occurred:
+        scrubbed = scrubbed.model_copy(
+            update={
+                "paragraphs": trimmed_paragraphs,
+                "narrative": "\n\n".join(trimmed_paragraphs),
+            }
+        )
+    final = prose_modes.measure_narration(scrubbed.paragraphs)
+
+    out_meta["prose"] = {
+        "requested_prose_mode": out_meta.get("prose_mode_requested")
+        or mode.name,
+        "effective_prose_mode": mode.name,
+        "requested_budget": mode.max_chars,
+        "returned_character_count": returned["character_count"],
+        "returned_paragraph_count": returned["paragraph_count"],
+        "returned_sentence_count": returned["sentence_count"],
+        "final_character_count": final["character_count"],
+        "trimming_occurred": trimming_occurred,
+        "retry_occurred": bool(out_meta.get("validation_retried")),
+        "model_used": out_meta.get("model_used"),
+        "latency_ms": (out_meta.get("telemetry") or {}).get("latency_ms"),
+    }
     return scrubbed, raw, out_meta
 
 
@@ -2148,7 +2191,25 @@ async def _generate_turn(
         or settings.get("cost_mode")
         or DEFAULT_COST_MODE
     ).lower()
+
+    # ---- Prose Length System v2 (presentation-only) ----
+    # Resolve the requested prose mode (legacy S/M/L aliases map onto the new
+    # modes; unknown/missing → standard). Low cost mode deterministically caps
+    # the effective mode at standard so cost guarantees are never violated.
+    requested_prose_mode = prose_modes.resolve_prose_mode_name(
+        session.get("prose_mode")
+    )
+    prose_mode = prose_modes.PROSE_MODES[requested_prose_mode]
+    if cost_mode == "low" and prose_mode.max_chars > prose_modes.PROSE_MODES[
+        "standard"
+    ].max_chars:
+        prose_mode = prose_modes.PROSE_MODES["standard"]
+
     max_tokens = int(settings.get("max_tokens", DEFAULT_MAX_TOKENS))
+    # Larger prose modes raise the completion budget so structured output is
+    # not token-truncated. Floors always LOSE to the explicit caps below.
+    if prose_mode.max_tokens_floor:
+        max_tokens = max(max_tokens, prose_mode.max_tokens_floor)
     cap = profile.get("max_tokens_cap")
     if cap:
         max_tokens = min(max_tokens, cap)
@@ -2185,6 +2246,8 @@ async def _generate_turn(
             "[COST_MODE: LOW — produce shorter, denser prose (closer to 2 paragraphs). "
             "Preserve causality, consequence chains, and continuity. Do not drop state.]"
         )
+    # Structural narration guidance — presentation only, engine-only marker.
+    hint_lines.append(prose_modes.build_prose_directive(prose_mode))
     augmented_user_text = (
         ("\n".join(hint_lines) + "\n\n" + user_text) if hint_lines else user_text
     )
@@ -2224,13 +2287,20 @@ async def _generate_turn(
     # Bolt the budget diagnostics onto the returned meta so the route can
     # surface them in the per-turn debug payload.
     result["budget"] = budget_diag
+    # Prose Length System v2 — carried on meta so finalize/trim + telemetry
+    # know the active presentation budget without re-resolving settings.
+    result["prose_mode_requested"] = requested_prose_mode
+    result["prose_mode"] = prose_mode.name
+    result["prose_budget"] = prose_mode.max_chars
     return result["content"], result
 
 
 # ----------------------------------------------------------------------
 # Output validation + single-shot retry
 # ----------------------------------------------------------------------
-MAX_NARRATION_CHARS = 1200
+# Narration length is NOT validated here any more (Prose Length System v2):
+# over-budget narration is trimmed locally at a sentence boundary in
+# _finalize_validated_turn and must never trigger another provider request.
 MIN_CHOICES = 4
 MAX_CHOICES = 6
 REQUIRED_CHOICE_LABELS = {"A", "B", "C", "D"}
@@ -2400,17 +2470,13 @@ def _validate_parsed(
 
     # 2. Narrative must be present. Paragraph COUNT is a style preference, not a
     #    validity rule: narration is never rejected merely for containing five or
-    #    more paragraphs. System-protective length stays enforced by the total-
-    #    character cap below and by model output-token / context-budget limits.
+    #    more paragraphs. Narration LENGTH is never a validation failure either
+    #    (Prose Length System v2): over-budget narration is trimmed locally in
+    #    _finalize_validated_turn — an extra LLM call is never made for length.
     if len(paragraphs) == 0:
         return False, "no narrative paragraphs"
 
-    # 3. Total narration length cap.
-    total_chars = sum(len(p) for p in paragraphs)
-    if total_chars > MAX_NARRATION_CHARS:
-        return False, f"narration {total_chars} chars exceeds {MAX_NARRATION_CHARS}"
-
-    # 4. No leaked engine tags / mechanic labels inside narrative
+    # 3. No leaked engine tags / mechanic labels inside narrative
     joined = "\n".join(paragraphs)
     if _ENGINE_TAG_IN_NARRATIVE_RE.search(joined):
         return False, "engine tag leaked into narrative"
@@ -2446,7 +2512,7 @@ def _validate_parsed(
     ):
         return False, "internal system directive leaked into rolling_state"
 
-    # 5. P1-B — direct inspection must resolve concretely
+    # 4. P1-B — direct inspection must resolve concretely
     inspection_reason = _check_direct_inspection_violation(parsed, player_action)
     if inspection_reason:
         return False, inspection_reason
@@ -2458,7 +2524,7 @@ _RETRY_INSTRUCTION = (
     "[VALIDATION_RETRY: {reason}]\n"
     "Rewrite the previous response in valid player-facing format with "
     "<rolling_state> FIRST as one complete closed valid JSON object, then "
-    "a few short paragraphs (a blank line starts a new paragraph; keep prose concise — paragraph count is a style preference, not a limit) under 800 characters total (never over 1200 after formatting) and 4–6 A–F choices. "
+    "immersive prose paragraphs (a blank line starts a new paragraph; paragraph count is a style preference, not a limit) within the active [PROSE MODE: …] budget{length_clause} and 4–6 A–F choices. "
     "Do not reproduce the full prior_state; emit only a bounded continuity update. "
     "Every choice must be on its own line beginning with the letter and a period "
     "(A. B. C. D. and optionally E. F.). "
@@ -2469,36 +2535,28 @@ _RETRY_INSTRUCTION = (
     "(<rolling_state>, <narrative>, <choices>, <state>, <ledger>"
     "{debug_clause}). <rolling_state> must contain one valid JSON object and no prose. "
     "If choices or state consume space, shorten prose, never omit rolling_state. "
-    "If space is limited, preserve complete closed <rolling_state> and shorten all player-facing text; narration must stay under 800 characters on retry. "
+    "If space is limited, preserve complete closed <rolling_state> and shorten all player-facing text; on retry keep narration at the LOW end of the prose-mode budget. "
     "Choices must cover meaningfully different intents — include a "
     "cautious option, a direct/risky option, an investigative option, and a "
     "social/communication option where the scene supports it."
 )
 
-# Ch 31.5 — correction re-prompt when prose contradicts engine-authoritative truth.
-_NARRATION_LENGTH_REASON_RE = re.compile(
-    r"\bnarration\s+(?P<count>\d+)\s+chars\s+exceeds\s+(?P<cap>\d+)\b"
-)
-
-
-def _build_format_retry_instruction(reason: str, debug_clause: str) -> str:
-    retry_note = _RETRY_INSTRUCTION.format(
+def _build_format_retry_instruction(
+    reason: str, debug_clause: str, prose_mode: Optional[str] = None
+) -> str:
+    """Format-failure retry note. NEVER emitted for narration length: length is
+    enforced locally by trimming (Prose Length System v2), not by re-prompting.
+    """
+    mode = prose_modes.resolve_prose_mode(prose_mode)
+    length_clause = (
+        f" ({mode.min_paragraphs}-{mode.max_paragraphs} paragraphs, "
+        f"approx {mode.min_chars}-{mode.max_chars} characters)"
+    )
+    return _RETRY_INSTRUCTION.format(
         reason=reason,
         debug_clause=debug_clause,
+        length_clause=length_clause,
     )
-    match = _NARRATION_LENGTH_REASON_RE.search(reason or "")
-    if not match:
-        return retry_note
-
-    narration_note = (
-        f"Your previous narrative was {match.group('count')} characters. "
-        f"The hard cap is {match.group('cap')}. "
-        "Rewrite the narrative under 900 characters. "
-        "Preserve facts and consequences; keep <rolling_state> valid and first; "
-        "shorten prose; do not add new events just to compress.\n"
-    )
-    first_line, separator, rest = retry_note.partition("\n")
-    return f"{first_line}{separator}{narration_note}{rest}"
 
 
 _HALLUCINATION_RETRY_INSTRUCTION = (
@@ -2583,7 +2641,9 @@ async def _generate_validated_turn(
     elif kind == "pacing":
         retry_note = pacing.build_pacing_retry_instruction(reason, debug_clause)
     else:
-        retry_note = _build_format_retry_instruction(reason, debug_clause)
+        retry_note = _build_format_retry_instruction(
+            reason, debug_clause, prose_mode=meta.get("prose_mode")
+        )
     _log_validation_failure_diagnostic(
         raw,
         validator_kind=kind,
@@ -2605,6 +2665,10 @@ async def _generate_validated_turn(
         or DEFAULT_COST_MODE
     ).lower()
     max_tokens = int(settings.get("max_tokens", DEFAULT_MAX_TOKENS))
+    # Same prose-mode completion floor as the first attempt (floors lose to caps).
+    retry_prose_mode = prose_modes.resolve_prose_mode(meta.get("prose_mode"))
+    if retry_prose_mode.max_tokens_floor:
+        max_tokens = max(max_tokens, retry_prose_mode.max_tokens_floor)
     cap = profile.get("max_tokens_cap")
     if cap:
         max_tokens = min(max_tokens, cap)
@@ -2677,6 +2741,10 @@ async def _generate_validated_turn(
             "validation_first_fail": reason,
             "validation_second_fail": None if ok2 else reason2,
             "budget": result2.get("budget"),
+            # Prose Length System v2 — same presentation budget across attempts.
+            "prose_mode_requested": meta.get("prose_mode_requested"),
+            "prose_mode": meta.get("prose_mode"),
+            "prose_budget": meta.get("prose_budget"),
         }
 
         if ok2:
@@ -2771,6 +2839,21 @@ def _meta_into_debug(
         debug["secret_reveal_index"] = str(meta["secret_reveal_index"])
     if meta.get("secret_reveal_id"):
         debug["secret_reveal_id"] = str(meta["secret_reveal_id"])
+    # ---- Prose Length System v2 telemetry ----
+    prose = meta.get("prose") or {}
+    for key in (
+        "requested_prose_mode",
+        "effective_prose_mode",
+        "requested_budget",
+        "returned_character_count",
+        "returned_paragraph_count",
+        "returned_sentence_count",
+        "final_character_count",
+        "trimming_occurred",
+        "retry_occurred",
+    ):
+        if prose.get(key) is not None:
+            debug[f"prose_{key}"] = str(prose[key])
     # ---- Context Budget Governor v3.9 diagnostics ----
     budget = meta.get("budget") or {}
     for key, label in (
@@ -3234,6 +3317,7 @@ async def _create_new_story(req: NewStoryRequest):
         custom_world_setup=custom_setup,
         title=title,
         mode=effective_mode,
+        prose_mode=prose_modes.resolve_prose_mode_name(req.prose_mode),
         scenario_id=req.scenario_id,
         creation_request_id=_normalize_creation_request_id(req.creation_request_id),
         replayability_state=replayability_state,
