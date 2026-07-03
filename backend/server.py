@@ -371,6 +371,11 @@ OBJECT PERMANENCE:
   • Do not duplicate map fragments, radios, weapons, medicine, water, food, keys, money, ammo, tools, or evidence across locations.
   • Ledger and rolling_state object_locations must agree.
 
+NPC DEATH / EXIT STRUCTURED MARKER RULE:
+  • If the narrative states or implies that a named NPC dies, is killed, leaves the scene, exits, disappears, is removed, or is no longer present, the SAME turn's `rolling_state.npcs` row for that NPC MUST carry the matching structured marker: `"alive":false`, or `"stance"`/`"status"` set to `"dead"` for a death; `"stance"`/`"status"` set to `"left"`/`"departed"`/`"exited"`/`"gone"`/`"fled"`, or `"absent":true`, for an exit or departure.
+  • Prose is NEVER authoritative on its own. The engine only records a death into the deceased registry, or removes an NPC from the active scene cast, when this structured marker corroborates the narrative. A death or exit narrated without the matching marker is treated by the engine as NOT having happened — the NPC remains alive and present next turn regardless of what the prose said.
+  • Do not narrate a death or departure and then omit the NPC from `rolling_state.npcs` with no marker — that reads as a silent, unexplained disappearance and will be reverted. Either keep the NPC in `npcs` with the matching marker, or omit them only after the marker has already been emitted.
+
 FAILURE DOCTRINE UPDATE:
   • Failure may worsen the situation, permanently alter the world, close routes, destroy resources, injure or kill, break trust, trigger faction movement, or end the run entirely when causally earned.
   • Do not apply implicit narrative safety. Failure still redirects story unless the causal consequence is fatal or terminal.
