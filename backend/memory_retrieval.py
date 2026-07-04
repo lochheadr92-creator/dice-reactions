@@ -19,9 +19,11 @@ from engine_determinism import (
 )
 from foundation_snapshot import FoundationTurnSnapshot
 import pressure_graph
+import situation_engine
 
 MEMORY_RETRIEVAL_SCHEMA_VERSION = 1
 MAX_RETRIEVAL_PRESSURE_NODES = 3
+MAX_RETRIEVAL_SITUATIONS = 3
 
 # Appendix A.5
 WORKING_MEMORY_SIZE = {
@@ -66,6 +68,18 @@ class MemoryRetrievalError(ValueError):
     pass
 
 
+def _situation_ids(context: Mapping[str, Any]) -> set:
+    values = []
+    if context.get("situation_id"):
+        values.append(context.get("situation_id"))
+    raw = context.get("situation_ids") or context.get("active_situation_ids") or []
+    if isinstance(raw, (list, tuple, set)):
+        values.extend(raw)
+    else:
+        values.append(raw)
+    return {str(value or "").strip() for value in values if str(value or "").strip()}
+
+
 def recency_factor(days_since_event: float, *, weight_class: str) -> float:
     reject_non_finite(days_since_event)
     half_life = RECENCY_HALF_LIFE_DAYS.get(weight_class, RECENCY_HALF_LIFE_DAYS["minor"])
@@ -92,6 +106,10 @@ def cue_relevance(current_context: Mapping[str, Any], memory_context: Mapping[st
     mem_pressure = str(memory_context.get("pressure_kind") or "")
     if pressure and mem_pressure:
         cues.append((0.4, 1.0 if pressure == mem_pressure else 0.0))
+    situations = _situation_ids(current_context)
+    mem_situations = _situation_ids(memory_context)
+    if situations and mem_situations:
+        cues.append((0.8, 1.0 if situations.intersection(mem_situations) else 0.0))
     if not cues:
         return 0.0
     weighted = sum(weight * value for weight, value in cues)
@@ -199,6 +217,22 @@ def evaluate_memory_retrieval(
         budget = WORKING_MEMORY_SIZE.get(tier, 0)
         if budget <= 0:
             continue
+        actor_situations = situation_engine.active_situations_for_context(
+            snapshot.situation_state_ref,
+            actor_ids=[actor_id, actor.get("display_name") or ""],
+            location_ids=[
+                snapshot.location_ref,
+                actor.get("location_id") or "",
+                actor.get("last_seen") or "",
+            ],
+            faction_ids=[actor.get("faction_id") or "", actor.get("faction") or ""],
+            limit=MAX_RETRIEVAL_SITUATIONS,
+        )
+        situation_ids = [
+            str(row.get("situation_id") or "")
+            for row in actor_situations
+            if row.get("situation_id")
+        ]
         memories = _memories_for_actor(actor, rolling_state, snapshot.turn_sequence)
         current_context = {
             "location": snapshot.location_ref,
@@ -207,6 +241,16 @@ def evaluate_memory_retrieval(
             "pressure_kind": _primary_pressure_kind(snapshot),
             "pressure_node_ids": pressure_node_ids,
             "pressure_nodes": pressure_context.get("nodes") or [],
+            "situation_ids": situation_ids,
+            "active_situations": [
+                {
+                    "situation_id": row.get("situation_id"),
+                    "type": row.get("type"),
+                    "severity": row.get("severity"),
+                    "status": row.get("status"),
+                }
+                for row in actor_situations
+            ],
         }
         weighted: List[Dict[str, Any]] = []
         numerators: List[float] = []
@@ -245,6 +289,7 @@ def evaluate_memory_retrieval(
                 "probabilities": probabilities,
                 "selected_memory_ids": selected_ids,
                 "draw_indices": draw_indices,
+                "situation_ids": situation_ids,
                 "shadow_mode": effective_shadow,
             }
         )
@@ -256,6 +301,12 @@ def evaluate_memory_retrieval(
         "shadow_mode": effective_shadow,
         "selected_memory_ids": all_selected_ids,
         "pressure_context": pressure_context,
+        "situation_context": {
+            "max_situations": MAX_RETRIEVAL_SITUATIONS,
+            "active": situation_engine.project_situations_for_prompt(
+                {"situations": snapshot.situation_state_ref.get("situations") or []}
+            )[:MAX_RETRIEVAL_SITUATIONS],
+        },
         "working_memory_size": sum(trace["working_memory_size"] for trace in traces),
         "retrieval_traces": traces,
         "state_hash": stable_hash(

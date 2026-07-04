@@ -32,6 +32,7 @@ import opening_state
 import pressure_graph
 import relationships
 import simulation_clock
+import situation_engine
 import stress
 import world_state_consumers as world_consumers
 from run_identity import derive_run_identity, is_closed_enum_identity
@@ -62,6 +63,9 @@ ROLLING_REPLAYABILITY_KEYS = frozenset({
     "arc_diversity",
     "pending_npc_move",
     "engine_world_events",
+    "situations",
+    "active_situations",
+    "situation_receipts",
     "world_state_consumed_event_ids",
     "world_state_receipts",
     "world_state_guard_receipts",
@@ -211,6 +215,8 @@ def empty_replayability_state() -> Dict[str, Any]:
         "frozen_npc_move": None,
         "npc_move_receipts": [],
         "engine_world_events": [],
+        "situations": [],
+        "situation_receipts": [],
         "world_state_consumed_event_ids": [],
         "world_state_receipts": [],
         "world_state_guard_receipts": [],
@@ -464,6 +470,8 @@ def init_new_story(
         "frozen_npc_move": None,
         "npc_move_receipts": [],
         "engine_world_events": [],
+        "situations": [],
+        "situation_receipts": [],
         "world_state_consumed_event_ids": [],
         "world_state_receipts": [],
         "world_state_guard_receipts": [],
@@ -835,8 +843,39 @@ def prepare_action_turn(
                 state,
                 source_event_id=receipt_id,
                 receipt_type=str(receipt.get("receipt_type") or "world_state_consumed"),
+                    turn_number=turn_number,
+                )
+
+    situation_result = situation_engine.evolve_situations(
+        state,
+        working_rolling,
+        turn_number,
+        run_seed=run_seed,
+    )
+    situation_diag = situation_result.get("diagnostics") or {}
+    diagnostics.update(
+        {
+            key: value
+            for key, value in situation_diag.items()
+            if value not in (False, 0, None, [], {})
+        }
+    )
+    for receipt in situation_result.get("receipts") or []:
+        if not isinstance(receipt, Mapping):
+            continue
+        receipt_id = str(receipt.get("receipt_id") or "")
+        if receipt_id:
+            _append_transition_receipt(
+                state,
+                source_event_id=receipt_id,
+                receipt_type=str(receipt.get("receipt_type") or "situation_evolved"),
                 turn_number=turn_number,
             )
+    active_situations = situation_engine.project_active_situations_for_rolling(state)
+    if active_situations:
+        working_rolling["active_situations"] = active_situations
+    else:
+        working_rolling.pop("active_situations", None)
 
     _log_utility_ai_live_diagnostics(diagnostics)
 
@@ -1153,6 +1192,8 @@ def living_cast_state_metrics(
     archived = agendas_state.get("archived") or []
     move_receipts = replayability_state.get("npc_move_receipts") or []
     rel_receipts = replayability_state.get("relationship_effect_receipts") or []
+    situations = replayability_state.get("situations") or []
+    situation_receipts = replayability_state.get("situation_receipts") or []
     arc_state = replayability_state.get("arc_diversity") or {}
     arc_beats = arc_state.get("recent_beats") or []
     echo_state = replayability_state.get("consequence_echoes") or {}
@@ -1163,6 +1204,8 @@ def living_cast_state_metrics(
         "archived_agendas": (archived, len(archived)),
         "npc_move_receipts": (move_receipts, len(move_receipts)),
         "relationship_effect_receipts": (rel_receipts, len(rel_receipts)),
+        "situations": (situations, len(situations)),
+        "situation_receipts": (situation_receipts, len(situation_receipts)),
         "arc_diversity_beats": (arc_beats, len(arc_beats)),
         "pressure_graph": (pressure, len(pressure.get("nodes") or [])),
         "consequence_echoes": (
@@ -1252,6 +1295,15 @@ def enforce_authoritative(
             # single authoritative source (no narrative/LLM pressure authority).
             merged_rolling["active_pressures"] = pressure_graph.project_active_pressures(auth_pg)
             adjustments.append("rolling_active_pressures_engine_derived")
+        active_situations = situation_engine.project_active_situations_for_rolling(
+            authoritative_replayability
+        )
+        if active_situations:
+            merged_rolling["active_situations"] = active_situations
+            adjustments.append("rolling_active_situations_engine_derived")
+        elif "active_situations" in merged_rolling:
+            merged_rolling.pop("active_situations", None)
+            adjustments.append("rolling_active_situations_engine_cleared")
         adjustments.extend(agendas.strip_model_agenda_mutations(merged_rolling, authoritative_replayability))
         if not is_closed_enum_identity((authoritative_replayability or {}).get("identity")):
             adjustments.append("replayability_identity_invalid_ignored")

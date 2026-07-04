@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+import situation_engine
 import stress
 from engine_determinism import (
     NUMERIC_CONTRACT_VERSION,
@@ -29,6 +30,7 @@ from utility_dimensions import (
 UTILITY_AI_SCHEMA_VERSION = 2
 DECISION_VERSION = 1
 PRESSURE_SCORING_BRIDGE_VERSION = 1
+SITUATION_SCORING_BRIDGE_VERSION = 1
 
 # Appendix A.4 base weights (Ch 27.4.2)
 BASE_WEIGHTS = {
@@ -53,6 +55,9 @@ DIMENSION_ORDER = tuple(sorted(BASE_WEIGHTS.keys()))
 MAX_PRESSURE_NODES_PER_UTILITY_ACTOR = 4
 MAX_PRESSURE_NODE_SCORE_MODIFIER = 4.0
 MAX_PRESSURE_TOTAL_SCORE_MODIFIER = 8.0
+MAX_SITUATIONS_PER_UTILITY_ACTOR = 4
+MAX_SITUATION_SCORE_MODIFIER = 3.0
+MAX_SITUATION_TOTAL_SCORE_MODIFIER = 5.0
 
 PRESSURE_ACTION_MODIFIERS: Dict[str, Dict[str, float]] = {
     "danger": {
@@ -117,6 +122,76 @@ _PRESSURE_SCORE_KEYS = (
     "pressure_modifier",
     "pressure_node_ids",
     "pressure_bridge_version",
+)
+
+SITUATION_ACTION_MODIFIERS: Dict[str, Dict[str, float]] = {
+    "murder_investigation": {
+        "investigate": 3.0,
+        "gather": 1.5,
+        "protect": 1.0,
+        "conceal": -1.0,
+    },
+    "missing_child": {
+        "investigate": 3.0,
+        "protect": 2.0,
+        "gather": 1.5,
+        "withdraw": -1.0,
+    },
+    "search_party": {
+        "investigate": 2.5,
+        "gather": 2.0,
+        "protect": 1.5,
+        "withdraw": -1.0,
+    },
+    "food_shortage": {
+        "gather": 3.0,
+        "negotiate": 1.5,
+        "pressure": 1.0,
+        "conceal": 1.0,
+    },
+    "gang_turf_war": {
+        "protect": 2.5,
+        "fortify": 2.5,
+        "pressure": 2.0,
+        "negotiate": 1.5,
+        "withdraw": 1.0,
+    },
+    "political_unrest": {
+        "negotiate": 2.5,
+        "protect": 2.0,
+        "pressure": 1.5,
+        "withdraw": 1.0,
+    },
+    "disease_outbreak": {
+        "protect": 2.5,
+        "gather": 2.0,
+        "withdraw": 1.5,
+        "pressure": -1.0,
+    },
+    "flood_recovery": {
+        "fortify": 3.0,
+        "gather": 2.0,
+        "protect": 1.5,
+        "investigate": 1.0,
+    },
+    "bandit_activity": {
+        "protect": 2.5,
+        "fortify": 2.0,
+        "investigate": 2.0,
+        "withdraw": 1.5,
+    },
+    "trade_opportunity": {
+        "negotiate": 2.5,
+        "gather": 1.5,
+        "investigate": 1.0,
+        "protect": 0.5,
+    },
+}
+
+_SITUATION_SCORE_KEYS = (
+    "situation_modifier",
+    "situation_ids",
+    "situation_bridge_version",
 )
 
 
@@ -377,6 +452,72 @@ def pressure_score_modifier(
     }
 
 
+def situation_score_modifier(
+    snapshot: FoundationTurnSnapshot,
+    *,
+    actor_id: str,
+    action_kind: str,
+    target_kind: str = "",
+    target_id: str = "",
+) -> Dict[str, Any]:
+    """Return bounded deterministic Utility AI score adjustment from situations."""
+    actor = _actor_row(snapshot, actor_id)
+    target_kind = str(target_kind or "")
+    target_id = str(target_id or "")
+    actor_ids = [actor_id, actor.get("display_name") or "", actor.get("name") or ""]
+    location_ids = [
+        snapshot.location_ref,
+        actor.get("location_id") or "",
+        actor.get("location") or "",
+        actor.get("last_seen") or "",
+    ]
+    faction_ids = [actor.get("faction_id") or "", actor.get("faction") or ""]
+    situation_ids: List[str] = []
+    if target_id:
+        if target_kind in {"actor", "npc", "character"}:
+            actor_ids.append(target_id)
+        elif target_kind in {"location", "region", "place"}:
+            location_ids.append(target_id)
+        elif target_kind == "faction":
+            faction_ids.append(target_id)
+        elif target_kind == "situation":
+            situation_ids.append(target_id)
+    matched = situation_engine.active_situations_for_context(
+        snapshot.situation_state_ref,
+        actor_ids=actor_ids,
+        location_ids=location_ids,
+        faction_ids=faction_ids,
+        situation_ids=situation_ids,
+        limit=MAX_SITUATIONS_PER_UTILITY_ACTOR,
+    )
+    action = str(action_kind or "").strip().lower()
+    total = 0.0
+    contributing_ids: List[str] = []
+    for row in matched:
+        raw_modifier = SITUATION_ACTION_MODIFIERS.get(str(row.get("type") or ""), {}).get(action, 0.0)
+        if raw_modifier == 0.0:
+            continue
+        severity_factor = _clamp(float(row.get("severity") or 0.0) / 10.0, 0.0, 1.0)
+        contribution = _clamp(
+            raw_modifier * severity_factor,
+            -MAX_SITUATION_SCORE_MODIFIER,
+            MAX_SITUATION_SCORE_MODIFIER,
+        )
+        if contribution == 0.0:
+            continue
+        total += contribution
+        situation_id = str(row.get("situation_id") or "")
+        if situation_id and situation_id not in contributing_ids:
+            contributing_ids.append(situation_id)
+
+    total = _clamp(total, -MAX_SITUATION_TOTAL_SCORE_MODIFIER, MAX_SITUATION_TOTAL_SCORE_MODIFIER)
+    return {
+        "bridge_version": SITUATION_SCORING_BRIDGE_VERSION,
+        "modifier": round(total, 4),
+        "situation_ids": contributing_ids,
+    }
+
+
 def _hashable_candidate(row: Mapping[str, Any]) -> Dict[str, Any]:
     """Evaluated-candidate projection excluding P2 diagnostic-only keys."""
     return {key: value for key, value in row.items() if key not in _P2_SHADOW_KEYS}
@@ -512,6 +653,9 @@ def _selected_output(row: Mapping[str, Any]) -> Dict[str, Any]:
     for key in _PRESSURE_SCORE_KEYS:
         if key in row:
             out[key] = row[key]
+    for key in _SITUATION_SCORE_KEYS:
+        if key in row:
+            out[key] = row[key]
     return out
 
 
@@ -529,6 +673,9 @@ def _score_table_output(row: Mapping[str, Any]) -> Dict[str, Any]:
         "stress_blocker_code": row.get("stress_blocker_code"),
     }
     for key in _PRESSURE_SCORE_KEYS:
+        if key in row:
+            out[key] = row[key]
+    for key in _SITUATION_SCORE_KEYS:
         if key in row:
             out[key] = row[key]
     return out
@@ -588,6 +735,16 @@ def select_action(
         pressure_modifier = float(pressure_adjustment.get("modifier") or 0.0)
         if pressure_modifier != 0.0:
             base_utility = _clamp(base_utility + pressure_modifier, 0.0, 100.0)
+        situation_adjustment = situation_score_modifier(
+            snapshot,
+            actor_id=actor_id,
+            action_kind=action_kind,
+            target_kind=target_kind,
+            target_id=target_id,
+        )
+        situation_modifier = float(situation_adjustment.get("modifier") or 0.0)
+        if situation_modifier != 0.0:
+            base_utility = _clamp(base_utility + situation_modifier, 0.0, 100.0)
         c_hash = candidate_set_hash(
             actor_id=actor_id,
             action_kind=action_kind,
@@ -628,6 +785,12 @@ def select_action(
                 pressure_modifier=pressure_modifier,
                 pressure_node_ids=list(pressure_adjustment.get("node_ids") or []),
                 pressure_bridge_version=pressure_adjustment.get("bridge_version"),
+            )
+        if situation_modifier != 0.0:
+            evaluated.update(
+                situation_modifier=situation_modifier,
+                situation_ids=list(situation_adjustment.get("situation_ids") or []),
+                situation_bridge_version=situation_adjustment.get("bridge_version"),
             )
         feasible.append(evaluated)
 

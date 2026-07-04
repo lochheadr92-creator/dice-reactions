@@ -8,8 +8,9 @@ import dataclasses
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from engine_determinism import SERIALIZATION_SCHEMA_VERSION, stable_hash
+import situation_engine
 
-FOUNDATION_SNAPSHOT_SCHEMA_VERSION = 2
+FOUNDATION_SNAPSHOT_SCHEMA_VERSION = 3
 
 
 @dataclasses.dataclass(frozen=True)
@@ -29,6 +30,7 @@ class FoundationTurnSnapshot:
     gravity_metadata: Dict[str, Any]
     utility_input_refs: Tuple[Dict[str, Any], ...]
     source_state_hash: str
+    situation_state_ref: Dict[str, Any] = dataclasses.field(default_factory=lambda: {"situations": []})
 
     @staticmethod
     def build(
@@ -49,6 +51,9 @@ class FoundationTurnSnapshot:
             "pressure_graph": replay.get("pressure_graph") or {},
             "rolling_keys": sorted(rolling.keys()),
         }
+        situation_state = situation_engine.copy_situation_state(replay)
+        if situation_state.get("situations"):
+            hash_material["situations"] = situation_state
         stress_commit = _actor_stress_commitment(rolling)
         if stress_commit is not None:
             # Commit authoritative stress values into snapshot identity so the
@@ -64,6 +69,7 @@ class FoundationTurnSnapshot:
             actor_registry=tuple(registry),
             actor_resolution_inputs=_actor_resolution_inputs(rolling, replay, turn_sequence),
             pressure_state_ref=dict(replay.get("pressure_graph") or {}),
+            situation_state_ref=situation_state,
             confirmed_consequence_refs=_consequence_refs(rolling),
             relationship_vector_ref={
                 "vectors": list(rolling.get("relationship_vectors") or []),
@@ -76,7 +82,7 @@ class FoundationTurnSnapshot:
             location_ref=str(rolling.get("scene") or rolling.get("location") or ""),
             secret_access_facts=tuple(_secret_access_facts(rolling, replay)),
             gravity_metadata=dict(replay.get("gravity_metadata") or {}),
-            utility_input_refs=tuple(_utility_input_refs(rolling, replay, registry)),
+            utility_input_refs=tuple(_utility_input_refs(rolling, replay, registry, situation_state)),
             source_state_hash=source_hash,
         )
 
@@ -261,6 +267,7 @@ def _utility_input_refs(
     rolling: Mapping[str, Any],
     replay: Mapping[str, Any],
     registry: Sequence[Mapping[str, Any]],
+    situation_state: Mapping[str, Any],
 ) -> list:
     """Bounded authoritative utility inputs per actor - no narrative prose."""
     refs: list = []
@@ -308,6 +315,19 @@ def _utility_input_refs(
         importance = None
         if rel:
             importance = min(10.0, max(1.0, (int(rel.get("loyalty", 0)) + int(rel.get("trust", 0))) / 20.0 + 5.0))
+        active_situations = situation_engine.active_situations_for_context(
+            situation_state,
+            actor_ids=[actor_id, actor.get("display_name") or ""],
+            location_ids=[
+                rolling.get("scene") or rolling.get("location") or "",
+                actor.get("location_id") or "",
+                actor.get("last_seen") or "",
+            ],
+            faction_ids=[actor.get("faction_id") or "", actor.get("faction") or ""],
+        )
+        situation_severity = None
+        if active_situations:
+            situation_severity = max(float(row.get("severity") or 0.0) for row in active_situations) / 10.0
         refs.append(
             {
                 "actor_id": actor_id,
@@ -319,6 +339,9 @@ def _utility_input_refs(
                 "relationship_importance": importance,
                 "stress_level": stress_by_actor.get(actor_id),
                 "memory_signatures": memory_by_name.get(name_key, ()),
+                "active_situation_ids": [row.get("situation_id") for row in active_situations],
+                "active_situation_types": [row.get("type") for row in active_situations],
+                "situation_severity": situation_severity,
             }
         )
     return sorted(refs, key=lambda row: row["actor_id"])

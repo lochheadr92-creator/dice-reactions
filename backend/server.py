@@ -84,6 +84,7 @@ from player_api import (  # noqa: E402
 
 import json as _json  # noqa: E402
 import pressure_graph  # noqa: E402
+import situation_engine  # noqa: E402
 import world_state_consumers as world_consumers  # noqa: E402
 
 # Engine-wide rolling-state-aware defaults
@@ -882,6 +883,8 @@ _PROMPT_HIDDEN_ROLLING_KEYS = frozenset({
     "npc_move_receipts",
     "npc_agendas",
     "arc_diversity",
+    "situations",
+    "situation_receipts",
 })
 
 
@@ -913,7 +916,9 @@ def _prompt_safe_rolling(rolling: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         safe["pressure_graph"] = pressure_graph.project_pressure_graph_for_prompt(
             safe["pressure_graph"]
         )
-    return world_consumers.prompt_safe_world_state(safe)
+    return situation_engine.prompt_safe_rolling_state(
+        world_consumers.prompt_safe_world_state(safe)
+    )
 
 
 def _clean_setup(value: Any) -> Any:
