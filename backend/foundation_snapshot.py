@@ -8,9 +8,10 @@ import dataclasses
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from engine_determinism import SERIALIZATION_SCHEMA_VERSION, stable_hash
+import goal_engine
 import situation_engine
 
-FOUNDATION_SNAPSHOT_SCHEMA_VERSION = 3
+FOUNDATION_SNAPSHOT_SCHEMA_VERSION = 4
 
 
 @dataclasses.dataclass(frozen=True)
@@ -31,6 +32,7 @@ class FoundationTurnSnapshot:
     utility_input_refs: Tuple[Dict[str, Any], ...]
     source_state_hash: str
     situation_state_ref: Dict[str, Any] = dataclasses.field(default_factory=lambda: {"situations": []})
+    goal_state_ref: Dict[str, Any] = dataclasses.field(default_factory=lambda: {"goals": []})
 
     @staticmethod
     def build(
@@ -52,8 +54,11 @@ class FoundationTurnSnapshot:
             "rolling_keys": sorted(rolling.keys()),
         }
         situation_state = situation_engine.copy_situation_state(replay)
+        goal_state = goal_engine.copy_goal_state(replay)
         if situation_state.get("situations"):
             hash_material["situations"] = situation_state
+        if goal_state.get("goals"):
+            hash_material["goals"] = goal_state
         stress_commit = _actor_stress_commitment(rolling)
         if stress_commit is not None:
             # Commit authoritative stress values into snapshot identity so the
@@ -70,6 +75,7 @@ class FoundationTurnSnapshot:
             actor_resolution_inputs=_actor_resolution_inputs(rolling, replay, turn_sequence),
             pressure_state_ref=dict(replay.get("pressure_graph") or {}),
             situation_state_ref=situation_state,
+            goal_state_ref=goal_state,
             confirmed_consequence_refs=_consequence_refs(rolling),
             relationship_vector_ref={
                 "vectors": list(rolling.get("relationship_vectors") or []),
@@ -82,7 +88,7 @@ class FoundationTurnSnapshot:
             location_ref=str(rolling.get("scene") or rolling.get("location") or ""),
             secret_access_facts=tuple(_secret_access_facts(rolling, replay)),
             gravity_metadata=dict(replay.get("gravity_metadata") or {}),
-            utility_input_refs=tuple(_utility_input_refs(rolling, replay, registry, situation_state)),
+            utility_input_refs=tuple(_utility_input_refs(rolling, replay, registry, situation_state, goal_state)),
             source_state_hash=source_hash,
         )
 
@@ -268,6 +274,7 @@ def _utility_input_refs(
     replay: Mapping[str, Any],
     registry: Sequence[Mapping[str, Any]],
     situation_state: Mapping[str, Any],
+    goal_state: Mapping[str, Any],
 ) -> list:
     """Bounded authoritative utility inputs per actor - no narrative prose."""
     refs: list = []
@@ -328,6 +335,21 @@ def _utility_input_refs(
         situation_severity = None
         if active_situations:
             situation_severity = max(float(row.get("severity") or 0.0) for row in active_situations) / 10.0
+        active_goals = goal_engine.active_goals_for_context(
+            goal_state,
+            actor_ids=[actor_id, actor.get("display_name") or ""],
+            location_ids=[
+                rolling.get("scene") or rolling.get("location") or "",
+                actor.get("location_id") or "",
+                actor.get("last_seen") or "",
+            ],
+            faction_ids=[actor.get("faction_id") or "", actor.get("faction") or ""],
+        )
+        goal_priority = None
+        goal_urgency = None
+        if active_goals:
+            goal_priority = max(float(row.get("priority") or 0.0) for row in active_goals) / 10.0
+            goal_urgency = max(float(row.get("urgency") or 0.0) for row in active_goals) / 10.0
         refs.append(
             {
                 "actor_id": actor_id,
@@ -342,6 +364,17 @@ def _utility_input_refs(
                 "active_situation_ids": [row.get("situation_id") for row in active_situations],
                 "active_situation_types": [row.get("type") for row in active_situations],
                 "situation_severity": situation_severity,
+                "active_goal_ids": [row.get("goal_id") for row in active_goals],
+                "active_goal_types": [row.get("goal_type") for row in active_goals],
+                "goal_priority": goal_priority,
+                "goal_urgency": goal_urgency,
+                "goal_owners": [
+                    {
+                        "owner_type": row.get("owner_type"),
+                        "owner_id": row.get("owner_id"),
+                    }
+                    for row in active_goals
+                ],
             }
         )
     return sorted(refs, key=lambda row: row["actor_id"])

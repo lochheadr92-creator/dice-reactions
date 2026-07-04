@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+import goal_engine
 import situation_engine
 import stress
 from engine_determinism import (
@@ -31,6 +32,7 @@ UTILITY_AI_SCHEMA_VERSION = 2
 DECISION_VERSION = 1
 PRESSURE_SCORING_BRIDGE_VERSION = 1
 SITUATION_SCORING_BRIDGE_VERSION = 1
+GOAL_SCORING_BRIDGE_VERSION = 1
 
 # Appendix A.4 base weights (Ch 27.4.2)
 BASE_WEIGHTS = {
@@ -58,6 +60,9 @@ MAX_PRESSURE_TOTAL_SCORE_MODIFIER = 8.0
 MAX_SITUATIONS_PER_UTILITY_ACTOR = 4
 MAX_SITUATION_SCORE_MODIFIER = 3.0
 MAX_SITUATION_TOTAL_SCORE_MODIFIER = 5.0
+MAX_GOALS_PER_UTILITY_ACTOR = 4
+MAX_GOAL_SCORE_MODIFIER = 3.5
+MAX_GOAL_TOTAL_SCORE_MODIFIER = 6.0
 
 PRESSURE_ACTION_MODIFIERS: Dict[str, Dict[str, float]] = {
     "danger": {
@@ -192,6 +197,74 @@ _SITUATION_SCORE_KEYS = (
     "situation_modifier",
     "situation_ids",
     "situation_bridge_version",
+)
+
+GOAL_ACTION_MODIFIERS: Dict[str, Dict[str, float]] = {
+    "rescue_missing_person": {
+        "investigate": 3.0,
+        "protect": 2.5,
+        "gather": 1.5,
+        "withdraw": -1.0,
+    },
+    "secure_food": {
+        "gather": 3.5,
+        "negotiate": 2.0,
+        "protect": 1.0,
+        "conceal": 0.5,
+    },
+    "find_murderer": {
+        "investigate": 3.5,
+        "pressure": 2.0,
+        "negotiate": 1.5,
+        "conceal": -1.0,
+    },
+    "hide_evidence": {
+        "conceal": 3.5,
+        "pressure": 1.0,
+        "withdraw": 1.0,
+        "investigate": -1.0,
+    },
+    "build_shelter": {
+        "fortify": 3.5,
+        "gather": 2.0,
+        "protect": 1.5,
+    },
+    "secure_trade_route": {
+        "fortify": 2.5,
+        "protect": 2.5,
+        "negotiate": 2.0,
+        "gather": 1.0,
+    },
+    "remove_rival_influence": {
+        "pressure": 3.0,
+        "negotiate": 2.0,
+        "investigate": 1.5,
+        "fortify": 1.0,
+    },
+    "defend_settlement": {
+        "protect": 3.0,
+        "fortify": 2.5,
+        "negotiate": 1.0,
+        "withdraw": -1.0,
+    },
+    "contain_disease": {
+        "protect": 2.5,
+        "gather": 2.0,
+        "withdraw": 1.5,
+        "pressure": -1.0,
+    },
+    "restore_route": {
+        "fortify": 3.0,
+        "gather": 2.0,
+        "protect": 1.0,
+        "negotiate": 1.0,
+    },
+}
+
+_GOAL_SCORE_KEYS = (
+    "goal_modifier",
+    "goal_ids",
+    "goal_bridge_version",
 )
 
 
@@ -518,6 +591,74 @@ def situation_score_modifier(
     }
 
 
+def goal_score_modifier(
+    snapshot: FoundationTurnSnapshot,
+    *,
+    actor_id: str,
+    action_kind: str,
+    target_kind: str = "",
+    target_id: str = "",
+) -> Dict[str, Any]:
+    """Return bounded deterministic Utility AI score adjustment from goals."""
+    actor = _actor_row(snapshot, actor_id)
+    target_kind = str(target_kind or "")
+    target_id = str(target_id or "")
+    actor_ids = [actor_id, actor.get("display_name") or "", actor.get("name") or ""]
+    location_ids = [
+        snapshot.location_ref,
+        actor.get("location_id") or "",
+        actor.get("location") or "",
+        actor.get("last_seen") or "",
+    ]
+    faction_ids = [actor.get("faction_id") or "", actor.get("faction") or ""]
+    goal_ids: List[str] = []
+    if target_id:
+        if target_kind in {"actor", "npc", "character"}:
+            actor_ids.append(target_id)
+        elif target_kind in {"location", "region", "place"}:
+            location_ids.append(target_id)
+        elif target_kind == "faction":
+            faction_ids.append(target_id)
+        elif target_kind == "goal":
+            goal_ids.append(target_id)
+    matched = goal_engine.active_goals_for_context(
+        snapshot.goal_state_ref,
+        actor_ids=actor_ids,
+        location_ids=location_ids,
+        faction_ids=faction_ids,
+        goal_ids=goal_ids,
+        limit=MAX_GOALS_PER_UTILITY_ACTOR,
+    )
+    action = str(action_kind or "").strip().lower()
+    total = 0.0
+    contributing_ids: List[str] = []
+    for row in matched:
+        raw_modifier = GOAL_ACTION_MODIFIERS.get(str(row.get("goal_type") or ""), {}).get(action, 0.0)
+        if raw_modifier == 0.0:
+            continue
+        priority_factor = _clamp(float(row.get("priority") or 0.0) / 10.0, 0.0, 1.0)
+        urgency_factor = _clamp(float(row.get("urgency") or 0.0) / 10.0, 0.0, 1.0)
+        status_factor = 0.5 if row.get("status") == "blocked" else 1.0
+        contribution = _clamp(
+            raw_modifier * max(priority_factor, urgency_factor) * status_factor,
+            -MAX_GOAL_SCORE_MODIFIER,
+            MAX_GOAL_SCORE_MODIFIER,
+        )
+        if contribution == 0.0:
+            continue
+        total += contribution
+        goal_id = str(row.get("goal_id") or "")
+        if goal_id and goal_id not in contributing_ids:
+            contributing_ids.append(goal_id)
+
+    total = _clamp(total, -MAX_GOAL_TOTAL_SCORE_MODIFIER, MAX_GOAL_TOTAL_SCORE_MODIFIER)
+    return {
+        "bridge_version": GOAL_SCORING_BRIDGE_VERSION,
+        "modifier": round(total, 4),
+        "goal_ids": contributing_ids,
+    }
+
+
 def _hashable_candidate(row: Mapping[str, Any]) -> Dict[str, Any]:
     """Evaluated-candidate projection excluding P2 diagnostic-only keys."""
     return {key: value for key, value in row.items() if key not in _P2_SHADOW_KEYS}
@@ -656,6 +797,9 @@ def _selected_output(row: Mapping[str, Any]) -> Dict[str, Any]:
     for key in _SITUATION_SCORE_KEYS:
         if key in row:
             out[key] = row[key]
+    for key in _GOAL_SCORE_KEYS:
+        if key in row:
+            out[key] = row[key]
     return out
 
 
@@ -676,6 +820,9 @@ def _score_table_output(row: Mapping[str, Any]) -> Dict[str, Any]:
         if key in row:
             out[key] = row[key]
     for key in _SITUATION_SCORE_KEYS:
+        if key in row:
+            out[key] = row[key]
+    for key in _GOAL_SCORE_KEYS:
         if key in row:
             out[key] = row[key]
     return out
@@ -745,6 +892,16 @@ def select_action(
         situation_modifier = float(situation_adjustment.get("modifier") or 0.0)
         if situation_modifier != 0.0:
             base_utility = _clamp(base_utility + situation_modifier, 0.0, 100.0)
+        goal_adjustment = goal_score_modifier(
+            snapshot,
+            actor_id=actor_id,
+            action_kind=action_kind,
+            target_kind=target_kind,
+            target_id=target_id,
+        )
+        goal_modifier = float(goal_adjustment.get("modifier") or 0.0)
+        if goal_modifier != 0.0:
+            base_utility = _clamp(base_utility + goal_modifier, 0.0, 100.0)
         c_hash = candidate_set_hash(
             actor_id=actor_id,
             action_kind=action_kind,
@@ -791,6 +948,12 @@ def select_action(
                 situation_modifier=situation_modifier,
                 situation_ids=list(situation_adjustment.get("situation_ids") or []),
                 situation_bridge_version=situation_adjustment.get("bridge_version"),
+            )
+        if goal_modifier != 0.0:
+            evaluated.update(
+                goal_modifier=goal_modifier,
+                goal_ids=list(goal_adjustment.get("goal_ids") or []),
+                goal_bridge_version=goal_adjustment.get("bridge_version"),
             )
         feasible.append(evaluated)
 

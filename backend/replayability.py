@@ -24,6 +24,7 @@ import consequence_echoes as echoes
 import foundation_integration
 import foundation_promotion
 from foundation_snapshot import FoundationTurnSnapshot
+import goal_engine
 import living_cast_shadow
 import living_cast_provenance as provenance
 import npc_agendas as agendas
@@ -66,6 +67,9 @@ ROLLING_REPLAYABILITY_KEYS = frozenset({
     "situations",
     "active_situations",
     "situation_receipts",
+    "goals",
+    "active_goals",
+    "goal_receipts",
     "world_state_consumed_event_ids",
     "world_state_receipts",
     "world_state_guard_receipts",
@@ -217,6 +221,8 @@ def empty_replayability_state() -> Dict[str, Any]:
         "engine_world_events": [],
         "situations": [],
         "situation_receipts": [],
+        "goals": [],
+        "goal_receipts": [],
         "world_state_consumed_event_ids": [],
         "world_state_receipts": [],
         "world_state_guard_receipts": [],
@@ -472,6 +478,8 @@ def init_new_story(
         "engine_world_events": [],
         "situations": [],
         "situation_receipts": [],
+        "goals": [],
+        "goal_receipts": [],
         "world_state_consumed_event_ids": [],
         "world_state_receipts": [],
         "world_state_guard_receipts": [],
@@ -877,6 +885,38 @@ def prepare_action_turn(
     else:
         working_rolling.pop("active_situations", None)
 
+    goal_result = goal_engine.evolve_goals(
+        state,
+        working_rolling,
+        turn_number,
+        run_seed=run_seed,
+        recent_action=committed_move,
+    )
+    goal_diag = goal_result.get("diagnostics") or {}
+    diagnostics.update(
+        {
+            key: value
+            for key, value in goal_diag.items()
+            if value not in (False, 0, None, [], {})
+        }
+    )
+    for receipt in goal_result.get("receipts") or []:
+        if not isinstance(receipt, Mapping):
+            continue
+        receipt_id = str(receipt.get("receipt_id") or "")
+        if receipt_id:
+            _append_transition_receipt(
+                state,
+                source_event_id=receipt_id,
+                receipt_type=str(receipt.get("receipt_type") or "goal_evolved"),
+                turn_number=turn_number,
+            )
+    active_goals = goal_engine.project_active_goals_for_rolling(state)
+    if active_goals:
+        working_rolling["active_goals"] = active_goals
+    else:
+        working_rolling.pop("active_goals", None)
+
     _log_utility_ai_live_diagnostics(diagnostics)
 
     pressure_body = pressure_graph.build_pressure_directive(pg)
@@ -1194,6 +1234,8 @@ def living_cast_state_metrics(
     rel_receipts = replayability_state.get("relationship_effect_receipts") or []
     situations = replayability_state.get("situations") or []
     situation_receipts = replayability_state.get("situation_receipts") or []
+    goals = replayability_state.get("goals") or []
+    goal_receipts = replayability_state.get("goal_receipts") or []
     arc_state = replayability_state.get("arc_diversity") or {}
     arc_beats = arc_state.get("recent_beats") or []
     echo_state = replayability_state.get("consequence_echoes") or {}
@@ -1206,6 +1248,8 @@ def living_cast_state_metrics(
         "relationship_effect_receipts": (rel_receipts, len(rel_receipts)),
         "situations": (situations, len(situations)),
         "situation_receipts": (situation_receipts, len(situation_receipts)),
+        "goals": (goals, len(goals)),
+        "goal_receipts": (goal_receipts, len(goal_receipts)),
         "arc_diversity_beats": (arc_beats, len(arc_beats)),
         "pressure_graph": (pressure, len(pressure.get("nodes") or [])),
         "consequence_echoes": (
@@ -1304,6 +1348,13 @@ def enforce_authoritative(
         elif "active_situations" in merged_rolling:
             merged_rolling.pop("active_situations", None)
             adjustments.append("rolling_active_situations_engine_cleared")
+        active_goals = goal_engine.project_active_goals_for_rolling(authoritative_replayability)
+        if active_goals:
+            merged_rolling["active_goals"] = active_goals
+            adjustments.append("rolling_active_goals_engine_derived")
+        elif "active_goals" in merged_rolling:
+            merged_rolling.pop("active_goals", None)
+            adjustments.append("rolling_active_goals_engine_cleared")
         adjustments.extend(agendas.strip_model_agenda_mutations(merged_rolling, authoritative_replayability))
         if not is_closed_enum_identity((authoritative_replayability or {}).get("identity")):
             adjustments.append("replayability_identity_invalid_ignored")
