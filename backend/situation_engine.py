@@ -30,9 +30,10 @@ MAX_CONTEXT_SITUATIONS = 4
 CREATION_PRESSURE_THRESHOLD = 50
 DEFAULT_EXPIRY_TURNS = 12
 DECAY_AFTER_INACTIVE_TURNS = 2
+ARCHIVE_AFTER_TERMINAL_TURNS = 8
 
-SITUATION_STATUSES = ("forming", "active", "resolving", "resolved", "failed")
-TERMINAL_STATUSES = frozenset({"resolved", "failed"})
+SITUATION_STATUSES = ("forming", "active", "resolving", "resolved", "failed", "archived")
+TERMINAL_STATUSES = frozenset({"resolved", "failed", "archived"})
 
 SITUATION_RECEIPT_TYPES = (
     "situation_created",
@@ -41,6 +42,8 @@ SITUATION_RECEIPT_TYPES = (
     "situation_progressed",
     "situation_decayed",
     "situation_resolved",
+    "situation_failed",
+    "situation_archived",
 )
 
 PRESSURE_KIND_GROUPS = {
@@ -62,6 +65,25 @@ PRESSURE_KIND_GROUPS = {
 }
 
 EVENT_KIND_TO_TYPE = {
+    "resource_shortage": "food_shortage",
+    "trade_disruption": "trade_opportunity",
+    "investigation": "murder_investigation",
+    "search_operation": "search_party",
+    "disease_outbreak": "disease_outbreak",
+    "infrastructure_failure": "flood_recovery",
+    "settlement_recovery": "flood_recovery",
+    "bandit_activity": "bandit_activity",
+    "political_unrest": "political_unrest",
+    "migration": "search_party",
+    "military_mobilisation": "gang_turf_war",
+    "construction": "trade_opportunity",
+    "fire": "flood_recovery",
+    "flood": "flood_recovery",
+    "crop_failure": "food_shortage",
+    "guard_patrol": "political_unrest",
+    "refugee_movement": "search_party",
+    "wildlife_migration": "bandit_activity",
+    "environmental_hazard": "flood_recovery",
     "collapse": "flood_recovery",
     "fire": "flood_recovery",
     "evacuation": "search_party",
@@ -237,6 +259,34 @@ def _situation_id(run_seed: str, dedupe_key: str) -> str:
     return _stable_id("situation", run_seed, dedupe_key)
 
 
+def _situation_id_for_generation(run_seed: str, dedupe_key: str, generation: int) -> str:
+    if generation <= 0:
+        return _situation_id(run_seed, dedupe_key)
+    return _stable_id("situation", run_seed, dedupe_key, "recreated", generation)
+
+
+def _assign_unique_situation_id(
+    candidate: Dict[str, Any],
+    situations: Sequence[Mapping[str, Any]],
+    run_seed: str,
+) -> int:
+    dedupe = _bounded_str(candidate.get("dedupe_key"), 180)
+    if not dedupe:
+        return 0
+    existing_ids = {
+        str(row.get("situation_id") or "")
+        for row in situations
+        if isinstance(row, Mapping) and row.get("situation_id")
+    }
+    generation = 0
+    while True:
+        situation_id = _situation_id_for_generation(run_seed, dedupe, generation)
+        if situation_id not in existing_ids:
+            candidate["situation_id"] = situation_id
+            return generation
+        generation += 1
+
+
 def _default_title(situation_type: str) -> str:
     return SITUATION_TITLES.get(situation_type, situation_type.replace("_", " ").title())
 
@@ -353,20 +403,23 @@ def _candidate_from_pressure(node: Mapping[str, Any], *, turn_number: int, run_s
 
 
 def _candidate_from_world_event(event: Mapping[str, Any], *, turn_number: int, run_seed: str) -> Optional[Dict[str, Any]]:
-    if str(event.get("event_type") or "") not in {"pressure_world_event", "npc_action_event"}:
+    engine_event_type = str(event.get("event_type") or "")
+    if engine_event_type not in {"pressure_world_event", "npc_action_event", "world_event"}:
         return None
     event_id = _bounded_str(event.get("event_id"), 160)
     if not event_id:
         return None
-    situation_type = _situation_type_for_event(_event_kind(event))
+    world_event_id = _bounded_str(event.get("world_event_id"), 160)
+    situation_type = _situation_type_for_event(event.get("world_event_type") or _event_kind(event))
     actor_ids, locations, factions = _refs_from_event(event)
     pressure_id = _bounded_str(event.get("pressure_node_id"), 160)
+    originating_world_event_id = world_event_id or event_id
     dedupe_key = _scope_key(
         situation_type=situation_type,
         actor_ids=actor_ids,
         locations=locations,
         factions=factions,
-        fallback=pressure_id or _event_kind(event) or situation_type,
+        fallback=originating_world_event_id or pressure_id or _event_kind(event) or situation_type,
     )
     severity = max(3, min(10, round(_clamp_int(event.get("magnitude"), 0, 100, default=50) / 10)))
     return _normalise_situation(
@@ -380,13 +433,13 @@ def _candidate_from_world_event(event: Mapping[str, Any], *, turn_number: int, r
             "created_turn": turn_number,
             "updated_turn": turn_number,
             "originating_pressure_ids": [pressure_id] if pressure_id else [],
-            "originating_world_event_ids": [event_id],
+            "originating_world_event_ids": [originating_world_event_id],
             "involved_actor_ids": actor_ids,
             "involved_locations": locations,
             "involved_factions": factions,
             "objectives": SITUATION_OBJECTIVES.get(situation_type, ()),
             "blockers": SITUATION_BLOCKERS.get(situation_type, ()),
-            "evidence_refs": [f"world_event:{event_id}"],
+            "evidence_refs": [f"world_event:{originating_world_event_id}"],
             "progress": 0,
             "expiry": turn_number + DEFAULT_EXPIRY_TURNS,
             "source_event_ids": [event_id],
@@ -399,14 +452,23 @@ def _candidate_from_world_event(event: Mapping[str, Any], *, turn_number: int, r
 
 
 def _situation_summary(row: Mapping[str, Any]) -> Dict[str, Any]:
+    if not row:
+        return {}
     return {
-        "situation_id": row.get("situation_id"),
-        "type": row.get("type"),
-        "status": row.get("status"),
-        "priority": row.get("priority"),
-        "severity": row.get("severity"),
-        "progress": row.get("progress"),
+        key: row.get(key)
+        for key in ("status", "severity", "progress")
+        if row.get(key) is not None
     }
+
+
+def _summary_change(before: Mapping[str, Any], after: Mapping[str, Any]) -> Dict[str, List[Any]]:
+    change: Dict[str, List[Any]] = {}
+    for key in sorted(set(before) | set(after)):
+        before_value = before.get(key)
+        after_value = after.get(key)
+        if before_value != after_value:
+            change[key] = [before_value, after_value]
+    return change
 
 
 def _receipt_id(
@@ -456,9 +518,10 @@ def _append_receipt(
         "situation_id": situation_id,
         "situation_type": situation.get("type"),
         "detail": _bounded_str(detail, 120),
-        "before": _situation_summary(before or {}),
-        "after": _situation_summary(after or situation),
     }
+    change = _summary_change(_situation_summary(before or {}), _situation_summary(after or situation))
+    if change:
+        receipt["change"] = change
     source_ids = _bounded_str_list(source_event_ids or situation.get("source_event_ids"), MAX_SITUATION_REFS)
     if source_ids:
         receipt["source_event_ids"] = source_ids
@@ -592,7 +655,7 @@ def _advance_existing_situation(
             situation["status"] = "failed"
             situation["priority"] = min(_clamp_int(situation.get("priority"), 0, 10), 2)
             situation["updated_turn"] = turn_number
-            receipt_type = "situation_resolved"
+            receipt_type = "situation_failed"
             detail = "expired"
 
     situation["last_evolved_turn"] = turn_number
@@ -677,6 +740,7 @@ def _cap_situations(situations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             if row.get("situation_id") in overflow_ids:
                 row["status"] = "failed"
                 row["priority"] = min(_clamp_int(row.get("priority"), 0, 10), 1)
+    situations = [_compact_terminal_situation(row) for row in situations]
     if len(situations) > MAX_SITUATIONS:
         situations = sorted(
             situations,
@@ -689,6 +753,70 @@ def _cap_situations(situations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             ),
         )[:MAX_SITUATIONS]
     return sorted(situations, key=lambda row: (_coerce_int(row.get("created_turn"), 0), str(row.get("situation_id") or "")))
+
+
+def _compact_terminal_situation(row: Dict[str, Any]) -> Dict[str, Any]:
+    if row.get("status") not in TERMINAL_STATUSES:
+        return row
+    keep = (
+        "situation_id",
+        "type",
+        "title",
+        "status",
+        "priority",
+        "severity",
+        "progress",
+        "created_turn",
+        "updated_turn",
+        "originating_pressure_ids",
+        "originating_world_event_ids",
+        "source_event_ids",
+        "dedupe_key",
+        "merged_into",
+    )
+    compact: Dict[str, Any] = {}
+    for key in keep:
+        value = row.get(key)
+        if value is None or value == "" or value == []:
+            continue
+        compact[key] = copy.deepcopy(value)
+    return compact
+
+
+def _archive_terminal_situations(
+    replayability_state: Dict[str, Any],
+    situations: List[Dict[str, Any]],
+    local_receipts: List[Dict[str, Any]],
+    turn_number: int,
+    remaining_changes: int,
+) -> int:
+    for situation in sorted(
+        situations,
+        key=lambda row: (_coerce_int(row.get("updated_turn"), 0), str(row.get("situation_id") or "")),
+    ):
+        if remaining_changes <= 0:
+            break
+        if situation.get("status") not in {"resolved", "failed"}:
+            continue
+        if turn_number - _coerce_int(situation.get("updated_turn"), turn_number) < ARCHIVE_AFTER_TERMINAL_TURNS:
+            continue
+        before = copy.deepcopy(situation)
+        situation["status"] = "archived"
+        situation["priority"] = min(_clamp_int(situation.get("priority"), 0, 10), 1)
+        situation["updated_turn"] = turn_number
+        if _append_receipt(
+            replayability_state,
+            local_receipts,
+            receipt_type="situation_archived",
+            turn_number=turn_number,
+            situation=situation,
+            before=before,
+            after=situation,
+            detail="terminal_archive",
+            source_event_ids=situation.get("source_event_ids") or [],
+        ):
+            remaining_changes -= 1
+    return remaining_changes
 
 
 def evolve_situations(
@@ -708,7 +836,10 @@ def evolve_situations(
         "situation_progressed": 0,
         "situation_decayed": 0,
         "situation_resolved": 0,
+        "situation_failed": 0,
+        "situation_archived": 0,
         "situation_duplicate_suppressed": 0,
+        "situation_recreated": 0,
     }
     if not isinstance(replayability_state, dict):
         return {"receipts": [], "diagnostics": diagnostics}
@@ -723,6 +854,7 @@ def evolve_situations(
     replayability_state.setdefault("situation_receipts", [])
     local_receipts: List[Dict[str, Any]] = []
     remaining_changes = MAX_SITUATION_CHANGES_PER_TICK
+    evolved_this_turn_ids = set()
 
     candidates: List[Dict[str, Any]] = []
     graph = replayability_state.get("pressure_graph") if isinstance(replayability_state.get("pressure_graph"), Mapping) else {}
@@ -768,6 +900,7 @@ def evolve_situations(
             if remaining_changes <= 0 or len(situations) >= MAX_SITUATIONS:
                 diagnostics["situation_duplicate_suppressed"] += 1
                 continue
+            generation = _assign_unique_situation_id(candidate, situations, seed)
             situations.append(candidate)
             if _append_receipt(
                 replayability_state,
@@ -781,6 +914,9 @@ def evolve_situations(
                 source_event_ids=candidate.get("source_event_ids") or [],
             ):
                 diagnostics["situation_created"] += 1
+                if generation > 0:
+                    diagnostics["situation_recreated"] += 1
+                evolved_this_turn_ids.add(str(candidate.get("situation_id") or ""))
                 remaining_changes -= 1
             continue
 
@@ -791,13 +927,13 @@ def evolve_situations(
         ]
         if not new_sources and _clamp_int(candidate.get("severity"), 0, 10) <= _clamp_int(existing.get("severity"), 0, 10):
             diagnostics["situation_duplicate_suppressed"] += 1
-            existing["last_reinforced_turn"] = turn_number
-            existing["inactive_turns"] = 0
             continue
         if remaining_changes <= 0:
             continue
         before = copy.deepcopy(existing)
         changed = _reinforce_situation(existing, candidate, turn_number)
+        if changed:
+            evolved_this_turn_ids.add(str(existing.get("situation_id") or ""))
         if changed and _append_receipt(
             replayability_state,
             local_receipts,
@@ -830,8 +966,9 @@ def evolve_situations(
     )
 
     touched = {
-        str(candidate.get("situation_id") or "")
-        for candidate in candidates
+        situation_id
+        for situation_id in evolved_this_turn_ids
+        if situation_id
     }
     for situation in sorted(
         situations,
@@ -867,7 +1004,22 @@ def evolve_situations(
                 diagnostics["situation_decayed"] += 1
             elif receipt_type == "situation_resolved":
                 diagnostics["situation_resolved"] += 1
+            elif receipt_type == "situation_failed":
+                diagnostics["situation_failed"] += 1
             remaining_changes -= 1
+
+    before_archive_receipts = len(local_receipts)
+    remaining_changes = _archive_terminal_situations(
+        replayability_state,
+        situations,
+        local_receipts,
+        turn_number,
+        remaining_changes,
+    )
+    diagnostics["situation_archived"] += sum(
+        1 for receipt in local_receipts[before_archive_receipts:]
+        if receipt.get("receipt_type") == "situation_archived"
+    )
 
     replayability_state["situations"] = _cap_situations(situations)
     diagnostics["situation_engine_executed"] = bool(local_receipts or candidates or replayability_state["situations"])

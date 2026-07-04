@@ -1,0 +1,238 @@
+# Golden Seed Protocol
+
+## Purpose
+
+The Golden Seed Protocol establishes permanent deterministic benchmark worlds used to validate every major engine change.
+
+The goal is simple:
+
+> Every significant engine improvement must make the simulation better without sacrificing determinism, replay safety, stability, or long-term world health.
+
+The Simulation Harness is the authoritative validator for these benchmarks.
+
+---
+
+# Core Principle
+
+A feature is **not complete** until it passes its Golden Seed benchmark.
+
+Passing unit tests is necessary.
+
+Passing the Simulation Harness is required.
+
+---
+
+# Golden Seed 42 — "The Answer"
+
+> "The Answer to the Ultimate Question of Life, the Universe, and Everything."
+
+The primary benchmark world.
+
+Seed:
+
+```text
+42
+```
+
+Purpose:
+
+A balanced deterministic world representing normal gameplay.
+
+Every major engine feature must successfully complete this benchmark.
+
+Acceptance:
+
+- Deterministic replay
+- No critical anomalies
+- Stable replay fingerprint
+- State budget respected
+- Prompt-safe projections preserved
+- Authority boundaries preserved
+- Emergent behaviour equal to or better than the previous baseline
+
+---
+
+# Future Benchmark Seeds
+
+## Seed 666 — Chaos
+
+Purpose:
+
+High conflict.
+
+Designed to stress:
+
+- Pressure Graph
+- NPC combat
+- Goal churn
+- Situation creation
+- World event escalation
+
+Acceptance:
+
+No runaway feedback loops.
+
+---
+
+## Seed 404 — Isolation
+
+Purpose:
+
+Sparse population.
+
+Designed to expose assumptions that require large numbers of actors.
+
+Acceptance:
+
+Engine remains stable with minimal NPC interaction.
+
+---
+
+## Seed 1912 — Civilisation
+
+Purpose:
+
+Large settlements.
+
+Heavy economy.
+
+Politics.
+
+Trade.
+
+Long-term social stability.
+
+Acceptance:
+
+Stable long-running societal behaviour.
+
+---
+
+## Seed 65535 — Maximum Stress
+
+Purpose:
+
+Largest bounded deterministic simulation.
+
+Designed to test:
+
+- State budget
+- Performance
+- Memory retrieval
+- Projection limits
+- Collection caps
+
+Acceptance:
+
+No unbounded growth.
+
+No authority violations.
+
+No replay divergence.
+
+---
+
+# Required Validation
+
+Every major engine stage should complete:
+
+```bash
+python backend/tools/simulate_world.py \
+    --seed 42 \
+    --turns 500 \
+    --out .nw_tmp/sim_runs/golden_seed
+```
+
+Required outputs:
+
+- metrics.jsonl
+- timeline.jsonl
+- summary.json
+- final_snapshot.json
+- anomalies.json
+
+---
+
+# Required Pass Conditions
+
+## Engine
+
+- Deterministic
+- Replay-safe
+- Idempotent
+- Bounded
+- Stable
+
+---
+
+## Simulation
+
+- No duplicate IDs
+- No immortal pressure
+- No immortal situations
+- No runaway world events
+- No state budget overflow
+- No orphaned references
+- No replay divergence
+
+---
+
+## Authority
+
+Must preserve:
+
+- Replayability
+- Gateway
+- Pressure Graph
+- Situation Engine
+- Goal Engine
+- NPC Action Engine
+- World Event Engine
+- World-State Consumers
+- Simulation Harness
+
+The LLM never becomes authoritative.
+
+---
+
+# Harness Authority
+
+The Simulation Harness is considered the engine's health oracle.
+
+If the harness reports a defect:
+
+- Assume the engine is incorrect.
+- Do not weaken the harness.
+- Do not suppress anomaly detection.
+- Do not increase thresholds simply to make reports pass.
+
+The only acceptable harness changes are those correcting demonstrably false-positive detections.
+
+---
+
+# Benchmark History
+
+Each major stage should record:
+
+| Stage | Seed | Turns | Critical Anomalies | Replay Fingerprint | Status |
+|--------|------|------:|-------------------:|--------------------|--------|
+| Initial | 42 | 500 | 14 | - | ❌ |
+| Stage 6B | 42 | 500 | 0 | _(record)_ | ✅ |
+
+Over time this table becomes the engine's historical health record.
+
+---
+
+# Philosophy
+
+The Dice Reactions engine is not judged by isolated unit tests.
+
+It is judged by whether an entire simulated world can evolve for hundreds or thousands of deterministic turns without losing coherence.
+
+Every subsystem ultimately answers one question:
+
+> Does Golden Seed 42 still pass?
+
+If the answer is **yes**, the engine has become stronger.
+
+If the answer is **no**, the engine has regressed, regardless of how impressive the new feature appears.

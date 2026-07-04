@@ -353,6 +353,28 @@ def test_pressure_evolution_decay_and_resolution():
     assert "pressure_resolved" in receipt_types
 
 
+def test_saturated_pressure_naturally_decays_after_event_capacity():
+    graph = pressure_graph.copy_pressure_graph(None)
+    saturated = pressure_graph.upsert_pressure_node(
+        graph,
+        node_id="p-saturated",
+        kind="danger",
+        origin_type="structured_event",
+        origin_id="evt-saturated",
+        magnitude=100,
+        trend=1,
+        turn_number=1,
+    )
+    saturated["spawned_event_ids"] = ["evt-a", "evt-b"]
+
+    result = pressure_graph.evolve_pressure_graph(graph, 6, run_seed=SEED)
+
+    assert saturated["magnitude"] == 98
+    assert saturated["trend_label"] == "falling"
+    assert saturated["status"] == "active"
+    assert any(receipt["receipt_type"] == "pressure_reduced" for receipt in result["receipts"])
+
+
 def test_pressure_evolution_duplicate_prevention_same_turn():
     graph = pressure_graph.copy_pressure_graph(None)
     pressure_graph.upsert_pressure_node(

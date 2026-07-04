@@ -305,9 +305,12 @@ def test_prepare_action_turn_records_pressure_world_event_and_receipts():
     )
 
     events = updated["engine_world_events"]
-    assert len(events) == 1
-    assert events[0]["event_type"] == "pressure_world_event"
-    assert events[0]["pressure_node_id"] == "p-danger-world"
+    pressure_events = [
+        event for event in events
+        if event.get("event_type") == "pressure_world_event"
+    ]
+    assert len(pressure_events) == 1
+    assert pressure_events[0]["pressure_node_id"] == "p-danger-world"
     assert "engine_world_events" not in working_rolling
     assert working_rolling["locations"][0]["id"] == "dock"
     assert working_rolling["locations"][0]["status"] == "unstable"
@@ -318,7 +321,7 @@ def test_prepare_action_turn_records_pressure_world_event_and_receipts():
     assert any(r["receipt_type"] == "location_updated" for r in updated["world_state_receipts"])
     assert any(
         r.get("receipt_type") == "pressure_spawned_event"
-        and r.get("source_event_id") == events[0]["event_id"]
+        and r.get("source_event_id") == pressure_events[0]["event_id"]
         for r in updated["transition_receipts"]
     )
 

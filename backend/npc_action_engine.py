@@ -156,6 +156,8 @@ def _action_type_for_goal(goal: Mapping[str, Any]) -> str:
         return "retreat"
     if "protect" in tags:
         return "defend"
+    if goal_type == "find_murderer" and "investigate" in tags:
+        return "investigate"
     if "gather" in tags:
         return "gather"
     if "negotiate" in tags:

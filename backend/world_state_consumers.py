@@ -28,7 +28,7 @@ WORLD_STATE_RECEIPT_TYPES = (
     "settlement_changed",
     "travel_network_changed",
 )
-CONSUMABLE_EVENT_TYPES = frozenset({"pressure_world_event", "npc_action_event"})
+CONSUMABLE_EVENT_TYPES = frozenset({"pressure_world_event", "npc_action_event", "world_event"})
 WORLD_STATE_GUARD_RECEIPT_TYPES = (
     "world_state_row_reinserted",
     "world_state_row_restored",

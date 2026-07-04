@@ -25,6 +25,8 @@ import foundation_integration
 import foundation_promotion
 from foundation_snapshot import FoundationTurnSnapshot
 import goal_engine
+import information_engine
+import investigation_engine
 import living_cast_shadow
 import living_cast_provenance as provenance
 import npc_agendas as agendas
@@ -36,6 +38,7 @@ import relationships
 import simulation_clock
 import situation_engine
 import stress
+import world_event_engine
 import world_state_consumers as world_consumers
 from run_identity import derive_run_identity, is_closed_enum_identity
 
@@ -46,8 +49,10 @@ TRANSITION_RECEIPTS_MAX = 32
 RELATIONSHIP_EFFECT_RECEIPTS_MAX = 32
 MAX_ENGINE_WORLD_EVENTS = 24
 # Documented hard budget for full replayability_state at simultaneous caps.
-# Measured capped fixture ~53 KiB; 64 KiB leaves ~21% headroom without truncation.
-REPLAYABILITY_STATE_BUDGET_BYTES = 65_536
+# Stage 5F adds bounded information/reputation state. The 500-turn harness peaks
+# below 69 KiB with simultaneous late-stage receipts; 72 KiB preserves a strict
+# envelope without forcing information caps to a non-useful size.
+REPLAYABILITY_STATE_BUDGET_BYTES = 73_728
 
 # Keys the LLM must never own in rolling_state. `pressure_graph` is stripped here
 # and then re-added by `enforce_authoritative` as an engine-owned projection.
@@ -68,6 +73,18 @@ ROLLING_REPLAYABILITY_KEYS = frozenset({
     "arc_diversity",
     "pending_npc_move",
     "engine_world_events",
+    "world_events",
+    "active_world_events",
+    "world_event_receipts",
+    "evidence",
+    "investigations",
+    "active_investigations",
+    "investigation_receipts",
+    "information_items",
+    "active_information",
+    "information_receipts",
+    "reputation_signals",
+    "active_reputation",
     "situations",
     "active_situations",
     "situation_receipts",
@@ -225,6 +242,14 @@ def empty_replayability_state() -> Dict[str, Any]:
         "npc_actions": [],
         "npc_action_receipts": [],
         "engine_world_events": [],
+        "world_events": [],
+        "world_event_receipts": [],
+        "evidence": [],
+        "investigations": [],
+        "investigation_receipts": [],
+        "information_items": [],
+        "information_receipts": [],
+        "reputation_signals": [],
         "situations": [],
         "situation_receipts": [],
         "goals": [],
@@ -484,6 +509,14 @@ def init_new_story(
         "npc_actions": [],
         "npc_action_receipts": [],
         "engine_world_events": [],
+        "world_events": [],
+        "world_event_receipts": [],
+        "evidence": [],
+        "investigations": [],
+        "investigation_receipts": [],
+        "information_items": [],
+        "information_receipts": [],
+        "reputation_signals": [],
         "situations": [],
         "situation_receipts": [],
         "goals": [],
@@ -903,6 +936,168 @@ def prepare_action_turn(
                     turn_number=turn_number,
                 )
 
+    world_event_result = world_event_engine.evolve_world_events(
+        state,
+        working_rolling,
+        turn_number,
+        run_seed=run_seed,
+    )
+    world_event_diag = world_event_result.get("diagnostics") or {}
+    diagnostics.update(
+        {
+            key: value
+            for key, value in world_event_diag.items()
+            if value not in (False, 0, None, [], {})
+        }
+    )
+    added_world_event_events: List[Dict[str, Any]] = []
+    for event in world_event_result.get("events") or []:
+        if isinstance(event, Mapping) and _append_engine_world_event(state, event):
+            added_world_event_events.append(dict(event))
+    if added_world_event_events:
+        diagnostics["world_event_engine_events_appended"] = len(added_world_event_events)
+    for receipt in world_event_result.get("receipts") or []:
+        if not isinstance(receipt, Mapping):
+            continue
+        receipt_id = str(receipt.get("receipt_id") or "")
+        if receipt_id:
+            _append_transition_receipt(
+                state,
+                source_event_id=receipt_id,
+                receipt_type=str(receipt.get("receipt_type") or "world_event_evolved"),
+                turn_number=turn_number,
+            )
+
+    if added_world_event_events:
+        world_event_consumption = world_consumers.consume_pressure_world_events(
+            state,
+            working_rolling,
+            turn_number,
+        )
+        world_event_consumer_diag = world_event_consumption.get("diagnostics") or {}
+        diagnostics.update(
+            {
+                f"world_event_{key}": value
+                for key, value in world_event_consumer_diag.items()
+                if value not in (False, 0, None, [], {})
+            }
+        )
+        for receipt in world_event_consumption.get("receipts") or []:
+            if not isinstance(receipt, Mapping):
+                continue
+            receipt_id = str(receipt.get("receipt_id") or "")
+            if receipt_id:
+                _append_transition_receipt(
+                    state,
+                    source_event_id=receipt_id,
+                    receipt_type=str(receipt.get("receipt_type") or "world_state_consumed"),
+                    turn_number=turn_number,
+                )
+
+        pressure_from_world_events = pressure_graph.apply_world_event_engine_events(
+            pg,
+            added_world_event_events,
+            turn_number,
+            run_seed=run_seed,
+        )
+        pressure_world_event_receipts = pressure_from_world_events.get("receipts") or []
+        if pressure_world_event_receipts:
+            diagnostics["world_event_pressure_receipts"] = len(pressure_world_event_receipts)
+        if pressure_from_world_events.get("applied_event_ids"):
+            diagnostics["world_event_pressure_events_applied"] = len(
+                pressure_from_world_events.get("applied_event_ids") or []
+            )
+        for receipt in pressure_world_event_receipts:
+            if not isinstance(receipt, Mapping):
+                continue
+            source_id = str(receipt.get("event_id") or receipt.get("receipt_id") or "")
+            if source_id:
+                _append_transition_receipt(
+                    state,
+                    source_event_id=source_id,
+                    receipt_type=str(receipt.get("receipt_type") or "pressure_evolved"),
+                    turn_number=turn_number,
+                )
+
+    active_world_events = world_event_engine.project_active_world_events_for_rolling(state)
+    if active_world_events:
+        working_rolling["active_world_events"] = active_world_events
+    else:
+        working_rolling.pop("active_world_events", None)
+
+    investigation_result = investigation_engine.evolve_investigations(
+        state,
+        working_rolling,
+        turn_number,
+        run_seed=run_seed,
+    )
+    investigation_diag = investigation_result.get("diagnostics") or {}
+    diagnostics.update(
+        {
+            key: value
+            for key, value in investigation_diag.items()
+            if value not in (False, 0, None, [], {})
+        }
+    )
+    for receipt in investigation_result.get("receipts") or []:
+        if not isinstance(receipt, Mapping):
+            continue
+        receipt_id = str(receipt.get("receipt_id") or "")
+        if receipt_id:
+            _append_transition_receipt(
+                state,
+                source_event_id=receipt_id,
+                receipt_type=str(receipt.get("receipt_type") or "investigation_evolved"),
+                turn_number=turn_number,
+            )
+    active_investigations = investigation_engine.project_active_investigations_for_rolling(state)
+    if active_investigations:
+        working_rolling["active_investigations"] = active_investigations
+    else:
+        working_rolling.pop("active_investigations", None)
+
+    information_result = information_engine.evolve_information(
+        state,
+        working_rolling,
+        turn_number,
+        run_seed=run_seed,
+    )
+    information_diag = information_result.get("diagnostics") or {}
+    diagnostics.update(
+        {
+            key: value
+            for key, value in information_diag.items()
+            if value not in (False, 0, None, [], {})
+        }
+    )
+    for receipt in information_result.get("receipts") or []:
+        if not isinstance(receipt, Mapping):
+            continue
+        receipt_id = str(receipt.get("receipt_id") or "")
+        if receipt_id:
+            _append_transition_receipt(
+                state,
+                source_event_id=receipt_id,
+                receipt_type=str(receipt.get("receipt_type") or "information_evolved"),
+                turn_number=turn_number,
+            )
+    active_information = information_engine.project_active_information_for_rolling(
+        state,
+        rolling_state=working_rolling,
+    )
+    if active_information:
+        working_rolling["active_information"] = active_information
+    else:
+        working_rolling.pop("active_information", None)
+    active_reputation = information_engine.project_reputation_for_rolling(
+        state,
+        rolling_state=working_rolling,
+    )
+    if active_reputation:
+        working_rolling["active_reputation"] = active_reputation
+    else:
+        working_rolling.pop("active_reputation", None)
+
     situation_result = situation_engine.evolve_situations(
         state,
         working_rolling,
@@ -1292,6 +1487,14 @@ def living_cast_state_metrics(
     situation_receipts = replayability_state.get("situation_receipts") or []
     goals = replayability_state.get("goals") or []
     goal_receipts = replayability_state.get("goal_receipts") or []
+    world_events = replayability_state.get("world_events") or []
+    world_event_receipts = replayability_state.get("world_event_receipts") or []
+    evidence = replayability_state.get("evidence") or []
+    investigations = replayability_state.get("investigations") or []
+    investigation_receipts = replayability_state.get("investigation_receipts") or []
+    information_items = replayability_state.get("information_items") or []
+    information_receipts = replayability_state.get("information_receipts") or []
+    reputation_signals = replayability_state.get("reputation_signals") or []
     arc_state = replayability_state.get("arc_diversity") or {}
     arc_beats = arc_state.get("recent_beats") or []
     echo_state = replayability_state.get("consequence_echoes") or {}
@@ -1308,6 +1511,14 @@ def living_cast_state_metrics(
         "situation_receipts": (situation_receipts, len(situation_receipts)),
         "goals": (goals, len(goals)),
         "goal_receipts": (goal_receipts, len(goal_receipts)),
+        "world_events": (world_events, len(world_events)),
+        "world_event_receipts": (world_event_receipts, len(world_event_receipts)),
+        "evidence": (evidence, len(evidence)),
+        "investigations": (investigations, len(investigations)),
+        "investigation_receipts": (investigation_receipts, len(investigation_receipts)),
+        "information_items": (information_items, len(information_items)),
+        "information_receipts": (information_receipts, len(information_receipts)),
+        "reputation_signals": (reputation_signals, len(reputation_signals)),
         "arc_diversity_beats": (arc_beats, len(arc_beats)),
         "pressure_graph": (pressure, len(pressure.get("nodes") or [])),
         "consequence_echoes": (
@@ -1355,6 +1566,24 @@ def finalize_action_turn(
                 turn_number=turn_number,
             )
     evolve_agendas_from_sources(state, qualifying_sources, turn_number)
+    information_result = information_engine.evolve_information(
+        state,
+        {},
+        turn_number,
+        run_seed=str(state.get("run_seed") or ""),
+        structured_sources=validated,
+    )
+    for receipt in information_result.get("receipts") or []:
+        if not isinstance(receipt, Mapping):
+            continue
+        receipt_id = str(receipt.get("receipt_id") or "")
+        if receipt_id:
+            _append_transition_receipt(
+                state,
+                source_event_id=receipt_id,
+                receipt_type=str(receipt.get("receipt_type") or "information_evolved"),
+                turn_number=turn_number,
+            )
     return state
 
 
@@ -1422,6 +1651,44 @@ def enforce_authoritative(
         elif "active_npc_actions" in merged_rolling:
             merged_rolling.pop("active_npc_actions", None)
             adjustments.append("rolling_active_npc_actions_engine_cleared")
+        active_world_events = world_event_engine.project_active_world_events_for_rolling(
+            authoritative_replayability
+        )
+        if active_world_events:
+            merged_rolling["active_world_events"] = active_world_events
+            adjustments.append("rolling_active_world_events_engine_derived")
+        elif "active_world_events" in merged_rolling:
+            merged_rolling.pop("active_world_events", None)
+            adjustments.append("rolling_active_world_events_engine_cleared")
+        active_investigations = investigation_engine.project_active_investigations_for_rolling(
+            authoritative_replayability
+        )
+        if active_investigations:
+            merged_rolling["active_investigations"] = active_investigations
+            adjustments.append("rolling_active_investigations_engine_derived")
+        elif "active_investigations" in merged_rolling:
+            merged_rolling.pop("active_investigations", None)
+            adjustments.append("rolling_active_investigations_engine_cleared")
+        active_information = information_engine.project_active_information_for_rolling(
+            authoritative_replayability,
+            rolling_state=merged_rolling,
+        )
+        if active_information:
+            merged_rolling["active_information"] = active_information
+            adjustments.append("rolling_active_information_engine_derived")
+        elif "active_information" in merged_rolling:
+            merged_rolling.pop("active_information", None)
+            adjustments.append("rolling_active_information_engine_cleared")
+        active_reputation = information_engine.project_reputation_for_rolling(
+            authoritative_replayability,
+            rolling_state=merged_rolling,
+        )
+        if active_reputation:
+            merged_rolling["active_reputation"] = active_reputation
+            adjustments.append("rolling_active_reputation_engine_derived")
+        elif "active_reputation" in merged_rolling:
+            merged_rolling.pop("active_reputation", None)
+            adjustments.append("rolling_active_reputation_engine_cleared")
         adjustments.extend(agendas.strip_model_agenda_mutations(merged_rolling, authoritative_replayability))
         if not is_closed_enum_identity((authoritative_replayability or {}).get("identity")):
             adjustments.append("replayability_identity_invalid_ignored")

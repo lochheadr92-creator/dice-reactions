@@ -138,6 +138,42 @@ def test_duplicate_pressure_and_replay_do_not_create_duplicate_situations():
     assert second["diagnostics"]["situation_duplicate_suppressed"] >= 1
 
 
+def test_repeated_unchanged_input_does_not_prevent_situation_expiry():
+    situation = _situation("s-expire", severity=7, pressure_ids=["p-food"], source_event_ids=["p-food"])
+    situation["expiry"] = 3
+    state = _replay_state(pressure_nodes=[_pressure_node("p-food")], situations=[situation])
+
+    result = situation_engine.evolve_situations(state, {}, 3, run_seed=FIXED_SEED)
+
+    assert state["situations"][0]["status"] == "failed"
+    assert any(receipt["receipt_type"] == "situation_failed" for receipt in result["receipts"])
+    assert result["diagnostics"]["situation_duplicate_suppressed"] >= 1
+
+
+def test_recreated_situation_after_terminal_history_gets_new_deterministic_id():
+    base = _replay_state(pressure_nodes=[_pressure_node()])
+    situation_engine.evolve_situations(base, {}, 3, run_seed=FIXED_SEED)
+    terminal = copy.deepcopy(base["situations"][0])
+    terminal["status"] = "failed"
+    terminal["updated_turn"] = 4
+    terminal["expiry"] = 4
+
+    state_a = _replay_state(pressure_nodes=[_pressure_node()], situations=[terminal])
+    state_b = copy.deepcopy(state_a)
+
+    result_a = situation_engine.evolve_situations(state_a, {}, 5, run_seed=FIXED_SEED)
+    result_b = situation_engine.evolve_situations(state_b, {}, 5, run_seed=FIXED_SEED)
+
+    ids = [row["situation_id"] for row in state_a["situations"]]
+    assert len(ids) == len(set(ids))
+    assert state_a["situations"][0]["status"] == "failed"
+    assert state_a["situations"][1]["status"] == "active"
+    assert state_a["situations"][1]["situation_id"] != terminal["situation_id"]
+    assert result_a["diagnostics"]["situation_recreated"] == 1
+    assert state_a["situations"] == state_b["situations"]
+    assert result_a["receipts"] == result_b["receipts"]
+
+
 def test_duplicate_situations_merge_deterministically():
     primary = _situation("s-primary")
     duplicate = _situation("s-duplicate", severity=6, source_event_ids=["p-food-2"], pressure_ids=["p-food-2"])
@@ -182,6 +218,19 @@ def test_situation_progresses_decays_and_resolves_from_structured_state():
     assert decaying["situations"][0]["status"] == "resolving"
     assert decaying["situations"][0]["severity"] == 1
     assert any(receipt["receipt_type"] == "situation_decayed" for receipt in decay_result["receipts"])
+
+    archived = _replay_state(
+        situations=[
+            {
+                **_situation("s-archive", status="failed", severity=1, pressure_ids=[]),
+                "updated_turn": 1,
+                "expiry": 1,
+            }
+        ],
+    )
+    archive_result = situation_engine.evolve_situations(archived, {}, 10, run_seed=FIXED_SEED)
+    assert archived["situations"][0]["status"] == "archived"
+    assert any(receipt["receipt_type"] == "situation_archived" for receipt in archive_result["receipts"])
 
 
 def test_replayability_projects_active_situations_and_strips_model_authorship():
@@ -326,7 +375,7 @@ def test_prepare_action_turn_creates_world_event_situation_projection():
         rolling_state={"scene": "docks"},
     )
 
-    assert diagnostics["situation_created"] == 1
-    assert updated["situations"][0]["type"] == "gang_turf_war"
-    assert rolling["active_situations"][0]["type"] == "gang_turf_war"
+    assert diagnostics["situation_created"] >= 1
+    assert any(row["type"] == "gang_turf_war" for row in updated["situations"])
+    assert any(row["type"] == "gang_turf_war" for row in rolling["active_situations"])
     assert "source_event_ids" not in rolling["active_situations"][0]

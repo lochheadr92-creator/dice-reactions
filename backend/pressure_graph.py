@@ -30,6 +30,7 @@ DEFAULT_THRESHOLD = 70
 EVOLUTION_EVENT_THRESHOLD = 72
 EVOLUTION_RESOLVE_THRESHOLD = 4
 EVOLUTION_DECAY_AGE_TURNS = 4
+EVOLUTION_DECAY_DELTA = 2
 INACTIVE_ARCHIVE_AFTER_TURNS = 8
 TREND_VALUES = (-1, 0, 1)
 TREND_LABELS = {-1: "falling", 0: "stable", 1: "rising"}
@@ -70,6 +71,29 @@ PRESSURE_KIND_GROUPS = {
     "opportunity": "opportunity",
     "unresolved_thread": "unknown",
 }
+
+WORLD_EVENT_PRESSURE_KIND = {
+    "resource_shortage": "resource",
+    "trade_disruption": "resource",
+    "investigation": "suspicion",
+    "search_operation": "pursuit",
+    "disease_outbreak": "environmental",
+    "infrastructure_failure": "environmental",
+    "settlement_recovery": "opportunity",
+    "bandit_activity": "danger",
+    "political_unrest": "social",
+    "migration": "social",
+    "military_mobilisation": "conflict",
+    "construction": "opportunity",
+    "fire": "environmental",
+    "flood": "environmental",
+    "crop_failure": "resource",
+    "guard_patrol": "social",
+    "refugee_movement": "social",
+    "wildlife_migration": "environmental",
+    "environmental_hazard": "environmental",
+}
+WORLD_EVENT_TERMINAL_STATUSES = frozenset({"resolved", "failed", "archived"})
 
 ORIGIN_TYPES = (
     "opening_state",
@@ -475,9 +499,6 @@ def _node_snapshot(node: Mapping[str, Any]) -> Dict[str, Any]:
     return {
         "status": str(node.get("status") or ""),
         "magnitude": _clamp_magnitude(node.get("magnitude", 0)),
-        "trend": _coerce_trend(node.get("trend")),
-        "age_turns": max(0, _coerce_int(node.get("age_turns"), 0)),
-        "linked_node_ids": list(node.get("linked_node_ids") or []),
     }
 
 
@@ -823,8 +844,8 @@ def evolve_pressure_graph(
             )
             continue
 
-        if trend < 0 or (trend == 0 and age >= EVOLUTION_DECAY_AGE_TURNS and magnitude < 40):
-            node["magnitude"] = _clamp_magnitude(magnitude - 2)
+        if trend < 0 or (trend == 0 and age >= EVOLUTION_DECAY_AGE_TURNS):
+            node["magnitude"] = _clamp_magnitude(magnitude - EVOLUTION_DECAY_DELTA)
             if node["magnitude"] <= EVOLUTION_RESOLVE_THRESHOLD:
                 node["magnitude"] = 0
                 node["trend"] = 0
@@ -849,6 +870,33 @@ def evolve_pressure_graph(
             continue
 
         if magnitude >= EVOLUTION_EVENT_THRESHOLD or (trend > 0 and age >= 2):
+            spawned_ids = _bounded_str_list(node.get("spawned_event_ids") or [], MAX_SPAWNED_EVENTS_PER_NODE)
+            node_can_spawn = len(spawned_ids) < MAX_SPAWNED_EVENTS_PER_NODE
+            if not node_can_spawn and age >= EVOLUTION_DECAY_AGE_TURNS:
+                node["magnitude"] = _clamp_magnitude(magnitude - EVOLUTION_DECAY_DELTA)
+                if node["magnitude"] <= EVOLUTION_RESOLVE_THRESHOLD:
+                    node["magnitude"] = 0
+                    node["trend"] = 0
+                    node["trend_label"] = "stable"
+                    node["status"] = "resolved"
+                    receipt_type = "pressure_resolved"
+                else:
+                    node["trend"] = -1
+                    node["trend_label"] = "falling"
+                    receipt_type = "pressure_reduced"
+                node["updated_turn"] = turn_number
+                node["last_evolved_turn"] = turn_number
+                _record_evolution_receipt(
+                    graph,
+                    local_receipts,
+                    receipt_type=receipt_type,
+                    turn_number=turn_number,
+                    node_id=node_id,
+                    before=before,
+                    after=_node_snapshot(node),
+                )
+                continue
+
             node["magnitude"] = _clamp_magnitude(magnitude + (2 if trend > 0 else 0))
             node["trend"] = 1 if trend > 0 else trend
             node["trend_label"] = _trend_label(node["trend"])
@@ -864,7 +912,6 @@ def evolve_pressure_graph(
                 before=before,
                 after=after_escalation,
             )
-            spawned_ids = _bounded_str_list(node.get("spawned_event_ids") or [], MAX_SPAWNED_EVENTS_PER_NODE)
             if (
                 len(spawned_ids) < MAX_SPAWNED_EVENTS_PER_NODE
                 and len(spawned_events) < MAX_PRESSURE_EVENTS_PER_TICK
@@ -928,6 +975,33 @@ def _find_equivalent_node(graph: Mapping[str, Any], candidate: Mapping[str, Any]
     return None
 
 
+def _compact_inactive_node(node: Dict[str, Any]) -> Dict[str, Any]:
+    if node.get("status") == "active":
+        return node
+    keep = (
+        "id",
+        "kind",
+        "origin_type",
+        "origin_id",
+        "scope",
+        "status",
+        "magnitude",
+        "trend",
+        "trend_label",
+        "created_turn",
+        "updated_turn",
+        "spawned_event_ids",
+        "label",
+    )
+    compact: Dict[str, Any] = {}
+    for key in keep:
+        value = node.get(key)
+        if value is None or value == "" or value == []:
+            continue
+        compact[key] = copy.deepcopy(value)
+    return compact
+
+
 def _merge_refs(existing: Dict[str, Any], incoming: Mapping[str, Any]) -> None:
     for key, cap in (
         ("actor_ids", MAX_REF_IDS),
@@ -966,6 +1040,7 @@ def cap_pressure_graph(graph: Dict[str, Any]) -> Dict[str, Any]:
             ),
         )[:MAX_TOTAL_NODES]
         nodes.sort(key=lambda n: (int(n.get("created_turn") or 0), str(n.get("id") or "")))
+    nodes = [_compact_inactive_node(n) for n in nodes]
     graph["nodes"] = nodes
     if graph.get("foreground_node_id") not in {n.get("id") for n in _active_nodes(graph)}:
         graph["foreground_node_id"] = None
@@ -1076,6 +1151,201 @@ def upsert_pressure_node(
     _merge_refs(existing, candidate)
     cap_pressure_graph(graph)
     return existing
+
+
+def _world_event_scope(event: Mapping[str, Any], event_type: str) -> str:
+    if event.get("faction_ids"):
+        return "faction"
+    if event.get("actor_ids"):
+        return "personal"
+    if event_type in {"environmental_hazard", "fire", "flood", "wildlife_migration"}:
+        return "environmental"
+    return "local"
+
+
+def _world_event_pressure_node_id(
+    *,
+    run_seed: str,
+    event_type: str,
+    world_event_id: str,
+    scope: str,
+) -> str:
+    return stable_pressure_id(
+        run_seed or "pressure-graph",
+        WORLD_EVENT_PRESSURE_KIND.get(event_type, "unresolved_thread"),
+        "world_event",
+        world_event_id,
+        scope,
+    )
+
+
+def apply_world_event_engine_events(
+    graph: Dict[str, Any],
+    events: List[Mapping[str, Any]],
+    turn_number: int,
+    *,
+    run_seed: str = "",
+) -> Dict[str, Any]:
+    """Convert world-event engine events into pressure changes.
+
+    The world-event engine emits structured engine events; pressure_graph is
+    still the only code that creates, reinforces, reduces, or resolves pressure.
+    """
+    if not isinstance(graph, dict):
+        return {"receipts": [], "applied_event_ids": []}
+    local_receipts: List[Dict[str, Any]] = []
+    applied_event_ids: List[str] = []
+    for event in (events or [])[:MAX_PRESSURE_EVOLUTIONS_PER_TICK]:
+        if not isinstance(event, Mapping) or event.get("event_type") != "world_event":
+            continue
+        event_id = str(event.get("event_id") or "")
+        world_event_id = str(event.get("world_event_id") or "")
+        event_type = str(event.get("world_event_type") or "").strip().lower()
+        if not event_id or not world_event_id:
+            continue
+        pressure_kind = WORLD_EVENT_PRESSURE_KIND.get(event_type, "unresolved_thread")
+        scope = _world_event_scope(event, event_type)
+        node_id = _world_event_pressure_node_id(
+            run_seed=run_seed,
+            event_type=event_type,
+            world_event_id=world_event_id,
+            scope=scope,
+        )
+        before_node = None
+        for row in graph.get("nodes") or []:
+            if isinstance(row, dict) and str(row.get("id") or "") == node_id:
+                before_node = row
+                break
+        before = _node_snapshot(before_node) if isinstance(before_node, Mapping) else {}
+        status = str(event.get("world_event_status") or "")
+        source_ids = _bounded_str_list(
+            [event_id, world_event_id] + list(event.get("source_event_ids") or []),
+            MAX_REF_IDS,
+        )
+        originating_pressure_ids = _bounded_str_list(
+            event.get("originating_pressure_ids") or [],
+            MAX_REF_IDS,
+        )
+        if originating_pressure_ids:
+            existing_source = None
+            for row in graph.get("nodes") or []:
+                if isinstance(row, dict) and str(row.get("id") or "") == originating_pressure_ids[0]:
+                    existing_source = row
+                    break
+            if existing_source is not None:
+                _normalise_node(existing_source)
+                before_source = _node_snapshot(existing_source)
+                if status in WORLD_EVENT_TERMINAL_STATUSES:
+                    existing_source["magnitude"] = _clamp_magnitude(
+                        int(existing_source.get("magnitude") or 0)
+                        - max(4, int(event.get("magnitude") or 0) // 5)
+                    )
+                    existing_source["status"] = (
+                        "resolved"
+                        if existing_source["magnitude"] <= EVOLUTION_RESOLVE_THRESHOLD
+                        else "active"
+                    )
+                    existing_source["trend"] = -1 if existing_source["status"] == "active" else 0
+                else:
+                    existing_source["magnitude"] = max(
+                        _clamp_magnitude(existing_source.get("magnitude", 0)),
+                        max(20, _clamp_magnitude(event.get("magnitude", 0))),
+                    )
+                    existing_source["status"] = "active"
+                    existing_source["trend"] = max(_coerce_trend(existing_source.get("trend")), 0)
+                existing_source["trend_label"] = _trend_label(existing_source["trend"])
+                existing_source["updated_turn"] = turn_number
+                _merge_refs(
+                    existing_source,
+                    {
+                        "actor_ids": list(event.get("actor_ids") or []),
+                        "location_ids": list(event.get("location_ids") or []),
+                        "faction_ids": list(event.get("faction_ids") or []),
+                        "tags": ["world_event", event_type, pressure_kind],
+                        "evidence_refs": [f"world_event:{world_event_id}", f"engine_event:{event_id}"],
+                    },
+                )
+                if status in WORLD_EVENT_TERMINAL_STATUSES:
+                    receipt_type = "pressure_resolved" if existing_source["status"] == "resolved" else "pressure_reduced"
+                else:
+                    receipt_type = "pressure_escalated"
+                _record_evolution_receipt(
+                    graph,
+                    local_receipts,
+                    receipt_type=receipt_type,
+                    turn_number=turn_number,
+                    node_id=str(existing_source.get("id") or ""),
+                    before=before_source,
+                    after=_node_snapshot(existing_source),
+                    event_id=event_id,
+                    source_event_ids=source_ids,
+                )
+                applied_event_ids.append(event_id)
+                continue
+        if status in WORLD_EVENT_TERMINAL_STATUSES:
+            if not before_node:
+                continue
+            _normalise_node(before_node)
+            if status == "resolved":
+                before_node["magnitude"] = 0
+                before_node["status"] = "resolved"
+            else:
+                before_node["magnitude"] = _clamp_magnitude(
+                    int(before_node.get("magnitude") or 0)
+                    - max(6, int(event.get("magnitude") or 0) // 4)
+                )
+                before_node["status"] = "resolved" if before_node["magnitude"] <= EVOLUTION_RESOLVE_THRESHOLD else "active"
+            before_node["trend"] = -1 if before_node["status"] == "active" else 0
+            before_node["trend_label"] = _trend_label(before_node["trend"])
+            before_node["updated_turn"] = turn_number
+            _record_evolution_receipt(
+                graph,
+                local_receipts,
+                receipt_type="pressure_resolved" if before_node["status"] == "resolved" else "pressure_reduced",
+                turn_number=turn_number,
+                node_id=node_id,
+                before=before,
+                after=_node_snapshot(before_node),
+                event_id=event_id,
+                source_event_ids=source_ids,
+            )
+            applied_event_ids.append(event_id)
+            continue
+
+        node = upsert_pressure_node(
+            graph,
+            node_id=node_id,
+            run_seed=run_seed,
+            kind=pressure_kind,
+            origin_type="world_event",
+            origin_id=world_event_id,
+            scope=scope,
+            magnitude=max(20, _clamp_magnitude(event.get("magnitude", 0))),
+            trend=1,
+            turn_number=turn_number,
+            actor_ids=list(event.get("actor_ids") or []),
+            location_ids=list(event.get("location_ids") or []),
+            faction_ids=list(event.get("faction_ids") or []),
+            tags=_bounded_str_list(["world_event", event_type, pressure_kind], MAX_TAGS),
+            evidence_refs=[f"world_event:{world_event_id}", f"engine_event:{event_id}"],
+            label=str(event_type or pressure_kind).replace("_", " ")[:80],
+        )
+        _record_evolution_receipt(
+            graph,
+            local_receipts,
+            receipt_type="pressure_escalated",
+            turn_number=turn_number,
+            node_id=str(node.get("id") or node_id),
+            before=before,
+            after=_node_snapshot(node),
+            event_id=event_id,
+            source_event_ids=source_ids,
+        )
+        applied_event_ids.append(event_id)
+    if applied_event_ids:
+        select_foreground(graph, turn_number=turn_number)
+    cap_pressure_graph(graph)
+    return {"receipts": local_receipts, "applied_event_ids": applied_event_ids}
 
 
 def reduce_pressure_node(

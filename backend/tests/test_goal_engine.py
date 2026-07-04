@@ -165,6 +165,30 @@ def test_goal_duplicate_suppression_and_replay_idempotence():
     assert second["diagnostics"]["goal_duplicate_suppressed"] >= 1
 
 
+def test_recreated_goal_after_terminal_history_gets_new_deterministic_id():
+    base = _replay_state(situations=[_situation()])
+    goal_engine.evolve_goals(base, {}, 3, run_seed=FIXED_SEED)
+    terminal_goal = copy.deepcopy(base["goals"][0])
+    terminal_goal["status"] = "failed"
+    terminal_goal["updated_turn"] = 4
+    terminal_goal["expiry"] = 4
+
+    state_a = _replay_state(situations=[_situation()], goals=[terminal_goal])
+    state_b = copy.deepcopy(state_a)
+
+    result_a = goal_engine.evolve_goals(state_a, {}, 5, run_seed=FIXED_SEED)
+    result_b = goal_engine.evolve_goals(state_b, {}, 5, run_seed=FIXED_SEED)
+
+    ids = [row["goal_id"] for row in state_a["goals"]]
+    assert len(ids) == len(set(ids))
+    assert state_a["goals"][0]["status"] == "failed"
+    assert state_a["goals"][1]["status"] == "active"
+    assert state_a["goals"][1]["goal_id"] != terminal_goal["goal_id"]
+    assert result_a["diagnostics"]["goal_recreated"] == 1
+    assert state_a["goals"] == state_b["goals"]
+    assert result_a["receipts"] == result_b["receipts"]
+
+
 def test_duplicate_goals_merge_deterministically():
     primary = _goal("g-primary", priority=5)
     duplicate = _goal("g-duplicate", priority=9, parent_situation_ids=["s-food-2"])

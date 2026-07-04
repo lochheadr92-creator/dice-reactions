@@ -12,6 +12,8 @@ import copy
 import hashlib
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+import investigation_engine
+
 GOAL_ENGINE_VERSION = 1
 
 MAX_GOALS = 16
@@ -221,6 +223,30 @@ def _goal_id(run_seed: str, dedupe_key: str) -> str:
     return _stable_id("goal", run_seed, dedupe_key)
 
 
+def _goal_id_for_generation(run_seed: str, dedupe_key: str, generation: int) -> str:
+    if generation <= 0:
+        return _goal_id(run_seed, dedupe_key)
+    return _stable_id("goal", run_seed, dedupe_key, "recreated", generation)
+
+
+def _assign_unique_goal_id(candidate: Dict[str, Any], goals: Sequence[Mapping[str, Any]], run_seed: str) -> int:
+    dedupe = _bounded_str(candidate.get("dedupe_key"), 220)
+    if not dedupe:
+        return 0
+    existing_ids = {
+        str(row.get("goal_id") or "")
+        for row in goals
+        if isinstance(row, Mapping) and row.get("goal_id")
+    }
+    generation = 0
+    while True:
+        goal_id = _goal_id_for_generation(run_seed, dedupe, generation)
+        if goal_id not in existing_ids:
+            candidate["goal_id"] = goal_id
+            return generation
+        generation += 1
+
+
 def _normalise_status(value: Any, progress: int = 0) -> str:
     status = str(value or "").strip().lower()
     if status in GOAL_STATUSES:
@@ -377,18 +403,98 @@ def _candidate_from_situation(situation: Mapping[str, Any], *, turn_number: int,
     )
 
 
+def _candidate_from_investigation(
+    investigation: Mapping[str, Any],
+    evidence_by_id: Mapping[str, Mapping[str, Any]],
+    *,
+    turn_number: int,
+    run_seed: str,
+) -> Optional[Dict[str, Any]]:
+    if investigation.get("status") in investigation_engine.TERMINAL_STATUSES or investigation.get("archived"):
+        return None
+    investigation_id = _bounded_str(investigation.get("investigation_id"), 160)
+    if not investigation_id:
+        return None
+    assigned_actors = _bounded_str_list(investigation.get("assigned_actor_ids"), MAX_GOAL_REFS)
+    if not assigned_actors:
+        return None
+    evidence_ids = _bounded_str_list(investigation.get("evidence_ids"), MAX_GOAL_EVIDENCE_REFS)
+    evidence_rows = [
+        evidence_by_id[eid]
+        for eid in evidence_ids
+        if eid in evidence_by_id
+    ]
+    target_locations = _bounded_str_list(
+        [row.get("location_id") for row in evidence_rows if row.get("location_id")],
+        MAX_GOAL_REFS,
+    )
+    target_actors = _bounded_str_list(
+        list(investigation.get("suspect_ids") or [])
+        + [
+            actor_id
+            for row in evidence_rows
+            for actor_id in (row.get("actor_ids") or [])
+        ],
+        MAX_GOAL_REFS,
+    )
+    owner_type = "npc"
+    owner_id = assigned_actors[0]
+    goal_type = "find_murderer"
+    target = investigation_id
+    dedupe = _dedupe_key(owner_type, owner_id, goal_type, target)
+    priority = _clamp_int(investigation.get("priority"), 0, 10, default=5)
+    confidence = _clamp_int(investigation.get("confidence"), 0, 100, default=40)
+    urgency = max(3, min(10, confidence // 10 + (1 if evidence_ids else 0)))
+    return _normalise_goal(
+        {
+            "goal_id": _goal_id(run_seed, dedupe),
+            "owner_type": owner_type,
+            "owner_id": owner_id,
+            "goal_type": goal_type,
+            "title": _goal_title(goal_type),
+            "status": "active",
+            "priority": priority,
+            "urgency": urgency,
+            "progress": min(80, _clamp_int(investigation.get("progress"), 0, 100)),
+            "confidence": confidence,
+            "created_turn": turn_number,
+            "updated_turn": turn_number,
+            "parent_situation_ids": [investigation.get("situation_id")] if investigation.get("situation_id") else [],
+            "supporting_pressure_ids": [],
+            "target_actor_ids": target_actors,
+            "target_location_ids": target_locations,
+            "required_resources": GOAL_REQUIRED_RESOURCES.get(goal_type, ()),
+            "blockers": [],
+            "prerequisites": () if evidence_ids else GOAL_PREREQUISITES.get(goal_type, ()),
+            "evidence_refs": evidence_ids + [f"investigation:{investigation_id}"],
+            "expiry": turn_number + DEFAULT_EXPIRY_TURNS,
+            "source_event_ids": [investigation_id],
+            "plan_steps": _generate_plan(goal_type),
+            "dedupe_key": dedupe,
+            "last_reinforced_turn": turn_number,
+        },
+        run_seed=run_seed,
+    )
+
+
 def _goal_summary(row: Mapping[str, Any]) -> Dict[str, Any]:
+    if not row:
+        return {}
     return {
-        "goal_id": row.get("goal_id"),
-        "owner_type": row.get("owner_type"),
-        "owner_id": row.get("owner_id"),
-        "goal_type": row.get("goal_type"),
-        "status": row.get("status"),
-        "priority": row.get("priority"),
-        "urgency": row.get("urgency"),
-        "progress": row.get("progress"),
-        "next_step_summary": _next_step_summary(row),
+        key: row.get(key)
+        for key in ("status", "progress")
+        if row.get(key) is not None
     }
+
+
+def _summary_change(before: Mapping[str, Any], after: Mapping[str, Any]) -> Dict[str, List[Any]]:
+    change: Dict[str, List[Any]] = {}
+    for key in sorted(set(before) | set(after)):
+        before_value = before.get(key)
+        after_value = after.get(key)
+        if before_value != after_value:
+            change[key] = [before_value, after_value]
+    return change
 
 
 def _receipt_id(
@@ -440,9 +546,10 @@ def _append_receipt(
         "owner_type": goal.get("owner_type"),
         "owner_id": goal.get("owner_id"),
         "detail": _bounded_str(detail, 120),
-        "before": _goal_summary(before or {}),
-        "after": _goal_summary(after or goal),
     }
+    change = _summary_change(_goal_summary(before or {}), _goal_summary(after or goal))
+    if change:
+        receipt["change"] = change
     source_ids = _bounded_str_list(source_event_ids or goal.get("source_event_ids"), MAX_GOAL_REFS)
     if source_ids:
         receipt["source_event_ids"] = source_ids
@@ -622,7 +729,7 @@ def _advance_goal(
                 receipt_type = "goal_completed" if goal["progress"] >= 100 else "goal_progressed"
                 detail = "committed_action"
         if not receipt_type and parent_statuses:
-            if all(status in {"resolved"} for status in parent_statuses):
+            if all(status in {"resolved", "archived"} for status in parent_statuses):
                 if _clamp_int(goal.get("progress"), 0, 100) >= 50:
                     goal["progress"] = 100
                     goal["status"] = "completed"
@@ -718,6 +825,36 @@ def _merge_duplicate_goals(
     return remaining_changes
 
 
+def _compact_terminal_goal(row: Dict[str, Any]) -> Dict[str, Any]:
+    if row.get("status") not in TERMINAL_STATUSES:
+        return row
+    keep = (
+        "goal_id",
+        "owner_type",
+        "owner_id",
+        "goal_type",
+        "title",
+        "status",
+        "priority",
+        "urgency",
+        "progress",
+        "created_turn",
+        "updated_turn",
+        "parent_situation_ids",
+        "supporting_pressure_ids",
+        "source_event_ids",
+        "dedupe_key",
+        "merged_into",
+    )
+    compact: Dict[str, Any] = {}
+    for key in keep:
+        value = row.get(key)
+        if value is None or value == "" or value == []:
+            continue
+        compact[key] = copy.deepcopy(value)
+    return compact
+
+
 def _cap_goals(goals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     active = [row for row in goals if row.get("status") not in TERMINAL_STATUSES]
     if len(active) > MAX_ACTIVE_GOALS:
@@ -737,6 +874,7 @@ def _cap_goals(goals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             if row.get("goal_id") in overflow_ids:
                 row["status"] = "abandoned"
                 row["priority"] = min(_clamp_int(row.get("priority"), 0, 10), 1)
+    goals = [_compact_terminal_goal(row) for row in goals]
     if len(goals) > MAX_GOALS:
         goals = sorted(
             goals,
@@ -771,6 +909,7 @@ def evolve_goals(
         "goal_failed": 0,
         "goal_abandoned": 0,
         "goal_duplicate_suppressed": 0,
+        "goal_recreated": 0,
     }
     if not isinstance(replayability_state, dict):
         return {"receipts": [], "diagnostics": diagnostics}
@@ -805,6 +944,33 @@ def evolve_goals(
         candidate = _candidate_from_situation(situation, turn_number=turn_number, run_seed=seed)
         if candidate:
             candidates.append(candidate)
+    evidence_by_id = {
+        str(row.get("evidence_id") or ""): row
+        for row in replayability_state.get("evidence") or []
+        if isinstance(row, Mapping) and row.get("evidence_id")
+    }
+    investigations = [
+        row for row in replayability_state.get("investigations") or []
+        if isinstance(row, Mapping)
+    ]
+    investigations.sort(
+        key=lambda row: (
+            -_clamp_int(row.get("priority"), 0, 10),
+            -_clamp_int(row.get("confidence"), 0, 100),
+            str(row.get("investigation_id") or ""),
+        )
+    )
+    for investigation in investigations:
+        if len(candidates) >= MAX_GOAL_INPUTS_PER_TICK:
+            break
+        candidate = _candidate_from_investigation(
+            investigation,
+            evidence_by_id,
+            turn_number=turn_number,
+            run_seed=seed,
+        )
+        if candidate:
+            candidates.append(candidate)
 
     seen_candidate_keys = set()
     for candidate in candidates:
@@ -819,6 +985,7 @@ def evolve_goals(
             if remaining_changes <= 0 or len(goals) >= MAX_GOALS:
                 diagnostics["goal_duplicate_suppressed"] += 1
                 continue
+            generation = _assign_unique_goal_id(candidate, goals, seed)
             goals.append(candidate)
             if _append_receipt(
                 replayability_state,
@@ -828,10 +995,12 @@ def evolve_goals(
                 goal=candidate,
                 before={},
                 after=candidate,
-                detail="created_from_situation",
+                detail="created_from_engine_source",
                 source_event_ids=candidate.get("source_event_ids") or [],
             ):
                 diagnostics["goal_created"] += 1
+                if generation > 0:
+                    diagnostics["goal_recreated"] += 1
                 created_goal_ids.add(str(candidate.get("goal_id") or ""))
                 remaining_changes -= 1
             continue
@@ -852,14 +1021,14 @@ def evolve_goals(
         if changed and _append_receipt(
             replayability_state,
             local_receipts,
-            receipt_type="goal_reinforced",
-            turn_number=turn_number,
-            goal=existing,
-            before=before,
-            after=existing,
-            detail="reinforced_from_situation",
-            source_event_ids=new_sources or candidate.get("source_event_ids") or [],
-        ):
+                receipt_type="goal_reinforced",
+                turn_number=turn_number,
+                goal=existing,
+                before=before,
+                after=existing,
+                detail="reinforced_from_engine_source",
+                source_event_ids=new_sources or candidate.get("source_event_ids") or [],
+            ):
             diagnostics["goal_reinforced"] += 1
             remaining_changes -= 1
 

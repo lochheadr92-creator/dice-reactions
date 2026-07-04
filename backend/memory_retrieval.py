@@ -19,15 +19,23 @@ from engine_determinism import (
 )
 from foundation_snapshot import FoundationTurnSnapshot
 import goal_engine
+import information_engine
+import investigation_engine
 import npc_action_engine
 import pressure_graph
 import situation_engine
+import world_event_engine
 
 MEMORY_RETRIEVAL_SCHEMA_VERSION = 1
 MAX_RETRIEVAL_PRESSURE_NODES = 3
 MAX_RETRIEVAL_SITUATIONS = 3
 MAX_RETRIEVAL_GOALS = 3
 MAX_RETRIEVAL_ACTIONS = 3
+MAX_RETRIEVAL_WORLD_EVENTS = 3
+MAX_RETRIEVAL_INVESTIGATIONS = 3
+MAX_RETRIEVAL_EVIDENCE = 4
+MAX_RETRIEVAL_INFORMATION = 3
+MAX_RETRIEVAL_REPUTATION = 3
 
 # Appendix A.5
 WORKING_MEMORY_SIZE = {
@@ -108,6 +116,66 @@ def _action_ids(context: Mapping[str, Any]) -> set:
     return {str(value or "").strip() for value in values if str(value or "").strip()}
 
 
+def _world_event_ids(context: Mapping[str, Any]) -> set:
+    values = []
+    if context.get("world_event_id"):
+        values.append(context.get("world_event_id"))
+    raw = context.get("world_event_ids") or context.get("active_world_event_ids") or []
+    if isinstance(raw, (list, tuple, set)):
+        values.extend(raw)
+    else:
+        values.append(raw)
+    return {str(value or "").strip() for value in values if str(value or "").strip()}
+
+
+def _investigation_ids(context: Mapping[str, Any]) -> set:
+    values = []
+    if context.get("investigation_id"):
+        values.append(context.get("investigation_id"))
+    raw = context.get("investigation_ids") or context.get("active_investigation_ids") or []
+    if isinstance(raw, (list, tuple, set)):
+        values.extend(raw)
+    else:
+        values.append(raw)
+    return {str(value or "").strip() for value in values if str(value or "").strip()}
+
+
+def _evidence_ids(context: Mapping[str, Any]) -> set:
+    values = []
+    if context.get("evidence_id"):
+        values.append(context.get("evidence_id"))
+    raw = context.get("evidence_ids") or context.get("known_evidence_ids") or []
+    if isinstance(raw, (list, tuple, set)):
+        values.extend(raw)
+    else:
+        values.append(raw)
+    return {str(value or "").strip() for value in values if str(value or "").strip()}
+
+
+def _information_ids(context: Mapping[str, Any]) -> set:
+    values = []
+    if context.get("information_id"):
+        values.append(context.get("information_id"))
+    raw = context.get("information_ids") or context.get("active_information_ids") or []
+    if isinstance(raw, (list, tuple, set)):
+        values.extend(raw)
+    else:
+        values.append(raw)
+    return {str(value or "").strip() for value in values if str(value or "").strip()}
+
+
+def _reputation_signal_ids(context: Mapping[str, Any]) -> set:
+    values = []
+    if context.get("reputation_signal_id"):
+        values.append(context.get("reputation_signal_id"))
+    raw = context.get("reputation_signal_ids") or context.get("active_reputation_signal_ids") or []
+    if isinstance(raw, (list, tuple, set)):
+        values.extend(raw)
+    else:
+        values.append(raw)
+    return {str(value or "").strip() for value in values if str(value or "").strip()}
+
+
 def recency_factor(days_since_event: float, *, weight_class: str) -> float:
     reject_non_finite(days_since_event)
     half_life = RECENCY_HALF_LIFE_DAYS.get(weight_class, RECENCY_HALF_LIFE_DAYS["minor"])
@@ -146,6 +214,26 @@ def cue_relevance(current_context: Mapping[str, Any], memory_context: Mapping[st
     mem_actions = _action_ids(memory_context)
     if actions and mem_actions:
         cues.append((0.7, 1.0 if actions.intersection(mem_actions) else 0.0))
+    world_events = _world_event_ids(current_context)
+    mem_world_events = _world_event_ids(memory_context)
+    if world_events and mem_world_events:
+        cues.append((0.8, 1.0 if world_events.intersection(mem_world_events) else 0.0))
+    investigations = _investigation_ids(current_context)
+    mem_investigations = _investigation_ids(memory_context)
+    if investigations and mem_investigations:
+        cues.append((0.9, 1.0 if investigations.intersection(mem_investigations) else 0.0))
+    evidence = _evidence_ids(current_context)
+    mem_evidence = _evidence_ids(memory_context)
+    if evidence and mem_evidence:
+        cues.append((1.0, 1.0 if evidence.intersection(mem_evidence) else 0.0))
+    information = _information_ids(current_context)
+    mem_information = _information_ids(memory_context)
+    if information and mem_information:
+        cues.append((0.8, 1.0 if information.intersection(mem_information) else 0.0))
+    reputation = _reputation_signal_ids(current_context)
+    mem_reputation = _reputation_signal_ids(memory_context)
+    if reputation and mem_reputation:
+        cues.append((0.6, 1.0 if reputation.intersection(mem_reputation) else 0.0))
     action_type = str(current_context.get("action_type") or "")
     mem_action_type = str(memory_context.get("action_type") or "")
     if action_type and mem_action_type:
@@ -273,6 +361,87 @@ def evaluate_memory_retrieval(
             for row in actor_situations
             if row.get("situation_id")
         ]
+        actor_world_events = world_event_engine.active_world_events_for_context(
+            snapshot.world_event_state_ref,
+            actor_ids=[actor_id, actor.get("display_name") or ""],
+            location_ids=[
+                snapshot.location_ref,
+                actor.get("location_id") or "",
+                actor.get("last_seen") or "",
+            ],
+            faction_ids=[actor.get("faction_id") or "", actor.get("faction") or ""],
+            limit=MAX_RETRIEVAL_WORLD_EVENTS,
+        )
+        world_event_ids = [
+            str(row.get("world_event_id") or "")
+            for row in actor_world_events
+            if row.get("world_event_id")
+        ]
+        actor_evidence = investigation_engine.known_evidence_for_context(
+            snapshot.investigation_state_ref,
+            actor_ids=[actor_id, actor.get("display_name") or ""],
+            location_ids=[
+                snapshot.location_ref,
+                actor.get("location_id") or "",
+                actor.get("last_seen") or "",
+            ],
+            limit=MAX_RETRIEVAL_EVIDENCE,
+        )
+        evidence_ids = [
+            str(row.get("evidence_id") or "")
+            for row in actor_evidence
+            if row.get("evidence_id")
+        ]
+        actor_investigations = investigation_engine.active_investigations_for_context(
+            snapshot.investigation_state_ref,
+            actor_ids=[actor_id, actor.get("display_name") or ""],
+            location_ids=[
+                snapshot.location_ref,
+                actor.get("location_id") or "",
+                actor.get("last_seen") or "",
+            ],
+            evidence_ids=evidence_ids,
+            limit=MAX_RETRIEVAL_INVESTIGATIONS,
+        )
+        investigation_ids = [
+            str(row.get("investigation_id") or "")
+            for row in actor_investigations
+            if row.get("investigation_id")
+        ]
+        actor_information = information_engine.active_information_for_context(
+            snapshot.information_state_ref,
+            actor_ids=[actor_id, actor.get("display_name") or ""],
+            location_ids=[
+                snapshot.location_ref,
+                actor.get("location_id") or "",
+                actor.get("last_seen") or "",
+            ],
+            faction_ids=[actor.get("faction_id") or "", actor.get("faction") or ""],
+            limit=MAX_RETRIEVAL_INFORMATION,
+        )
+        information_ids = [
+            str(row.get("information_id") or "")
+            for row in actor_information
+            if row.get("information_id")
+        ]
+        actor_reputation = information_engine.reputation_for_context(
+            snapshot.information_state_ref,
+            subject_ids=[actor_id, actor.get("display_name") or ""],
+            observer_scope_ids=[
+                actor_id,
+                actor.get("display_name") or "",
+                actor.get("faction_id") or "",
+                actor.get("faction") or "",
+                snapshot.location_ref,
+                actor.get("location_id") or "",
+            ],
+            limit=MAX_RETRIEVAL_REPUTATION,
+        )
+        reputation_signal_ids = [
+            str(row.get("signal_id") or "")
+            for row in actor_reputation
+            if row.get("signal_id")
+        ]
         actor_goals = goal_engine.active_goals_for_context(
             snapshot.goal_state_ref,
             actor_ids=[actor_id, actor.get("display_name") or ""],
@@ -327,6 +496,55 @@ def evaluate_memory_retrieval(
                     "status": row.get("status"),
                 }
                 for row in actor_situations
+            ],
+            "world_event_ids": world_event_ids,
+            "active_world_events": [
+                {
+                    "world_event_id": row.get("world_event_id"),
+                    "event_type": row.get("event_type"),
+                    "severity": row.get("severity"),
+                    "status": row.get("status"),
+                }
+                for row in actor_world_events
+            ],
+            "investigation_ids": investigation_ids,
+            "active_investigations": [
+                {
+                    "investigation_id": row.get("investigation_id"),
+                    "status": row.get("status"),
+                    "confidence": row.get("confidence"),
+                    "progress": row.get("progress"),
+                }
+                for row in actor_investigations
+            ],
+            "evidence_ids": evidence_ids,
+            "known_evidence": [
+                {
+                    "evidence_id": row.get("evidence_id"),
+                    "evidence_type": row.get("evidence_type"),
+                    "confidence": row.get("confidence"),
+                }
+                for row in actor_evidence
+            ],
+            "information_ids": information_ids,
+            "active_information": [
+                {
+                    "information_id": row.get("information_id"),
+                    "information_type": row.get("information_type"),
+                    "reliability_band": row.get("reliability_band"),
+                    "visibility_scope": row.get("visibility_scope"),
+                }
+                for row in actor_information
+            ],
+            "reputation_signal_ids": reputation_signal_ids,
+            "active_reputation": [
+                {
+                    "signal_id": row.get("signal_id"),
+                    "dimension": row.get("dimension"),
+                    "score_band": row.get("score_band"),
+                    "reliability_band": row.get("reliability_band"),
+                }
+                for row in actor_reputation
             ],
             "goal_ids": goal_ids,
             "active_goals": [
@@ -389,6 +607,11 @@ def evaluate_memory_retrieval(
                 "selected_memory_ids": selected_ids,
                 "draw_indices": draw_indices,
                 "situation_ids": situation_ids,
+                "world_event_ids": world_event_ids,
+                "investigation_ids": investigation_ids,
+                "evidence_ids": evidence_ids,
+                "information_ids": information_ids,
+                "reputation_signal_ids": reputation_signal_ids,
                 "goal_ids": goal_ids,
                 "action_ids": action_ids,
                 "shadow_mode": effective_shadow,
@@ -407,6 +630,31 @@ def evaluate_memory_retrieval(
             "active": situation_engine.project_situations_for_prompt(
                 {"situations": snapshot.situation_state_ref.get("situations") or []}
             )[:MAX_RETRIEVAL_SITUATIONS],
+        },
+        "world_event_context": {
+            "max_world_events": MAX_RETRIEVAL_WORLD_EVENTS,
+            "active": world_event_engine.project_world_events_for_prompt(
+                {"world_events": snapshot.world_event_state_ref.get("world_events") or []}
+            )[:MAX_RETRIEVAL_WORLD_EVENTS],
+        },
+        "investigation_context": {
+            "max_investigations": MAX_RETRIEVAL_INVESTIGATIONS,
+            "active": investigation_engine.project_investigations_for_prompt(
+                {"investigations": snapshot.investigation_state_ref.get("investigations") or []}
+            )[:MAX_RETRIEVAL_INVESTIGATIONS],
+            "known_evidence_count": len(snapshot.investigation_state_ref.get("evidence") or []),
+        },
+        "information_context": {
+            "max_information": MAX_RETRIEVAL_INFORMATION,
+            "active": information_engine.project_information_for_prompt(
+                {"information_items": snapshot.information_state_ref.get("information_items") or []}
+            )[:MAX_RETRIEVAL_INFORMATION],
+        },
+        "reputation_context": {
+            "max_reputation": MAX_RETRIEVAL_REPUTATION,
+            "active": information_engine.project_reputation_for_prompt(
+                {"reputation_signals": snapshot.information_state_ref.get("reputation_signals") or []}
+            )[:MAX_RETRIEVAL_REPUTATION],
         },
         "goal_context": {
             "max_goals": MAX_RETRIEVAL_GOALS,

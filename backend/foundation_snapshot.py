@@ -9,10 +9,13 @@ from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from engine_determinism import SERIALIZATION_SCHEMA_VERSION, stable_hash
 import goal_engine
+import information_engine
+import investigation_engine
 import npc_action_engine
 import situation_engine
+import world_event_engine
 
-FOUNDATION_SNAPSHOT_SCHEMA_VERSION = 5
+FOUNDATION_SNAPSHOT_SCHEMA_VERSION = 8
 
 
 @dataclasses.dataclass(frozen=True)
@@ -35,6 +38,9 @@ class FoundationTurnSnapshot:
     situation_state_ref: Dict[str, Any] = dataclasses.field(default_factory=lambda: {"situations": []})
     goal_state_ref: Dict[str, Any] = dataclasses.field(default_factory=lambda: {"goals": []})
     action_state_ref: Dict[str, Any] = dataclasses.field(default_factory=lambda: {"npc_actions": []})
+    world_event_state_ref: Dict[str, Any] = dataclasses.field(default_factory=lambda: {"world_events": []})
+    investigation_state_ref: Dict[str, Any] = dataclasses.field(default_factory=lambda: {"investigations": [], "evidence": []})
+    information_state_ref: Dict[str, Any] = dataclasses.field(default_factory=lambda: {"information_items": [], "reputation_signals": []})
 
     @staticmethod
     def build(
@@ -58,12 +64,21 @@ class FoundationTurnSnapshot:
         situation_state = situation_engine.copy_situation_state(replay)
         goal_state = goal_engine.copy_goal_state(replay)
         action_state = npc_action_engine.copy_action_state(replay)
+        world_event_state = world_event_engine.copy_world_event_state(replay)
+        investigation_state = investigation_engine.copy_investigation_state(replay)
+        information_state = information_engine.copy_information_state(replay)
         if situation_state.get("situations"):
             hash_material["situations"] = situation_state
         if goal_state.get("goals"):
             hash_material["goals"] = goal_state
         if action_state.get("npc_actions"):
             hash_material["npc_actions"] = action_state
+        if world_event_state.get("world_events"):
+            hash_material["world_events"] = world_event_state
+        if investigation_state.get("investigations") or investigation_state.get("evidence"):
+            hash_material["investigations"] = investigation_state
+        if information_state.get("information_items") or information_state.get("reputation_signals"):
+            hash_material["information"] = information_state
         stress_commit = _actor_stress_commitment(rolling)
         if stress_commit is not None:
             # Commit authoritative stress values into snapshot identity so the
@@ -82,6 +97,9 @@ class FoundationTurnSnapshot:
             situation_state_ref=situation_state,
             goal_state_ref=goal_state,
             action_state_ref=action_state,
+            world_event_state_ref=world_event_state,
+            investigation_state_ref=investigation_state,
+            information_state_ref=information_state,
             confirmed_consequence_refs=_consequence_refs(rolling),
             relationship_vector_ref={
                 "vectors": list(rolling.get("relationship_vectors") or []),
@@ -94,7 +112,7 @@ class FoundationTurnSnapshot:
             location_ref=str(rolling.get("scene") or rolling.get("location") or ""),
             secret_access_facts=tuple(_secret_access_facts(rolling, replay)),
             gravity_metadata=dict(replay.get("gravity_metadata") or {}),
-            utility_input_refs=tuple(_utility_input_refs(rolling, replay, registry, situation_state, goal_state, action_state)),
+            utility_input_refs=tuple(_utility_input_refs(rolling, replay, registry, situation_state, goal_state, action_state, world_event_state, investigation_state, information_state)),
             source_state_hash=source_hash,
         )
 
@@ -260,7 +278,11 @@ def _actor_resolution_inputs(
             for node in (replay.get("pressure_graph") or {}).get("nodes") or []
             if isinstance(node, dict) and node.get("status") == "active"
         ],
-        "investigation_active": bool(rolling.get("clues") or rolling.get("topic_ledger")),
+        "investigation_active": bool(
+            rolling.get("clues")
+            or rolling.get("topic_ledger")
+            or replay.get("investigations")
+        ),
     }
 
 
@@ -282,6 +304,9 @@ def _utility_input_refs(
     situation_state: Mapping[str, Any],
     goal_state: Mapping[str, Any],
     action_state: Mapping[str, Any],
+    world_event_state: Mapping[str, Any],
+    investigation_state: Mapping[str, Any],
+    information_state: Mapping[str, Any],
 ) -> list:
     """Bounded authoritative utility inputs per actor - no narrative prose."""
     refs: list = []
@@ -342,6 +367,68 @@ def _utility_input_refs(
         situation_severity = None
         if active_situations:
             situation_severity = max(float(row.get("severity") or 0.0) for row in active_situations) / 10.0
+        active_world_events = world_event_engine.active_world_events_for_context(
+            world_event_state,
+            actor_ids=[actor_id, actor.get("display_name") or ""],
+            location_ids=[
+                rolling.get("scene") or rolling.get("location") or "",
+                actor.get("location_id") or "",
+                actor.get("last_seen") or "",
+            ],
+            faction_ids=[actor.get("faction_id") or "", actor.get("faction") or ""],
+        )
+        world_event_severity = None
+        if active_world_events:
+            world_event_severity = max(float(row.get("severity") or 0.0) for row in active_world_events) / 10.0
+        known_evidence = investigation_engine.known_evidence_for_context(
+            investigation_state,
+            actor_ids=[actor_id, actor.get("display_name") or ""],
+            location_ids=[
+                rolling.get("scene") or rolling.get("location") or "",
+                actor.get("location_id") or "",
+                actor.get("last_seen") or "",
+            ],
+        )
+        evidence_ids = [
+            str(row.get("evidence_id") or "")
+            for row in known_evidence
+            if row.get("evidence_id")
+        ]
+        active_investigations = investigation_engine.active_investigations_for_context(
+            investigation_state,
+            actor_ids=[actor_id, actor.get("display_name") or ""],
+            location_ids=[
+                rolling.get("scene") or rolling.get("location") or "",
+                actor.get("location_id") or "",
+                actor.get("last_seen") or "",
+            ],
+            evidence_ids=evidence_ids,
+        )
+        investigation_confidence = None
+        if active_investigations:
+            investigation_confidence = max(float(row.get("confidence") or 0.0) for row in active_investigations) / 100.0
+        active_information = information_engine.active_information_for_context(
+            information_state,
+            actor_ids=[actor_id, actor.get("display_name") or ""],
+            location_ids=[
+                rolling.get("scene") or rolling.get("location") or "",
+                actor.get("location_id") or "",
+                actor.get("last_seen") or "",
+            ],
+            faction_ids=[actor.get("faction_id") or "", actor.get("faction") or ""],
+        )
+        actor_reputation = information_engine.reputation_for_context(
+            information_state,
+            subject_ids=[actor_id, actor.get("display_name") or ""],
+            observer_scope_ids=[
+                actor_id,
+                actor.get("display_name") or "",
+                actor.get("faction_id") or "",
+                actor.get("faction") or "",
+                rolling.get("scene") or rolling.get("location") or "",
+                actor.get("location_id") or "",
+            ],
+        )
         active_goals = goal_engine.active_goals_for_context(
             goal_state,
             actor_ids=[actor_id, actor.get("display_name") or ""],
@@ -386,6 +473,22 @@ def _utility_input_refs(
                 "active_situation_ids": [row.get("situation_id") for row in active_situations],
                 "active_situation_types": [row.get("type") for row in active_situations],
                 "situation_severity": situation_severity,
+                "active_world_event_ids": [row.get("world_event_id") for row in active_world_events],
+                "active_world_event_types": [row.get("event_type") for row in active_world_events],
+                "world_event_severity": world_event_severity,
+                "active_investigation_ids": [row.get("investigation_id") for row in active_investigations],
+                "known_evidence_ids": evidence_ids,
+                "known_evidence_count": len(evidence_ids),
+                "evidence_confidence": investigation_confidence,
+                "active_information_count": len(active_information),
+                "reputation_hints": [
+                    {
+                        "dimension": row.get("dimension"),
+                        "score_band": row.get("score_band"),
+                        "confidence_band": row.get("reliability_band"),
+                    }
+                    for row in actor_reputation[:3]
+                ],
                 "active_goal_ids": [row.get("goal_id") for row in active_goals],
                 "active_goal_types": [row.get("goal_type") for row in active_goals],
                 "goal_priority": goal_priority,

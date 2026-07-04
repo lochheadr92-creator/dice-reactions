@@ -84,9 +84,12 @@ from player_api import (  # noqa: E402
 
 import json as _json  # noqa: E402
 import goal_engine  # noqa: E402
+import information_engine  # noqa: E402
+import investigation_engine  # noqa: E402
 import npc_action_engine  # noqa: E402
 import pressure_graph  # noqa: E402
 import situation_engine  # noqa: E402
+import world_event_engine  # noqa: E402
 import world_state_consumers as world_consumers  # noqa: E402
 
 # Engine-wide rolling-state-aware defaults
@@ -879,6 +882,14 @@ _PROMPT_HIDDEN_SETUP_KEYS = frozenset({"secret"})
 _PROMPT_HIDDEN_ROLLING_KEYS = frozenset({
     "secret_registry",
     "engine_world_events",
+    "world_events",
+    "world_event_receipts",
+    "evidence",
+    "investigations",
+    "investigation_receipts",
+    "information_items",
+    "information_receipts",
+    "reputation_signals",
     "world_state_consumed_event_ids",
     "world_state_receipts",
     "world_state_guard_receipts",
@@ -924,8 +935,14 @@ def _prompt_safe_rolling(rolling: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         )
     return npc_action_engine.prompt_safe_rolling_state(
         goal_engine.prompt_safe_rolling_state(
-            situation_engine.prompt_safe_rolling_state(
-                world_consumers.prompt_safe_world_state(safe)
+            information_engine.prompt_safe_rolling_state(
+                investigation_engine.prompt_safe_rolling_state(
+                    world_event_engine.prompt_safe_rolling_state(
+                        situation_engine.prompt_safe_rolling_state(
+                            world_consumers.prompt_safe_world_state(safe)
+                        )
+                    )
+                )
             )
         )
     )
