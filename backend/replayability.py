@@ -28,6 +28,7 @@ import goal_engine
 import living_cast_shadow
 import living_cast_provenance as provenance
 import npc_agendas as agendas
+import npc_action_engine
 import npc_world_moves as world_moves
 import opening_state
 import pressure_graph
@@ -61,6 +62,9 @@ ROLLING_REPLAYABILITY_KEYS = frozenset({
     "transition_receipts",
     "engine_events",
     "npc_agendas",
+    "npc_actions",
+    "active_npc_actions",
+    "npc_action_receipts",
     "arc_diversity",
     "pending_npc_move",
     "engine_world_events",
@@ -218,6 +222,8 @@ def empty_replayability_state() -> Dict[str, Any]:
         "arc_diversity": arc.init_arc_diversity(),
         "frozen_npc_move": None,
         "npc_move_receipts": [],
+        "npc_actions": [],
+        "npc_action_receipts": [],
         "engine_world_events": [],
         "situations": [],
         "situation_receipts": [],
@@ -475,6 +481,8 @@ def init_new_story(
         "arc_diversity": arc.init_arc_diversity(),
         "frozen_npc_move": None,
         "npc_move_receipts": [],
+        "npc_actions": [],
+        "npc_action_receipts": [],
         "engine_world_events": [],
         "situations": [],
         "situation_receipts": [],
@@ -658,6 +666,8 @@ def prepare_action_turn(
 
     agendas.tick_eligible_agendas(agendas_state, turn_number)
     committed_move: Optional[Dict[str, Any]] = None
+    npc_action_result: Dict[str, Any] = {"actions": [], "events": [], "receipts": [], "diagnostics": {}}
+    npc_action_recent: Optional[Dict[str, Any]] = None
     move, _candidates = world_moves.select_npc_move(
         run_seed, agendas_state, working_rolling, state, identity, turn_number
     )
@@ -778,11 +788,50 @@ def prepare_action_turn(
                             turn_number=turn_number,
                         )
 
+    npc_action_result = npc_action_engine.evolve_npc_actions(
+        state,
+        working_rolling,
+        turn_number,
+        run_seed=run_seed,
+    )
+    npc_action_diag = npc_action_result.get("diagnostics") or {}
+    diagnostics.update(
+        {
+            key: value
+            for key, value in npc_action_diag.items()
+            if value not in (False, 0, None, [], {})
+        }
+    )
+    added_action_events: List[Dict[str, Any]] = []
+    for event in npc_action_result.get("events") or []:
+        if isinstance(event, Mapping) and _append_engine_world_event(state, event):
+            added_action_events.append(dict(event))
+    if added_action_events:
+        diagnostics["npc_action_engine_events_appended"] = len(added_action_events)
+    for receipt in npc_action_result.get("receipts") or []:
+        if not isinstance(receipt, Mapping):
+            continue
+        receipt_id = str(receipt.get("receipt_id") or "")
+        if receipt_id:
+            _append_transition_receipt(
+                state,
+                source_event_id=receipt_id,
+                receipt_type=str(receipt.get("receipt_type") or "npc_action_evolved"),
+                turn_number=turn_number,
+            )
+    npc_action_recent = npc_action_engine.latest_action_for_goal_engine(
+        npc_action_result.get("actions") or []
+    )
+
+    pressure_mitigations = _pressure_mitigations_from_committed_move(committed_move)
+    pressure_mitigations.extend(
+        npc_action_engine.pressure_mitigations_from_events(added_action_events)
+    )
     pressure_evolution = pressure_graph.evolve_pressure_graph(
         pg,
         turn_number,
         run_seed=run_seed,
-        recent_mitigations=_pressure_mitigations_from_committed_move(committed_move),
+        recent_mitigations=pressure_mitigations,
         existing_event_ids=_engine_world_event_ids(state),
         identity=identity,
     )
@@ -890,7 +939,7 @@ def prepare_action_turn(
         working_rolling,
         turn_number,
         run_seed=run_seed,
-        recent_action=committed_move,
+        recent_action=npc_action_recent or committed_move,
     )
     goal_diag = goal_result.get("diagnostics") or {}
     diagnostics.update(
@@ -916,6 +965,11 @@ def prepare_action_turn(
         working_rolling["active_goals"] = active_goals
     else:
         working_rolling.pop("active_goals", None)
+    active_npc_actions = npc_action_engine.project_active_npc_actions_for_rolling(state)
+    if active_npc_actions:
+        working_rolling["active_npc_actions"] = active_npc_actions
+    else:
+        working_rolling.pop("active_npc_actions", None)
 
     _log_utility_ai_live_diagnostics(diagnostics)
 
@@ -1231,6 +1285,8 @@ def living_cast_state_metrics(
     active = agendas_state.get("active") or []
     archived = agendas_state.get("archived") or []
     move_receipts = replayability_state.get("npc_move_receipts") or []
+    npc_actions = replayability_state.get("npc_actions") or []
+    npc_action_receipts = replayability_state.get("npc_action_receipts") or []
     rel_receipts = replayability_state.get("relationship_effect_receipts") or []
     situations = replayability_state.get("situations") or []
     situation_receipts = replayability_state.get("situation_receipts") or []
@@ -1245,6 +1301,8 @@ def living_cast_state_metrics(
         "active_agendas": (active, len(active)),
         "archived_agendas": (archived, len(archived)),
         "npc_move_receipts": (move_receipts, len(move_receipts)),
+        "npc_actions": (npc_actions, len(npc_actions)),
+        "npc_action_receipts": (npc_action_receipts, len(npc_action_receipts)),
         "relationship_effect_receipts": (rel_receipts, len(rel_receipts)),
         "situations": (situations, len(situations)),
         "situation_receipts": (situation_receipts, len(situation_receipts)),
@@ -1355,6 +1413,15 @@ def enforce_authoritative(
         elif "active_goals" in merged_rolling:
             merged_rolling.pop("active_goals", None)
             adjustments.append("rolling_active_goals_engine_cleared")
+        active_npc_actions = npc_action_engine.project_active_npc_actions_for_rolling(
+            authoritative_replayability
+        )
+        if active_npc_actions:
+            merged_rolling["active_npc_actions"] = active_npc_actions
+            adjustments.append("rolling_active_npc_actions_engine_derived")
+        elif "active_npc_actions" in merged_rolling:
+            merged_rolling.pop("active_npc_actions", None)
+            adjustments.append("rolling_active_npc_actions_engine_cleared")
         adjustments.extend(agendas.strip_model_agenda_mutations(merged_rolling, authoritative_replayability))
         if not is_closed_enum_identity((authoritative_replayability or {}).get("identity")):
             adjustments.append("replayability_identity_invalid_ignored")

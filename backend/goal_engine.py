@@ -539,6 +539,8 @@ def _action_event_id(recent_action: Optional[Mapping[str, Any]]) -> str:
 def _action_matches_goal(goal: Mapping[str, Any], recent_action: Optional[Mapping[str, Any]]) -> bool:
     if not isinstance(recent_action, Mapping):
         return False
+    if str(recent_action.get("outcome") or "success") != "success":
+        return False
     move_kind = _bounded_str(recent_action.get("move_kind") or recent_action.get("action_kind"), 80)
     if not move_kind:
         return False

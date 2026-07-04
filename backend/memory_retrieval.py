@@ -19,6 +19,7 @@ from engine_determinism import (
 )
 from foundation_snapshot import FoundationTurnSnapshot
 import goal_engine
+import npc_action_engine
 import pressure_graph
 import situation_engine
 
@@ -26,6 +27,7 @@ MEMORY_RETRIEVAL_SCHEMA_VERSION = 1
 MAX_RETRIEVAL_PRESSURE_NODES = 3
 MAX_RETRIEVAL_SITUATIONS = 3
 MAX_RETRIEVAL_GOALS = 3
+MAX_RETRIEVAL_ACTIONS = 3
 
 # Appendix A.5
 WORKING_MEMORY_SIZE = {
@@ -94,6 +96,18 @@ def _goal_ids(context: Mapping[str, Any]) -> set:
     return {str(value or "").strip() for value in values if str(value or "").strip()}
 
 
+def _action_ids(context: Mapping[str, Any]) -> set:
+    values = []
+    if context.get("action_id"):
+        values.append(context.get("action_id"))
+    raw = context.get("action_ids") or context.get("active_action_ids") or []
+    if isinstance(raw, (list, tuple, set)):
+        values.extend(raw)
+    else:
+        values.append(raw)
+    return {str(value or "").strip() for value in values if str(value or "").strip()}
+
+
 def recency_factor(days_since_event: float, *, weight_class: str) -> float:
     reject_non_finite(days_since_event)
     half_life = RECENCY_HALF_LIFE_DAYS.get(weight_class, RECENCY_HALF_LIFE_DAYS["minor"])
@@ -128,6 +142,14 @@ def cue_relevance(current_context: Mapping[str, Any], memory_context: Mapping[st
     mem_goals = _goal_ids(memory_context)
     if goals and mem_goals:
         cues.append((0.9, 1.0 if goals.intersection(mem_goals) else 0.0))
+    actions = _action_ids(current_context)
+    mem_actions = _action_ids(memory_context)
+    if actions and mem_actions:
+        cues.append((0.7, 1.0 if actions.intersection(mem_actions) else 0.0))
+    action_type = str(current_context.get("action_type") or "")
+    mem_action_type = str(memory_context.get("action_type") or "")
+    if action_type and mem_action_type:
+        cues.append((0.5, 1.0 if action_type == mem_action_type else 0.2))
     if not cues:
         return 0.0
     weighted = sum(weight * value for weight, value in cues)
@@ -267,6 +289,27 @@ def evaluate_memory_retrieval(
             for row in actor_goals
             if row.get("goal_id")
         ]
+        actor_actions = npc_action_engine.actions_for_context(
+            snapshot.action_state_ref,
+            actor_ids=[actor_id, actor.get("display_name") or ""],
+            goal_ids=goal_ids,
+            location_ids=[
+                snapshot.location_ref,
+                actor.get("location_id") or "",
+                actor.get("last_seen") or "",
+            ],
+            limit=MAX_RETRIEVAL_ACTIONS,
+        )
+        action_ids = [
+            str(row.get("action_id") or "")
+            for row in actor_actions
+            if row.get("action_id")
+        ]
+        action_types = [
+            str(row.get("action_type") or "")
+            for row in actor_actions
+            if row.get("action_type")
+        ]
         memories = _memories_for_actor(actor, rolling_state, snapshot.turn_sequence)
         current_context = {
             "location": snapshot.location_ref,
@@ -295,6 +338,17 @@ def evaluate_memory_retrieval(
                     "status": row.get("status"),
                 }
                 for row in actor_goals
+            ],
+            "action_ids": action_ids,
+            "action_type": action_types[0] if action_types else "",
+            "recent_actions": [
+                {
+                    "action_id": row.get("action_id"),
+                    "action_type": row.get("action_type"),
+                    "outcome": row.get("outcome"),
+                    "status": row.get("status"),
+                }
+                for row in actor_actions
             ],
         }
         weighted: List[Dict[str, Any]] = []
@@ -336,6 +390,7 @@ def evaluate_memory_retrieval(
                 "draw_indices": draw_indices,
                 "situation_ids": situation_ids,
                 "goal_ids": goal_ids,
+                "action_ids": action_ids,
                 "shadow_mode": effective_shadow,
             }
         )
@@ -358,6 +413,12 @@ def evaluate_memory_retrieval(
             "active": goal_engine.project_goals_for_prompt(
                 {"goals": snapshot.goal_state_ref.get("goals") or []}
             )[:MAX_RETRIEVAL_GOALS],
+        },
+        "action_context": {
+            "max_actions": MAX_RETRIEVAL_ACTIONS,
+            "active": npc_action_engine.project_actions_for_prompt(
+                {"npc_actions": snapshot.action_state_ref.get("npc_actions") or []}
+            )[:MAX_RETRIEVAL_ACTIONS],
         },
         "working_memory_size": sum(trace["working_memory_size"] for trace in traces),
         "retrieval_traces": traces,

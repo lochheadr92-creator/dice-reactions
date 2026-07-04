@@ -9,9 +9,10 @@ from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from engine_determinism import SERIALIZATION_SCHEMA_VERSION, stable_hash
 import goal_engine
+import npc_action_engine
 import situation_engine
 
-FOUNDATION_SNAPSHOT_SCHEMA_VERSION = 4
+FOUNDATION_SNAPSHOT_SCHEMA_VERSION = 5
 
 
 @dataclasses.dataclass(frozen=True)
@@ -33,6 +34,7 @@ class FoundationTurnSnapshot:
     source_state_hash: str
     situation_state_ref: Dict[str, Any] = dataclasses.field(default_factory=lambda: {"situations": []})
     goal_state_ref: Dict[str, Any] = dataclasses.field(default_factory=lambda: {"goals": []})
+    action_state_ref: Dict[str, Any] = dataclasses.field(default_factory=lambda: {"npc_actions": []})
 
     @staticmethod
     def build(
@@ -55,10 +57,13 @@ class FoundationTurnSnapshot:
         }
         situation_state = situation_engine.copy_situation_state(replay)
         goal_state = goal_engine.copy_goal_state(replay)
+        action_state = npc_action_engine.copy_action_state(replay)
         if situation_state.get("situations"):
             hash_material["situations"] = situation_state
         if goal_state.get("goals"):
             hash_material["goals"] = goal_state
+        if action_state.get("npc_actions"):
+            hash_material["npc_actions"] = action_state
         stress_commit = _actor_stress_commitment(rolling)
         if stress_commit is not None:
             # Commit authoritative stress values into snapshot identity so the
@@ -76,6 +81,7 @@ class FoundationTurnSnapshot:
             pressure_state_ref=dict(replay.get("pressure_graph") or {}),
             situation_state_ref=situation_state,
             goal_state_ref=goal_state,
+            action_state_ref=action_state,
             confirmed_consequence_refs=_consequence_refs(rolling),
             relationship_vector_ref={
                 "vectors": list(rolling.get("relationship_vectors") or []),
@@ -88,7 +94,7 @@ class FoundationTurnSnapshot:
             location_ref=str(rolling.get("scene") or rolling.get("location") or ""),
             secret_access_facts=tuple(_secret_access_facts(rolling, replay)),
             gravity_metadata=dict(replay.get("gravity_metadata") or {}),
-            utility_input_refs=tuple(_utility_input_refs(rolling, replay, registry, situation_state, goal_state)),
+            utility_input_refs=tuple(_utility_input_refs(rolling, replay, registry, situation_state, goal_state, action_state)),
             source_state_hash=source_hash,
         )
 
@@ -275,6 +281,7 @@ def _utility_input_refs(
     registry: Sequence[Mapping[str, Any]],
     situation_state: Mapping[str, Any],
     goal_state: Mapping[str, Any],
+    action_state: Mapping[str, Any],
 ) -> list:
     """Bounded authoritative utility inputs per actor - no narrative prose."""
     refs: list = []
@@ -350,6 +357,21 @@ def _utility_input_refs(
         if active_goals:
             goal_priority = max(float(row.get("priority") or 0.0) for row in active_goals) / 10.0
             goal_urgency = max(float(row.get("urgency") or 0.0) for row in active_goals) / 10.0
+        active_actions = npc_action_engine.actions_for_context(
+            action_state,
+            actor_ids=[actor_id, actor.get("display_name") or ""],
+            goal_ids=[
+                str(row.get("goal_id") or "")
+                for row in active_goals
+                if row.get("goal_id")
+            ],
+            location_ids=[
+                rolling.get("scene") or rolling.get("location") or "",
+                actor.get("location_id") or "",
+                actor.get("last_seen") or "",
+            ],
+        )
+        latest_action = active_actions[0] if active_actions else {}
         refs.append(
             {
                 "actor_id": actor_id,
@@ -375,6 +397,14 @@ def _utility_input_refs(
                     }
                     for row in active_goals
                 ],
+                "current_action": latest_action.get("action_type"),
+                "goal_progress": (
+                    active_goals[0].get("progress")
+                    if active_goals
+                    else latest_action.get("goal_progress")
+                ),
+                "last_action": latest_action.get("action_type"),
+                "destination": latest_action.get("destination") or latest_action.get("target_location"),
             }
         )
     return sorted(refs, key=lambda row: row["actor_id"])

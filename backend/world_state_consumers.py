@@ -28,6 +28,7 @@ WORLD_STATE_RECEIPT_TYPES = (
     "settlement_changed",
     "travel_network_changed",
 )
+CONSUMABLE_EVENT_TYPES = frozenset({"pressure_world_event", "npc_action_event"})
 WORLD_STATE_GUARD_RECEIPT_TYPES = (
     "world_state_row_reinserted",
     "world_state_row_restored",
@@ -787,6 +788,116 @@ def _consume_generic_location(
     ), 0
 
 
+def _consume_npc_travel(
+    replayability_state: Dict[str, Any],
+    rolling_state: Dict[str, Any],
+    local_receipts: List[Dict[str, Any]],
+    event: Mapping[str, Any],
+    turn_number: int,
+) -> Tuple[int, int]:
+    actor_id = _first_target(event, "actor_ids")
+    location_id = _first_target(event, "location_ids", "local")
+    if not actor_id:
+        return 0, 1
+    return _mutate_actor_location(
+        replayability_state, rolling_state, local_receipts,
+        event=event, turn_number=turn_number, actor_id=actor_id,
+        location_id=location_id, status="present",
+    ), 0
+
+
+def _consume_npc_resource_gain(
+    replayability_state: Dict[str, Any],
+    rolling_state: Dict[str, Any],
+    local_receipts: List[Dict[str, Any]],
+    event: Mapping[str, Any],
+    turn_number: int,
+) -> Tuple[int, int]:
+    count = _mutate_resource(
+        replayability_state, rolling_state, local_receipts,
+        event=event, turn_number=turn_number, resource_id=_resource_id(event),
+        delta=1, trend="increasing", status="improving",
+    )
+    location_id = _first_target(event, "location_ids")
+    if location_id and count < MAX_WORLD_STATE_MUTATIONS_PER_EVENT:
+        count += _mutate_settlement(
+            replayability_state, rolling_state, local_receipts,
+            event=event, turn_number=turn_number, location_id=location_id,
+            condition="resource_secured", status="improving",
+        )
+    return count, 0
+
+
+def _consume_npc_repair(
+    replayability_state: Dict[str, Any],
+    rolling_state: Dict[str, Any],
+    local_receipts: List[Dict[str, Any]],
+    event: Mapping[str, Any],
+    turn_number: int,
+) -> Tuple[int, int]:
+    location_id = _first_target(event, "location_ids")
+    if not location_id:
+        return 0, 1
+    count = _mutate_infrastructure(
+        replayability_state, rolling_state, local_receipts,
+        event=event, turn_number=turn_number, location_id=location_id,
+        status="repairing", condition="repair_progress",
+    )
+    if count < MAX_WORLD_STATE_MUTATIONS_PER_EVENT:
+        count += _mutate_travel_route(
+            replayability_state, rolling_state, local_receipts,
+            event=event, turn_number=turn_number, location_id=location_id,
+            status="improving", condition="route_repair",
+        )
+    return count, 0
+
+
+def _consume_npc_warning_or_defense(
+    replayability_state: Dict[str, Any],
+    rolling_state: Dict[str, Any],
+    local_receipts: List[Dict[str, Any]],
+    event: Mapping[str, Any],
+    turn_number: int,
+) -> Tuple[int, int]:
+    location_id = _first_target(event, "location_ids")
+    faction_id = _first_target(event, "faction_ids")
+    count = 0
+    skipped = 0
+    if location_id:
+        count += _mutate_settlement(
+            replayability_state, rolling_state, local_receipts,
+            event=event, turn_number=turn_number, location_id=location_id,
+            condition="prepared", status="guarded",
+        )
+    else:
+        skipped += 1
+    if faction_id and count < MAX_WORLD_STATE_MUTATIONS_PER_EVENT:
+        count += _mutate_faction(
+            replayability_state, rolling_state, local_receipts,
+            event=event, turn_number=turn_number, faction_id=faction_id,
+            security_delta=1, influence_delta=0,
+        )
+    return count, skipped
+
+
+def _consume_npc_retreat(
+    replayability_state: Dict[str, Any],
+    rolling_state: Dict[str, Any],
+    local_receipts: List[Dict[str, Any]],
+    event: Mapping[str, Any],
+    turn_number: int,
+) -> Tuple[int, int]:
+    actor_id = _first_target(event, "actor_ids")
+    location_id = _first_target(event, "location_ids", "local")
+    if not actor_id:
+        return 0, 1
+    return _mutate_actor_location(
+        replayability_state, rolling_state, local_receipts,
+        event=event, turn_number=turn_number, actor_id=actor_id,
+        location_id=location_id, status="retreated",
+    ), 0
+
+
 def _consume_event(
     replayability_state: Dict[str, Any],
     rolling_state: Dict[str, Any],
@@ -870,6 +981,28 @@ def _consume_event(
                     location_id=location_id, status="missing",
                 )
         return count, skipped
+    if kind == "npc_travelled":
+        return _consume_npc_travel(replayability_state, rolling_state, local_receipts, event, turn_number)
+    if kind in {"npc_gathered_food", "npc_secured_resource", "npc_delivered_resource"}:
+        return _consume_npc_resource_gain(replayability_state, rolling_state, local_receipts, event, turn_number)
+    if kind == "npc_repaired_bridge":
+        return _consume_npc_repair(replayability_state, rolling_state, local_receipts, event, turn_number)
+    if kind in {"npc_warned_settlement", "npc_defended_area", "npc_recruited_member"}:
+        return _consume_npc_warning_or_defense(replayability_state, rolling_state, local_receipts, event, turn_number)
+    if kind == "npc_retreated":
+        return _consume_npc_retreat(replayability_state, rolling_state, local_receipts, event, turn_number)
+    if kind in {"npc_found_clue", "npc_failed_search", "npc_observed", "npc_negotiated"}:
+        return _consume_generic_location(
+            replayability_state, rolling_state, local_receipts, event, turn_number,
+            status="active", condition=kind,
+        )
+    if kind in {"npc_attacked", "npc_action_failed"}:
+        return _consume_generic_location(
+            replayability_state, rolling_state, local_receipts, event, turn_number,
+            status="unstable", condition=kind,
+        )
+    if kind in {"npc_hid_evidence", "npc_waited"}:
+        return 0, 0
     return 0, 1
 
 
@@ -878,7 +1011,7 @@ def consume_pressure_world_events(
     rolling_state: Dict[str, Any],
     turn_number: int,
 ) -> Dict[str, Any]:
-    """Consume pressure_world_event history into bounded structured world state."""
+    """Consume engine-owned world events into bounded structured world state."""
     diagnostics = {
         "world_state_consumer_executed": False,
         "world_state_events_consumed": 0,
@@ -908,7 +1041,7 @@ def consume_pressure_world_events(
     for event in events:
         if attempted >= MAX_WORLD_STATE_CONSUMER_EVENTS_PER_TICK:
             break
-        if event.get("event_type") != "pressure_world_event":
+        if event.get("event_type") not in CONSUMABLE_EVENT_TYPES:
             continue
         eid = _event_id(event)
         if not eid:

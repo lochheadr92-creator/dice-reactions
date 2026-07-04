@@ -83,6 +83,19 @@ EVENT_KIND_TO_TYPE = {
     "mysterious_signal": "murder_investigation",
     "unexplained_disappearance": "missing_child",
     "disease": "disease_outbreak",
+    "npc_found_clue": "murder_investigation",
+    "npc_failed_search": "search_party",
+    "npc_gathered_food": "food_shortage",
+    "npc_secured_resource": "trade_opportunity",
+    "npc_repaired_bridge": "flood_recovery",
+    "npc_warned_settlement": "political_unrest",
+    "npc_recruited_member": "political_unrest",
+    "npc_defended_area": "bandit_activity",
+    "npc_attacked": "gang_turf_war",
+    "npc_retreated": "bandit_activity",
+    "npc_travelled": "search_party",
+    "npc_negotiated": "political_unrest",
+    "npc_delivered_resource": "trade_opportunity",
 }
 
 PRESSURE_GROUP_TO_TYPE = {
@@ -340,7 +353,7 @@ def _candidate_from_pressure(node: Mapping[str, Any], *, turn_number: int, run_s
 
 
 def _candidate_from_world_event(event: Mapping[str, Any], *, turn_number: int, run_seed: str) -> Optional[Dict[str, Any]]:
-    if str(event.get("event_type") or "") != "pressure_world_event":
+    if str(event.get("event_type") or "") not in {"pressure_world_event", "npc_action_event"}:
         return None
     event_id = _bounded_str(event.get("event_id"), 160)
     if not event_id:
