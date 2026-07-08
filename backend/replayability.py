@@ -868,7 +868,10 @@ def prepare_action_turn(
                 receipt_type=str(receipt.get("receipt_type") or "situation_evolved"),
                 turn_number=turn_number,
             )
-    active_situations = situation_engine.project_active_situations_for_rolling(state)
+    active_situations = situation_engine.project_active_situations_for_rolling(
+        state,
+        rolling_state=working_rolling,
+    )
     if active_situations:
         working_rolling["active_situations"] = active_situations
     else:
@@ -1283,6 +1286,16 @@ def prepare_action_turn(
         working_rolling["active_npc_actions"] = active_npc_actions
     else:
         working_rolling.pop("active_npc_actions", None)
+
+    promoted_situations = situation_engine.project_active_situations_for_rolling(
+        state,
+        rolling_state=working_rolling,
+    )
+    if promoted_situations:
+        working_rolling["active_situations"] = promoted_situations
+        diagnostics["situation_promoted"] = len(promoted_situations)
+    else:
+        working_rolling.pop("active_situations", None)
 
     _log_utility_ai_live_diagnostics(diagnostics)
 
@@ -1912,7 +1925,8 @@ def enforce_authoritative(
             merged_rolling["active_pressures"] = pressure_graph.project_active_pressures(auth_pg)
             adjustments.append("rolling_active_pressures_engine_derived")
         active_situations = situation_engine.project_active_situations_for_rolling(
-            authoritative_replayability
+            authoritative_replayability,
+            rolling_state=merged_rolling,
         )
         if active_situations:
             merged_rolling["active_situations"] = active_situations

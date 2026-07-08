@@ -109,21 +109,7 @@ INVESTIGATION_TERMINAL = investigation_engine.TERMINAL_STATUSES
 PROMPT_GOAL_FIELDS = frozenset(
     {"title", "status", "priority", "progress", "next_step_summary"}
 )
-PROMPT_SITUATION_FIELDS = frozenset(
-    {
-        "situation_id",
-        "type",
-        "title",
-        "status",
-        "priority",
-        "severity",
-        "progress",
-        "affected_locations",
-        "affected_factions",
-        "objectives",
-        "blockers",
-    }
-)
+PROMPT_SITUATION_FIELDS = frozenset(situation_engine.PROMOTED_SITUATION_FIELDS)
 PROMPT_ACTION_FIELDS = frozenset(npc_action_engine.PROMPT_ACTION_FIELDS)
 PROMPT_WORLD_EVENT_FIELDS = frozenset(
     {"title", "severity", "status", "affected_locations", "affected_factions", "progress"}

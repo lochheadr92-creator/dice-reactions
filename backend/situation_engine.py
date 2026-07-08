@@ -26,6 +26,55 @@ MAX_SITUATION_EVIDENCE_REFS = 8
 MAX_PROJECTED_SITUATIONS = 6
 MAX_PROMPT_SITUATIONS = 4
 MAX_CONTEXT_SITUATIONS = 4
+MAX_PROMOTED_GOALS = 3
+MAX_PROMOTED_INFORMATION = 3
+MAX_PROMOTED_PRESSURE_LABELS = 3
+MAX_PROMOTED_WORLD_EVENTS = 2
+MAX_PROMOTED_OPPORTUNITIES = 4
+MAX_PROMOTED_ACTORS = 6
+MAX_PROMOTED_RELATIONSHIP_SHIFTS = 2
+
+SITUATION_STATUS_PHRASES = {
+    "forming": "taking shape",
+    "active": "unfolding now",
+    "resolving": "heading toward resolution",
+}
+
+WHY_IT_MATTERS_BY_TYPE = {
+    "food_shortage": "Supplies are strained and daily needs are at risk",
+    "gang_turf_war": "Violence is escalating and control of the area is contested",
+    "murder_investigation": "A death demands answers before trust collapses",
+    "political_unrest": "Tensions are rising and public order is fragile",
+    "bandit_activity": "Routes and settlements face an active threat",
+    "trade_opportunity": "A time-sensitive exchange could shift local fortunes",
+    "disease_outbreak": "Illness is spreading and containment is urgent",
+    "flood_recovery": "Damage is disrupting movement and recovery",
+    "search_party": "Someone is missing and time works against rescue",
+    "missing_child": "A child is unaccounted for and every hour matters",
+}
+
+PROMOTED_SITUATION_FIELDS = (
+    "situation_id",
+    "type",
+    "title",
+    "status",
+    "priority",
+    "severity",
+    "progress",
+    "headline",
+    "why_it_matters",
+    "affected_actors",
+    "affected_locations",
+    "affected_factions",
+    "objectives",
+    "blockers",
+    "player_opportunities",
+    "related_goals",
+    "related_information",
+    "pressure_labels",
+    "related_world_events",
+    "relationship_shifts",
+)
 
 CREATION_PRESSURE_THRESHOLD = 50
 DEFAULT_EXPIRY_TURNS = 12
@@ -1026,16 +1075,349 @@ def evolve_situations(
     return {"receipts": local_receipts, "diagnostics": diagnostics}
 
 
-def project_active_situations_for_rolling(
+def _pressure_nodes_by_id(replayability_state: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
+    graph = replayability_state.get("pressure_graph") if isinstance(replayability_state, Mapping) else {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for node in (graph or {}).get("nodes") or []:
+        if isinstance(node, Mapping) and node.get("id"):
+            out[str(node.get("id"))] = dict(node)
+    return out
+
+
+def _refs_overlap(left: Sequence[str], right: Sequence[str]) -> bool:
+    left_tokens = _token_set(left)
+    right_tokens = _token_set(right)
+    return bool(left_tokens.intersection(right_tokens))
+
+
+def _humanize_token(value: Any) -> str:
+    return _bounded_str(str(value or "").replace("_", " "), 80)
+
+
+def _headline_for_situation(row: Mapping[str, Any]) -> str:
+    title = _bounded_str(row.get("title"), 120)
+    status = str(row.get("status") or "active")
+    phrase = SITUATION_STATUS_PHRASES.get(status, status.replace("_", " "))
+    locations = list(row.get("involved_locations") or [])
+    if locations:
+        return _bounded_str(f"{title} — {phrase} at {locations[0]}", 160)
+    return _bounded_str(f"{title} — {phrase}", 160)
+
+
+def _why_it_matters_for_situation(row: Mapping[str, Any], pressure_nodes: Mapping[str, Mapping[str, Any]]) -> str:
+    situation_type = str(row.get("type") or "")
+    base = WHY_IT_MATTERS_BY_TYPE.get(situation_type, "Conditions are worsening and consequences are spreading")
+    severity = _clamp_int(row.get("severity"), 0, 10)
+    blockers = list(row.get("blockers") or [])
+    pressure_ids = _bounded_str_list(row.get("originating_pressure_ids"), MAX_SITUATION_REFS)
+    rising = [
+        _bounded_str(
+            (pressure_nodes.get(pid) or {}).get("label")
+            or (pressure_nodes.get(pid) or {}).get("kind")
+            or pid,
+            60,
+        )
+        for pid in pressure_ids
+        if str((pressure_nodes.get(pid) or {}).get("status") or "") == "active"
+    ]
+    parts = [base]
+    if severity >= 7:
+        parts.append("severity is high")
+    elif severity >= 4:
+        parts.append("stakes are rising")
+    if rising:
+        parts.append(f"pressure from {rising[0]}")
+    if blockers:
+        parts.append(f"blocked by {_humanize_token(blockers[0])}")
+    return _bounded_str("; ".join(parts), 200)
+
+
+def _related_goals_for_situation(
+    row: Mapping[str, Any],
+    replayability_state: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    situation_id = str(row.get("situation_id") or "")
+    actor_tokens = _token_set(row.get("involved_actor_ids"))
+    location_tokens = _token_set(row.get("involved_locations"))
+    faction_tokens = _token_set(row.get("involved_factions"))
+    matched: List[Dict[str, Any]] = []
+    for raw in replayability_state.get("goals") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        if str(raw.get("status") or "") in {"completed", "failed", "abandoned"}:
+            continue
+        parents = [str(item) for item in raw.get("parent_situation_ids") or []]
+        applies = situation_id in parents
+        if not applies and _refs_overlap(raw.get("target_actor_ids") or [], actor_tokens):
+            applies = True
+        if not applies and _refs_overlap(raw.get("target_location_ids") or [], location_tokens):
+            applies = True
+        if not applies and str(raw.get("owner_type") or "") == "faction" and str(raw.get("owner_id") or "").lower() in faction_tokens:
+            applies = True
+        if applies:
+            steps = raw.get("plan_steps") if isinstance(raw.get("plan_steps"), list) else []
+            idx = _clamp_int(raw.get("current_step_index"), 0, max(0, len(steps) - 1))
+            next_step = _bounded_str((steps[idx] or {}).get("summary"), 120) if steps else ""
+            matched.append(
+                {
+                    "title": _bounded_str(raw.get("title"), 120),
+                    "status": raw.get("status"),
+                    "priority": _clamp_int(raw.get("priority"), 0, 10),
+                    "progress": _clamp_int(raw.get("progress"), 0, 100),
+                    "next_step_summary": next_step,
+                }
+            )
+    matched.sort(
+        key=lambda goal: (
+            -_clamp_int(goal.get("priority"), 0, 10),
+            str(goal.get("title") or ""),
+        )
+    )
+    return matched[:MAX_PROMOTED_GOALS]
+
+
+def _related_information_for_situation(
+    row: Mapping[str, Any],
+    replayability_state: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    actor_tokens = _token_set(row.get("involved_actor_ids"))
+    location_tokens = _token_set(row.get("involved_locations"))
+    faction_tokens = _token_set(row.get("involved_factions"))
+    rows = [
+        raw
+        for raw in replayability_state.get("information_items") or []
+        if isinstance(raw, Mapping) and str(raw.get("status") or "active") not in {"archived", "expired"}
+    ]
+    matched: List[Dict[str, Any]] = []
+    for raw in rows:
+        subject_ids = {
+            str(ref.get("subject_id") or "").lower()
+            for ref in raw.get("subject_refs") or []
+            if isinstance(ref, Mapping)
+        }
+        applies = bool(subject_ids.intersection(actor_tokens | location_tokens | faction_tokens))
+        anchor = raw.get("anchor") if isinstance(raw.get("anchor"), Mapping) else {}
+        anchor_ids = _token_set(
+            list(anchor.get("location_ids") or [])
+            + list(anchor.get("actor_ids") or [])
+            + list(anchor.get("faction_ids") or [])
+        )
+        if not applies:
+            applies = bool(anchor_ids.intersection(actor_tokens | location_tokens | faction_tokens))
+        if applies:
+            matched.append(
+                {
+                    "information_type": raw.get("information_type"),
+                    "summary": _bounded_str(raw.get("summary"), 160),
+                    "reliability_band": raw.get("reliability_band"),
+                }
+            )
+    matched.sort(key=lambda item: (_bounded_str(item.get("summary"), 160), str(item.get("information_type") or "")))
+    return matched[:MAX_PROMOTED_INFORMATION]
+
+
+def _related_world_events_for_situation(
+    row: Mapping[str, Any],
+    replayability_state: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    wanted = _token_set(row.get("originating_world_event_ids"))
+    location_tokens = _token_set(row.get("involved_locations"))
+    faction_tokens = _token_set(row.get("involved_factions"))
+    matched: List[Dict[str, Any]] = []
+    for store_key in ("world_events", "engine_world_events"):
+        for raw in replayability_state.get(store_key) or []:
+            if not isinstance(raw, Mapping):
+                continue
+            event_id = str(raw.get("world_event_id") or raw.get("event_id") or "")
+            applies = event_id and event_id.lower() in wanted
+            if not applies:
+                applies = _refs_overlap(raw.get("location_ids") or raw.get("affected_locations") or [], location_tokens)
+            if not applies:
+                applies = _refs_overlap(raw.get("faction_ids") or raw.get("affected_factions") or [], faction_tokens)
+            if not applies:
+                continue
+            title = _bounded_str(
+                raw.get("title")
+                or raw.get("pressure_event_kind")
+                or raw.get("world_event_type")
+                or raw.get("event_type")
+                or "world event",
+                120,
+            )
+            matched.append(
+                {
+                    "title": title,
+                    "status": raw.get("status") or "active",
+                    "severity": _clamp_int(raw.get("severity") or raw.get("magnitude"), 0, 10, default=0),
+                }
+            )
+    matched.sort(
+        key=lambda event: (
+            -_clamp_int(event.get("severity"), 0, 10),
+            str(event.get("title") or ""),
+        )
+    )
+    deduped: List[Dict[str, Any]] = []
+    seen_titles = set()
+    for event in matched:
+        title = str(event.get("title") or "")
+        if title in seen_titles:
+            continue
+        seen_titles.add(title)
+        deduped.append(event)
+    return deduped[:MAX_PROMOTED_WORLD_EVENTS]
+
+
+def _relationship_shifts_for_situation(
+    row: Mapping[str, Any],
     replayability_state: Mapping[str, Any],
     *,
+    rolling_state: Optional[Mapping[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    actor_tokens = _token_set(row.get("involved_actor_ids"))
+    location_tokens = _token_set(row.get("involved_locations"))
+    relevant_names: set = set()
+    if isinstance(rolling_state, Mapping):
+        for npc in rolling_state.get("npcs") or []:
+            if not isinstance(npc, Mapping):
+                continue
+            npc_id = str(npc.get("npc_id") or "").lower()
+            npc_name = str(npc.get("name") or "").strip()
+            npc_location = str(npc.get("location_id") or "").lower()
+            if not npc_name:
+                continue
+            if actor_tokens and npc_id in actor_tokens:
+                relevant_names.add(npc_name)
+            elif location_tokens and npc_location in location_tokens:
+                relevant_names.add(npc_name)
+    matched: List[Dict[str, Any]] = []
+    for raw in replayability_state.get("relationship_effect_receipts") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        if str(raw.get("receipt_type") or "") != "relationship_threshold_crossed":
+            continue
+        npc_name = str(raw.get("npc_name") or "").strip()
+        if not npc_name or npc_name not in relevant_names:
+            continue
+        matched.append(
+            {
+                "npc_name": _bounded_str(npc_name, 80),
+                "before_state": raw.get("before_state"),
+                "after_state": raw.get("after_state"),
+            }
+        )
+    matched.sort(key=lambda shift: (str(shift.get("npc_name") or ""), str(shift.get("after_state") or "")))
+    return matched[:MAX_PROMOTED_RELATIONSHIP_SHIFTS]
+
+
+def _player_opportunities_for_situation(
+    row: Mapping[str, Any],
+    related_goals: Sequence[Mapping[str, Any]],
+) -> List[str]:
+    opportunities: List[str] = []
+    for objective in row.get("objectives") or []:
+        text = _humanize_token(objective)
+        if text and text not in opportunities:
+            opportunities.append(text)
+        if len(opportunities) >= MAX_PROMOTED_OPPORTUNITIES:
+            return opportunities[:MAX_PROMOTED_OPPORTUNITIES]
+    for goal in related_goals:
+        next_step = _bounded_str(goal.get("next_step_summary"), 120)
+        if next_step and next_step not in opportunities:
+            opportunities.append(next_step)
+        if len(opportunities) >= MAX_PROMOTED_OPPORTUNITIES:
+            break
+    for blocker in row.get("blockers") or []:
+        text = f"address {_humanize_token(blocker)}"
+        if text not in opportunities:
+            opportunities.append(text)
+        if len(opportunities) >= MAX_PROMOTED_OPPORTUNITIES:
+            break
+    return opportunities[:MAX_PROMOTED_OPPORTUNITIES]
+
+
+def _pressure_labels_for_situation(
+    row: Mapping[str, Any],
+    pressure_nodes: Mapping[str, Mapping[str, Any]],
+) -> List[str]:
+    labels: List[str] = []
+    for pressure_id in _bounded_str_list(row.get("originating_pressure_ids"), MAX_SITUATION_REFS):
+        node = pressure_nodes.get(pressure_id) or {}
+        label = _bounded_str(node.get("label") or node.get("kind") or pressure_id, 80)
+        if label and label not in labels:
+            labels.append(label)
+        if len(labels) >= MAX_PROMOTED_PRESSURE_LABELS:
+            break
+    return labels
+
+
+def _affected_actors_for_situation(
+    row: Mapping[str, Any],
+    related_goals: Sequence[Mapping[str, Any]],
+    relationship_shifts: Sequence[Mapping[str, Any]],
+) -> List[str]:
+    actors = _bounded_str_list(row.get("involved_actor_ids"), MAX_PROMOTED_ACTORS)
+    for shift in relationship_shifts:
+        npc_name = _bounded_str(shift.get("npc_name"), 80)
+        if npc_name and npc_name not in actors:
+            actors.append(npc_name)
+        if len(actors) >= MAX_PROMOTED_ACTORS:
+            break
+    return actors[:MAX_PROMOTED_ACTORS]
+
+
+def project_promoted_situation(
+    row: Mapping[str, Any],
+    replayability_state: Mapping[str, Any],
+    *,
+    rolling_state: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Aggregate canonical engine state into one player-facing situation projection."""
+    pressure_nodes = _pressure_nodes_by_id(replayability_state)
+    related_goals = _related_goals_for_situation(row, replayability_state)
+    related_information = _related_information_for_situation(row, replayability_state)
+    related_world_events = _related_world_events_for_situation(row, replayability_state)
+    relationship_shifts = _relationship_shifts_for_situation(
+        row,
+        replayability_state,
+        rolling_state=rolling_state,
+    )
+    return {
+        "situation_id": row.get("situation_id"),
+        "type": row.get("type"),
+        "title": row.get("title"),
+        "status": row.get("status"),
+        "priority": row.get("priority"),
+        "severity": row.get("severity"),
+        "progress": row.get("progress"),
+        "headline": _headline_for_situation(row),
+        "why_it_matters": _why_it_matters_for_situation(row, pressure_nodes),
+        "affected_actors": _affected_actors_for_situation(row, related_goals, relationship_shifts),
+        "affected_locations": list(row.get("involved_locations") or [])[:MAX_SITUATION_REFS],
+        "affected_factions": list(row.get("involved_factions") or [])[:MAX_SITUATION_REFS],
+        "objectives": list(row.get("objectives") or [])[:MAX_SITUATION_OBJECTIVES],
+        "blockers": list(row.get("blockers") or [])[:MAX_SITUATION_BLOCKERS],
+        "player_opportunities": _player_opportunities_for_situation(row, related_goals),
+        "related_goals": related_goals,
+        "related_information": related_information,
+        "pressure_labels": _pressure_labels_for_situation(row, pressure_nodes),
+        "related_world_events": related_world_events,
+        "relationship_shifts": relationship_shifts,
+    }
+
+
+def project_promoted_situations_for_rolling(
+    replayability_state: Mapping[str, Any],
+    *,
+    rolling_state: Optional[Mapping[str, Any]] = None,
     limit: int = MAX_PROJECTED_SITUATIONS,
 ) -> List[Dict[str, Any]]:
-    """Bounded prompt-safe projection for rolling_state.active_situations."""
+    """Stage 6C-3 — player-facing situation collision layer (projection only)."""
     if not isinstance(replayability_state, Mapping):
         return []
+    seed = str(replayability_state.get("run_seed") or "situation-engine")
     situations = [
-        _normalise_situation(row, run_seed=str(replayability_state.get("run_seed") or "situation-engine"))
+        _normalise_situation(row, run_seed=seed)
         for row in replayability_state.get("situations") or []
         if isinstance(row, Mapping) and row.get("status") not in TERMINAL_STATUSES
     ]
@@ -1048,25 +1430,35 @@ def project_active_situations_for_rolling(
         ),
     )[: max(0, min(MAX_PROJECTED_SITUATIONS, int(limit or 0)))]
     return [
-        {
-            "situation_id": row.get("situation_id"),
-            "type": row.get("type"),
-            "title": row.get("title"),
-            "status": row.get("status"),
-            "priority": row.get("priority"),
-            "severity": row.get("severity"),
-            "progress": row.get("progress"),
-            "affected_locations": list(row.get("involved_locations") or [])[:MAX_SITUATION_REFS],
-            "affected_factions": list(row.get("involved_factions") or [])[:MAX_SITUATION_REFS],
-            "objectives": list(row.get("objectives") or [])[:MAX_SITUATION_OBJECTIVES],
-            "blockers": list(row.get("blockers") or [])[:MAX_SITUATION_BLOCKERS],
-        }
+        project_promoted_situation(row, replayability_state, rolling_state=rolling_state)
         for row in ordered
     ]
 
 
-def project_situations_for_prompt(replayability_state: Mapping[str, Any]) -> List[Dict[str, Any]]:
-    return project_active_situations_for_rolling(replayability_state, limit=MAX_PROMPT_SITUATIONS)
+def project_active_situations_for_rolling(
+    replayability_state: Mapping[str, Any],
+    *,
+    rolling_state: Optional[Mapping[str, Any]] = None,
+    limit: int = MAX_PROJECTED_SITUATIONS,
+) -> List[Dict[str, Any]]:
+    """Bounded prompt-safe projection for rolling_state.active_situations."""
+    return project_promoted_situations_for_rolling(
+        replayability_state,
+        rolling_state=rolling_state,
+        limit=limit,
+    )
+
+
+def project_situations_for_prompt(
+    replayability_state: Mapping[str, Any],
+    *,
+    rolling_state: Optional[Mapping[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    return project_promoted_situations_for_rolling(
+        replayability_state,
+        rolling_state=rolling_state,
+        limit=MAX_PROMPT_SITUATIONS,
+    )
 
 
 def prompt_safe_rolling_state(rolling_state: Mapping[str, Any]) -> Dict[str, Any]:
@@ -1084,19 +1476,7 @@ def prompt_safe_rolling_state(rolling_state: Mapping[str, Any]) -> Dict[str, Any
         cleaned.append(
             {
                 key: copy.deepcopy(row.get(key))
-                for key in (
-                    "situation_id",
-                    "type",
-                    "title",
-                    "status",
-                    "priority",
-                    "severity",
-                    "progress",
-                    "affected_locations",
-                    "affected_factions",
-                    "objectives",
-                    "blockers",
-                )
+                for key in PROMOTED_SITUATION_FIELDS
                 if key in row
             }
         )
