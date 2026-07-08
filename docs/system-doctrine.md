@@ -132,6 +132,7 @@ May evolve only through an explicit recorded decision in `decision-log.md`.
 | AC7 | Admin settings stored in `admin_settings` collection, merged over env defaults. |
 | AC8 | `relationship_vectors` in `rolling_state` are engine-owned (protected key); LLM-injected vectors are ignored. |
 | AC9 | HUD exposes DNG/MOM/PRS only — no Objective/quest steering (`hud.shape_hud`). |
+| AC12 | The `Simulation-Kernel-Research` gitlink has been removed from the repository (2026-07-08, ADR-026 amendment); it carried no runtime dependency while present, confirmed both before and after removal by the guard test. Any future research-only location remains non-runtime documentation by default — not current app configuration, not automatically canonical for existing behaviour. Production runtime code must not import, open, or otherwise depend on such locations; adopting a research concept requires a dedicated migration ADR. Guarded by `backend/tests/test_research_isolation.py`. See ADR-026. |
 
 ---
 

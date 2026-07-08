@@ -464,3 +464,37 @@ Promote to ADR when implementation and tests exist.
 | **Files (impl task)** | `backend/server.py`, `backend/replayability.py`, `backend/simulation_clock.py` (split flag gating), possibly `backend/time_commands.py`; `MAX_TIME_COMMAND_DAYS` in the authoritative constants location. Tests per brief §12 (bounds rejection without clamping, retry-identical event recreation, CAS rollback persists no time, clock-advance-with-lifecycle-OFF, injection-ignored, flag-OFF rejection, Phase 2A rejects non-`WAIT_ONE_DAY`). |
 | **Non-goals** | No code in this ADR; no `rest`/`travel`/N-day enablement in Phase 2A; no fractional clock; no duration mappings; no births/inheritance/succession/burn-in; no default activation; no frontend UI yet. |
 | **Full ADR** | `docs/adr-025-action-duration-authority.md` |
+
+---
+
+## ADR-026: Research/runtime isolation boundary — `Simulation-Kernel-Research` is non-authoritative
+
+| Field | Detail |
+|-------|--------|
+| **Date** | 2026-07-08 |
+| **Status** | Accepted — documentation + guard test only; no runtime behaviour changes |
+| **Context** | The `Simulation-Kernel-Research` git submodule (architecture audits, a draft "simulation kernel" constitution, and a proposed Source-of-Truth v2) was added on `research/simulation-kernel-constitution-v1` as future-facing material. Nothing yet enforces that it stays inert, and future research growth could accidentally get wired into runtime without a deliberate decision. |
+| **Decision** | Everything under the identified research locations is non-runtime documentation: not current app configuration, not automatically canonical, and never to be imported, opened, or read by production runtime code. Adopting any research concept requires a separate, explicit migration ADR — this entry does not approve one. |
+| **Alternatives considered** | Do nothing (reject — no durable trip-wire against future accidental coupling as research grows); delete/relocate the research (reject — out of scope, research remains legitimate future-facing material and must not be rewritten); block the submodule from being committed at all (reject — research work is wanted, only runtime coupling is the concern); broad recursive-file-access lint on any `open()` call (reject — high false-positive risk, harder to keep green than a targeted check). |
+| **Consequences** | Any future code change that imports/reads the research tree, or that adds a recursive filesystem walk to backend runtime code, fails the deterministic CI job via the new guard test until deliberately reviewed. |
+| **Risks** | Guard only covers backend + frontend runtime source and the build/deploy config files it currently knows about; a wholly new build system or deploy path would need the guard's file list extended deliberately. |
+| **Files affected** | `backend/tests/test_research_isolation.py` (new), `docs/adr-026-research-runtime-isolation.md` (new), `docs/system-doctrine.md` (AC12 added) |
+| **Tests required** | `test_research_isolation.py` ✅ (new, 4 cases) |
+| **Evidence** | Audit 2026-07-08: `git diff --ignore-all-space` between `origin/emergent` and the research branch shows only the submodule pointer + a two-line `.gitignore` change across all three research commits (`bb3075c`, `d3049de`, `9349032`); zero backend/frontend/build-config matches for the research path or recursive file-walk primitives; new guard test passes (`--assert=plain`; see sandbox caveat in the accompanying report). |
+| **Full ADR** | `docs/adr-026-research-runtime-isolation.md` |
+
+---
+
+## ADR-026 Amendment (2026-07-08): research gitlink removed
+
+| Field | Detail |
+|-------|--------|
+| **Date** | 2026-07-08 |
+| **Amends** | ADR-026 (above) |
+| **Previous position** | Guard-test-only containment; `Simulation-Kernel-Research` gitlink retained in the tree; deletion/relocation explicitly rejected as out of scope. |
+| **Changed decision** | Remove the `Simulation-Kernel-Research` gitlink reference from the active repository context rather than retain it. |
+| **Reason** | Prevent the separate simulation-kernel research effort from influencing Dice Reactions' current app/runtime/docs direction, including the appearance of an actively wired submodule. The gitlink was also confirmed non-functional: no `.gitmodules` ever existed on any branch, no local clone was ever initialised, and the working-tree copy was already absent — so removal preserves exactly as much research content as retention did (none was fetchable from this repository either way). |
+| **What changed** | `git rm --cached Simulation-Kernel-Research` (dangling gitlink, mode `160000`, commit `eaa4bbbdc829398d07d73559d7edef748c6558e7`); `docs/system-doctrine.md` AC12 reworded; this log entry and `docs/adr-026-research-runtime-isolation.md` §8 added. |
+| **Constraints honoured** | Runtime behaviour unchanged (guard test re-run after amendment: 4 passed); no broad refactor (only the gitlink + 3 doctrine/log docs touched; pre-existing unrelated whitespace-only diffs in the working tree left alone); no gameplay/API/persistence/frontend change; other doctrine invariants (H1–H7, AC1–AC11) untouched. |
+| **Tests required** | `test_research_isolation.py` ✅ re-verified post-amendment, 4 passed. |
+| **Full ADR** | `docs/adr-026-research-runtime-isolation.md` §8 |
