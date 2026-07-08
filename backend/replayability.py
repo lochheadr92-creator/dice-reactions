@@ -49,6 +49,7 @@ REPLAYABILITY_VERSION = 1
 TRANSITION_RECEIPTS_MAX = 32
 RELATIONSHIP_EFFECT_RECEIPTS_MAX = 32
 PRESSURE_SIGNAL_CONSUMED_IDS_MAX = 64
+PRESSURE_APPLIED_WORLD_EVENT_IDS_MAX = 64
 MAX_ENGINE_WORLD_EVENTS = 24
 # Documented hard budget for full replayability_state at simultaneous caps.
 # Stage 5F adds bounded information/reputation state. The 500-turn harness peaks
@@ -262,6 +263,7 @@ def empty_replayability_state() -> Dict[str, Any]:
         "relationship_effect_receipts": [],
         "lc_relationship_applied_receipt_id": None,
         "pressure_signal_consumed_ids": [],
+        "pressure_applied_world_event_ids": [],
     }
 
 
@@ -541,6 +543,7 @@ def init_new_story(
         "relationship_effect_receipts": [],
         "lc_relationship_applied_receipt_id": None,
         "pressure_signal_consumed_ids": [],
+        "pressure_applied_world_event_ids": [],
     }
 
     effective_scenario_id = str(scenario_id or (scenario or {}).get("id") or "")
@@ -666,6 +669,10 @@ def prepare_action_turn(
     run_seed = str(state.get("run_seed") or "")
     identity = state.get("identity") or {}
     pg = state.setdefault("pressure_graph", pressure_graph.copy_pressure_graph(None))
+    pg_tick_before = int(pg.get("tick") or 0)
+    pg_nodes_before = copy.deepcopy(pg.get("nodes") or [])
+    pg_foreground_before = pg.get("foreground_node_id")
+    pg_evolution_before = copy.deepcopy(pg.get("evolution_receipts") or [])
     echo_state = state.setdefault("consequence_echoes", echoes.init_consequence_echoes())
     agendas_state = state.setdefault("npc_agendas", agendas.init_npc_agendas())
     arc_state = state.setdefault("arc_diversity", arc.init_arc_diversity())
@@ -1116,12 +1123,31 @@ def prepare_action_turn(
                     turn_number=turn_number,
                 )
 
+        applied_world_event_ids = {
+            str(value or "")
+            for value in (state.get("pressure_applied_world_event_ids") or [])
+            if str(value or "")
+        }
+        fresh_world_event_events = [
+            event
+            for event in added_world_event_events
+            if str(event.get("event_id") or "") not in applied_world_event_ids
+            and str(event.get("world_event_id") or "") not in applied_world_event_ids
+        ]
         pressure_from_world_events = pressure_graph.apply_world_event_engine_events(
             pg,
-            added_world_event_events,
+            fresh_world_event_events,
             turn_number,
             run_seed=run_seed,
         )
+        if pressure_from_world_events.get("applied_event_ids"):
+            applied_keys = list(pressure_from_world_events.get("applied_event_ids") or [])
+            applied_keys.extend(
+                str(event.get("world_event_id") or "")
+                for event in fresh_world_event_events
+                if str(event.get("world_event_id") or "")
+            )
+            _append_pressure_applied_world_event_ids(state, applied_keys)
         pressure_world_event_receipts = pressure_from_world_events.get("receipts") or []
         if pressure_world_event_receipts:
             diagnostics["world_event_pressure_receipts"] = len(pressure_world_event_receipts)
@@ -1219,7 +1245,7 @@ def prepare_action_turn(
         working_rolling["active_reputation"] = active_reputation
     else:
         working_rolling.pop("active_reputation", None)
-    _apply_information_pressure_bridge(state, turn_number, diagnostics)
+    _apply_information_pressure_bridge(state, turn_number, diagnostics, allow_same_turn_signals=False)
 
     goal_result = goal_engine.evolve_goals(
         state,
@@ -1373,6 +1399,22 @@ def prepare_action_turn(
         diagnostics.update(sim_lifecycle_diag)
     except Exception as exc:
         diagnostics["simulation_lifecycle_error"] = str(exc)[:200]
+
+    pressure_graph_state = state.get("pressure_graph")
+    if isinstance(pressure_graph_state, dict):
+        if int(diagnostics.get("pressure_signal_applied") or 0) == 0 and int(
+            diagnostics.get("pressure_signal_deduped") or 0
+        ) > 0:
+            pressure_graph_state["nodes"] = pg_nodes_before
+            pressure_graph_state["evolution_receipts"] = pg_evolution_before
+            pressure_graph_state["foreground_node_id"] = pg_foreground_before
+            pressure_graph_state["tick"] = pg_tick_before
+        elif (
+            pressure_graph_state.get("nodes") == pg_nodes_before
+            and pressure_graph_state.get("foreground_node_id") == pg_foreground_before
+            and (pressure_graph_state.get("evolution_receipts") or []) == pg_evolution_before
+        ):
+            pressure_graph_state["tick"] = pg_tick_before
 
     return state, directives, diagnostics, threshold_fired, working_rolling
 
@@ -1548,17 +1590,56 @@ def _capture_relationship_threshold_receipts(
     return created
 
 
+def _append_pressure_applied_world_event_ids(
+    state: Dict[str, Any],
+    event_ids: List[str],
+) -> None:
+    applied = state.setdefault("pressure_applied_world_event_ids", [])
+    seen = {
+        str(value or "")
+        for value in applied
+        if str(value or "")
+    }
+    for event_id in event_ids:
+        text = str(event_id or "")
+        if not text or text in seen:
+            continue
+        applied.append(text)
+        seen.add(text)
+    if len(applied) > PRESSURE_APPLIED_WORLD_EVENT_IDS_MAX:
+        state["pressure_applied_world_event_ids"] = applied[-PRESSURE_APPLIED_WORLD_EVENT_IDS_MAX:]
+
+
 def _apply_information_pressure_bridge(
     state: Dict[str, Any],
     turn_number: int,
     diagnostics: Dict[str, Any],
+    *,
+    allow_same_turn_signals: bool = False,
 ) -> None:
-    signal_candidates = information_engine.pressure_signal_candidates(state)
-    if not signal_candidates:
+    consumed_signal_ids = {
+        str(value or "")
+        for value in (state.get("pressure_signal_consumed_ids") or [])
+        if str(value or "")
+    }
+    signal_candidates = information_engine.pressure_signal_candidates(
+        state,
+        eligible_before_turn=turn_number,
+        allow_same_turn_signals=allow_same_turn_signals,
+    )
+    pending_candidates = [
+        candidate
+        for candidate in signal_candidates
+        if str(candidate.get("source_signal_id") or "") not in consumed_signal_ids
+    ]
+    deduped_count = len(signal_candidates) - len(pending_candidates)
+    if deduped_count:
+        diagnostics["pressure_signal_deduped"] = deduped_count
+    if not pending_candidates:
         return
     pressure_result = pressure_graph.apply_information_pressure_signals(
         state.setdefault("pressure_graph", pressure_graph.copy_pressure_graph(None)),
-        signal_candidates,
+        pending_candidates,
         turn_number,
         run_seed=str(state.get("run_seed") or ""),
         consumed_signal_ids=state.get("pressure_signal_consumed_ids") or [],
@@ -1787,7 +1868,7 @@ def finalize_action_turn(
                 receipt_type=str(receipt.get("receipt_type") or "information_evolved"),
                 turn_number=turn_number,
             )
-    _apply_information_pressure_bridge(state, turn_number, {})
+    _apply_information_pressure_bridge(state, turn_number, {}, allow_same_turn_signals=True)
     return state
 
 

@@ -80,10 +80,15 @@ def normalize_provenance(
         "source_turn": int(source.get("source_turn") or turn_number),
         "engine_confirmed": bool(engine_confirmed),
     }
-    for field in ("actor_id", "target_id", "npc_id", "agenda_id"):
+    for field in ("actor_id", "target_id", "npc_id", "agenda_id", "npc_name"):
         val = source.get(field)
         if val:
             out[field] = str(val)
+    if kind == "relationship_threshold_crossed":
+        for field in ("before_state", "after_state"):
+            val = str(source.get(field) or "").strip()
+            if val:
+                out[field] = val[:80]
     echo_kind = source.get("echo_kind")
     if echo_kind:
         out["echo_kind"] = str(echo_kind)

@@ -1464,10 +1464,15 @@ def _reputation_pressure_candidate(row: Mapping[str, Any]) -> Optional[Dict[str,
     )
     scope_type = _bounded_str(observer_scope.get("scope_type"), 80)
     scope_id = _bounded_str(observer_scope.get("scope_id"), 160)
-    scope = "personal" if scope_type == "actor" else "faction" if scope_type == "faction" else "local"
     subject_type = _bounded_str(row.get("subject_type"), 80).lower()
     subject_id = _bounded_str(row.get("subject_id"), 160)
     actor_ids = [subject_id] if subject_type in {"actor", "npc", "player"} and subject_id else []
+    if actor_ids:
+        scope = "personal"
+    elif scope_type == "faction":
+        scope = "faction"
+    else:
+        scope = "local"
     faction_ids = [subject_id] if subject_type == "faction" and subject_id else []
     location_ids = [scope_id] if scope_type == "settlement" and scope_id else []
     if scope == "faction" and scope_id and scope_id not in faction_ids:
@@ -1548,26 +1553,62 @@ def _relationship_pressure_candidate(row: Mapping[str, Any]) -> Optional[Dict[st
     }
 
 
+def _pressure_signal_source_turn(row: Mapping[str, Any]) -> int:
+    if str(row.get("receipt_type") or "") == "relationship_threshold_crossed":
+        return _coerce_int(row.get("turn"), 0)
+    return _stamp_turn(row, "updated_at", _stamp_turn(row, "created_at", 0))
+
+
+def _pressure_signal_eligible(
+    row: Mapping[str, Any],
+    *,
+    eligible_before_turn: Optional[int] = None,
+    allow_same_turn_signals: bool = False,
+) -> bool:
+    if eligible_before_turn is None:
+        return True
+    source_turn = _pressure_signal_source_turn(row)
+    if str(row.get("receipt_type") or "") == "relationship_threshold_crossed":
+        return source_turn <= int(eligible_before_turn)
+    if allow_same_turn_signals:
+        return source_turn <= int(eligible_before_turn)
+    return source_turn < int(eligible_before_turn)
+
+
 def pressure_signal_candidates(
     replayability_state: Mapping[str, Any],
     *,
     limit: int = PRESSURE_SIGNAL_MAX,
+    eligible_before_turn: Optional[int] = None,
+    allow_same_turn_signals: bool = False,
 ) -> List[Dict[str, Any]]:
     if not isinstance(replayability_state, Mapping):
         return []
     candidates: List[Dict[str, Any]] = []
     for item in replayability_state.get("information_items") or []:
-        if isinstance(item, Mapping):
+        if isinstance(item, Mapping) and _pressure_signal_eligible(
+            item,
+            eligible_before_turn=eligible_before_turn,
+            allow_same_turn_signals=allow_same_turn_signals,
+        ):
             candidate = _information_pressure_candidate(item)
             if candidate:
                 candidates.append(candidate)
     for signal in replayability_state.get("reputation_signals") or []:
-        if isinstance(signal, Mapping):
+        if isinstance(signal, Mapping) and _pressure_signal_eligible(
+            signal,
+            eligible_before_turn=eligible_before_turn,
+            allow_same_turn_signals=allow_same_turn_signals,
+        ):
             candidate = _reputation_pressure_candidate(signal)
             if candidate:
                 candidates.append(candidate)
     for receipt in replayability_state.get("relationship_effect_receipts") or []:
-        if isinstance(receipt, Mapping):
+        if isinstance(receipt, Mapping) and _pressure_signal_eligible(
+            receipt,
+            eligible_before_turn=eligible_before_turn,
+            allow_same_turn_signals=allow_same_turn_signals,
+        ):
             candidate = _relationship_pressure_candidate(receipt)
             if candidate:
                 candidates.append(candidate)

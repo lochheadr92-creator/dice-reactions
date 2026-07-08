@@ -803,6 +803,7 @@ def evolve_pressure_graph(
         if isinstance(n, dict)
         and n.get("status") == "active"
         and n.get("last_evolved_turn") != turn_number
+        and str(n.get("origin_type") or "") != "information_signal"
     ]
     candidates.sort(
         key=lambda n: (
@@ -1239,6 +1240,11 @@ def apply_information_pressure_signals(
         }
 
     consumed = {str(value or "") for value in (consumed_signal_ids or []) if str(value or "")}
+    existing_origin_ids = {
+        str((row.get("origin") or {}).get("id") or row.get("origin_id") or "")
+        for row in graph.get("nodes") or []
+        if isinstance(row, dict) and str(row.get("origin_type") or "") == "information_signal"
+    }
     local_receipts: List[Dict[str, Any]] = []
     applied_signal_ids: List[str] = []
     skipped: List[Dict[str, Any]] = []
@@ -1250,12 +1256,32 @@ def apply_information_pressure_signals(
         "pressure_signal_capped": 0,
     }
 
-    for signal in signals or []:
-        if not isinstance(signal, Mapping):
-            continue
+    ordered_signals = sorted(
+        [signal for signal in (signals or []) if isinstance(signal, Mapping)],
+        key=lambda row: (
+            -_clamp_magnitude(row.get("priority", 0)),
+            -_clamp_magnitude(row.get("magnitude", 0)),
+            str(row.get("source_signal_id") or ""),
+        ),
+    )
+
+    for signal in ordered_signals:
         diagnostics["pressure_signal_candidates"] += 1
         signal_id = str(signal.get("source_signal_id") or "")
         if not signal_id:
+            continue
+        origin_id = str(signal.get("origin_id") or "").strip()
+        if origin_id and origin_id in existing_origin_ids:
+            diagnostics["pressure_signal_deduped"] += 1
+            skipped.append(
+                {
+                    "source_signal_id": signal_id,
+                    "receipt_type": "pressure_signal_deduped",
+                    "source_kind": str(signal.get("source_kind") or ""),
+                    "pressure_kind": str(signal.get("pressure_kind") or ""),
+                    "reason": f"pressure node already exists for origin {origin_id}",
+                }
+            )
             continue
         if signal_id in consumed or signal_id in applied_signal_ids:
             diagnostics["pressure_signal_deduped"] += 1
@@ -1355,6 +1381,8 @@ def apply_information_pressure_signals(
         applied_signal_ids.append(signal_id)
         applied_this_turn += 1
         diagnostics["pressure_signal_applied"] += 1
+        if origin_id:
+            existing_origin_ids.add(origin_id)
 
     if applied_signal_ids:
         select_foreground(graph, turn_number=turn_number)
