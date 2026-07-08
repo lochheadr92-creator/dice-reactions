@@ -12,6 +12,8 @@ import copy
 import hashlib
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+import world_state_consumers
+
 SITUATION_ENGINE_VERSION = 1
 
 MAX_SITUATIONS = 12
@@ -53,6 +55,17 @@ WHY_IT_MATTERS_BY_TYPE = {
     "missing_child": "A child is unaccounted for and every hour matters",
 }
 
+WORLD_STATE_SIGNAL_TO_SITUATION_TYPE = {
+    "resource_shortage": "food_shortage",
+    "route_blocked": "bandit_activity",
+    "infrastructure_damaged": "flood_recovery",
+    "settlement_unstable": "political_unrest",
+    "faction_pressure": "political_unrest",
+    "settlement_improving": "trade_opportunity",
+    "market_strained": "food_shortage",
+    "actor_missing": "missing_child",
+}
+
 PROMOTED_SITUATION_FIELDS = (
     "situation_id",
     "type",
@@ -74,6 +87,8 @@ PROMOTED_SITUATION_FIELDS = (
     "pressure_labels",
     "related_world_events",
     "relationship_shifts",
+    "world_state_signals",
+    "world_state_opportunities",
 )
 
 CREATION_PRESSURE_THRESHOLD = 50
@@ -443,6 +458,59 @@ def _candidate_from_pressure(node: Mapping[str, Any], *, turn_number: int, run_s
             "progress": 0,
             "expiry": turn_number + DEFAULT_EXPIRY_TURNS,
             "source_event_ids": [pressure_id],
+            "dedupe_key": dedupe_key,
+            "last_reinforced_turn": turn_number,
+            "inactive_turns": 0,
+        },
+        run_seed=run_seed,
+    )
+
+
+def _candidate_from_world_state_signal(
+    signal: Mapping[str, Any],
+    *,
+    turn_number: int,
+    run_seed: str,
+) -> Optional[Dict[str, Any]]:
+    signal_kind = str(signal.get("signal_kind") or "")
+    situation_type = WORLD_STATE_SIGNAL_TO_SITUATION_TYPE.get(signal_kind)
+    signal_id = _bounded_str(signal.get("signal_id"), 160)
+    if not situation_type or not signal_id:
+        return None
+    location_id = _bounded_str(signal.get("location_id"), 120)
+    faction_id = _bounded_str(signal.get("faction_id"), 120)
+    actor_ids: List[str] = []
+    locations = [location_id] if location_id else []
+    factions = [faction_id] if faction_id else []
+    dedupe_key = _scope_key(
+        situation_type=situation_type,
+        actor_ids=actor_ids,
+        locations=locations,
+        factions=factions,
+        fallback=signal_id,
+    )
+    severity = max(3, min(10, _clamp_int(signal.get("severity"), 0, 10, default=4)))
+    return _normalise_situation(
+        {
+            "situation_id": _situation_id(run_seed, dedupe_key),
+            "type": situation_type,
+            "title": _default_title(situation_type),
+            "status": "active" if severity >= 4 else "forming",
+            "priority": severity,
+            "severity": severity,
+            "created_turn": turn_number,
+            "updated_turn": turn_number,
+            "originating_pressure_ids": [],
+            "originating_world_event_ids": [],
+            "involved_actor_ids": actor_ids,
+            "involved_locations": locations,
+            "involved_factions": factions,
+            "objectives": SITUATION_OBJECTIVES.get(situation_type, ()),
+            "blockers": SITUATION_BLOCKERS.get(situation_type, ()),
+            "evidence_refs": [f"world_state:{signal_id}"],
+            "progress": 0,
+            "expiry": turn_number + DEFAULT_EXPIRY_TURNS,
+            "source_event_ids": [signal_id],
             "dedupe_key": dedupe_key,
             "last_reinforced_turn": turn_number,
             "inactive_turns": 0,
@@ -936,6 +1004,14 @@ def evolve_situations(
         if candidate:
             candidates.append(candidate)
 
+    if isinstance(rolling_state, Mapping):
+        for signal in world_state_consumers.world_state_signals_for_context(rolling_state):
+            if len(candidates) >= MAX_SITUATION_INPUTS_PER_TICK:
+                break
+            candidate = _candidate_from_world_state_signal(signal, turn_number=turn_number, run_seed=seed)
+            if candidate:
+                candidates.append(candidate)
+
     seen_candidate_keys = set()
     for candidate in candidates:
         diagnostics["situation_candidates_evaluated"] += 1
@@ -1310,11 +1386,44 @@ def _relationship_shifts_for_situation(
     return matched[:MAX_PROMOTED_RELATIONSHIP_SHIFTS]
 
 
+def _world_state_signals_for_situation(
+    row: Mapping[str, Any],
+    rolling_state: Optional[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not isinstance(rolling_state, Mapping):
+        return []
+    locations = list(row.get("involved_locations") or [])
+    factions = list(row.get("involved_factions") or [])
+    if not locations and not factions:
+        locations = [_bounded_str(rolling_state.get("scene") or rolling_state.get("location"), 120)]
+    matched = world_state_consumers.world_state_signals_for_context(
+        rolling_state,
+        location_ids=locations,
+        faction_ids=factions,
+    )
+    return [
+        {
+            "signal_kind": signal.get("signal_kind"),
+            "signal_id": signal.get("signal_id"),
+            "severity": signal.get("severity"),
+            "status": signal.get("status"),
+        }
+        for signal in matched
+    ]
+
+
 def _player_opportunities_for_situation(
     row: Mapping[str, Any],
     related_goals: Sequence[Mapping[str, Any]],
+    *,
+    world_state_signals: Sequence[Mapping[str, Any]] = (),
 ) -> List[str]:
     opportunities: List[str] = []
+    for label in world_state_consumers.world_state_opportunity_labels(world_state_signals):
+        if label not in opportunities:
+            opportunities.append(label)
+        if len(opportunities) >= MAX_PROMOTED_OPPORTUNITIES:
+            return opportunities[:MAX_PROMOTED_OPPORTUNITIES]
     for objective in row.get("objectives") or []:
         text = _humanize_token(objective)
         if text and text not in opportunities:
@@ -1382,6 +1491,7 @@ def project_promoted_situation(
         replayability_state,
         rolling_state=rolling_state,
     )
+    world_state_signals = _world_state_signals_for_situation(row, rolling_state)
     return {
         "situation_id": row.get("situation_id"),
         "type": row.get("type"),
@@ -1397,12 +1507,18 @@ def project_promoted_situation(
         "affected_factions": list(row.get("involved_factions") or [])[:MAX_SITUATION_REFS],
         "objectives": list(row.get("objectives") or [])[:MAX_SITUATION_OBJECTIVES],
         "blockers": list(row.get("blockers") or [])[:MAX_SITUATION_BLOCKERS],
-        "player_opportunities": _player_opportunities_for_situation(row, related_goals),
+        "player_opportunities": _player_opportunities_for_situation(
+            row,
+            related_goals,
+            world_state_signals=world_state_signals,
+        ),
         "related_goals": related_goals,
         "related_information": related_information,
         "pressure_labels": _pressure_labels_for_situation(row, pressure_nodes),
         "related_world_events": related_world_events,
         "relationship_shifts": relationship_shifts,
+        "world_state_signals": world_state_signals,
+        "world_state_opportunities": world_state_consumers.world_state_opportunity_labels(world_state_signals),
     }
 
 

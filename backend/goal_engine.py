@@ -13,6 +13,7 @@ import hashlib
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import investigation_engine
+import world_state_consumers
 
 GOAL_ENGINE_VERSION = 1
 
@@ -617,6 +618,67 @@ def _situations_by_id(replayability_state: Mapping[str, Any]) -> Dict[str, Dict[
     return out
 
 
+WORLD_STATE_SIGNAL_TO_GOAL_TYPE = {
+    "resource_shortage": "secure_food",
+    "route_blocked": "restore_route",
+    "infrastructure_damaged": "restore_route",
+    "settlement_unstable": "defend_settlement",
+    "faction_pressure": "defend_settlement",
+    "settlement_improving": "secure_trade_route",
+    "market_strained": "secure_trade_route",
+    "actor_missing": "rescue_missing_person",
+}
+
+
+def _candidate_from_world_state_signal(
+    signal: Mapping[str, Any],
+    *,
+    turn_number: int,
+    run_seed: str,
+) -> Optional[Dict[str, Any]]:
+    signal_kind = str(signal.get("signal_kind") or "")
+    goal_type = WORLD_STATE_SIGNAL_TO_GOAL_TYPE.get(signal_kind)
+    signal_id = _bounded_str(signal.get("signal_id"), 160)
+    if not goal_type or not signal_id:
+        return None
+    location_id = _bounded_str(signal.get("location_id"), 120)
+    faction_id = _bounded_str(signal.get("faction_id"), 120)
+    owner_type = "faction" if faction_id and signal_kind == "faction_pressure" else "settlement" if location_id else "world"
+    owner_id = faction_id or location_id or "world"
+    target = location_id or faction_id or signal_id
+    dedupe = _dedupe_key(owner_type, owner_id, goal_type, target)
+    severity = _clamp_int(signal.get("severity"), 0, 10, default=5)
+    return _normalise_goal(
+        {
+            "goal_id": _goal_id(run_seed, dedupe),
+            "owner_type": owner_type,
+            "owner_id": owner_id,
+            "goal_type": goal_type,
+            "title": _goal_title(goal_type),
+            "status": "forming" if severity < 4 else "active",
+            "priority": severity,
+            "urgency": severity,
+            "progress": 0,
+            "confidence": min(100, 40 + severity * 5),
+            "created_turn": turn_number,
+            "updated_turn": turn_number,
+            "parent_situation_ids": [],
+            "target_location_ids": [location_id] if location_id else [],
+            "target_actor_ids": [],
+            "required_resources": GOAL_REQUIRED_RESOURCES.get(goal_type, ()),
+            "blockers": list(signal.get("conditions") or [])[:MAX_GOAL_BLOCKERS],
+            "prerequisites": GOAL_PREREQUISITES.get(goal_type, ()),
+            "evidence_refs": [f"world_state:{signal_id}"],
+            "expiry": turn_number + DEFAULT_EXPIRY_TURNS,
+            "source_event_ids": [signal_id],
+            "plan_steps": _generate_plan(goal_type),
+            "dedupe_key": dedupe,
+            "last_reinforced_turn": turn_number,
+        },
+        run_seed=run_seed,
+    )
+
+
 def _resource_blocked(goal: Mapping[str, Any], rolling_state: Mapping[str, Any]) -> bool:
     required = {item.lower() for item in _bounded_str_list(goal.get("required_resources"), MAX_GOAL_RESOURCES)}
     if not required:
@@ -635,6 +697,17 @@ def _resource_blocked(goal: Mapping[str, Any], rolling_state: Mapping[str, Any])
         if status in {"shortage", "reduced", "exhausted"} or trend == "decreasing":
             return True
     return False
+
+
+def _trade_route_blocked(goal: Mapping[str, Any], rolling_state: Mapping[str, Any]) -> bool:
+    if str(goal.get("goal_type") or "") != "secure_trade_route":
+        return False
+    locations = _bounded_str_list(goal.get("target_location_ids"), MAX_GOAL_REFS)
+    signals = world_state_consumers.world_state_signals_for_context(
+        rolling_state,
+        location_ids=locations or ["world"],
+    )
+    return any(str(row.get("signal_kind") or "") == "route_blocked" for row in signals)
 
 
 def _action_event_id(recent_action: Optional[Mapping[str, Any]]) -> str:
@@ -710,6 +783,14 @@ def _advance_goal(
         goal["updated_turn"] = turn_number
         receipt_type = "goal_blocked"
         detail = "required_resource_blocked"
+    elif _trade_route_blocked(goal, rolling_state):
+        goal["status"] = "blocked"
+        plan = goal.get("plan_steps") if isinstance(goal.get("plan_steps"), list) else []
+        if plan:
+            plan[_clamp_int(goal.get("current_step_index"), 0, len(plan) - 1)]["status"] = "blocked"
+        goal["updated_turn"] = turn_number
+        receipt_type = "goal_blocked"
+        detail = "trade_route_blocked"
     else:
         if goal.get("status") == "blocked":
             goal["status"] = "active"
@@ -970,6 +1051,14 @@ def evolve_goals(
             turn_number=turn_number,
             run_seed=seed,
         )
+        if candidate:
+            candidates.append(candidate)
+
+    world_signals = world_state_consumers.world_state_signals_for_context(rolling_state)
+    for signal in world_signals:
+        if len(candidates) >= MAX_GOAL_INPUTS_PER_TICK:
+            break
+        candidate = _candidate_from_world_state_signal(signal, turn_number=turn_number, run_seed=seed)
         if candidate:
             candidates.append(candidate)
 

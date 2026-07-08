@@ -14,6 +14,7 @@ import investigation_engine
 import npc_action_engine
 import situation_engine
 import world_event_engine
+import world_state_consumers
 
 FOUNDATION_SNAPSHOT_SCHEMA_VERSION = 8
 
@@ -41,6 +42,7 @@ class FoundationTurnSnapshot:
     world_event_state_ref: Dict[str, Any] = dataclasses.field(default_factory=lambda: {"world_events": []})
     investigation_state_ref: Dict[str, Any] = dataclasses.field(default_factory=lambda: {"investigations": [], "evidence": []})
     information_state_ref: Dict[str, Any] = dataclasses.field(default_factory=lambda: {"information_items": [], "reputation_signals": []})
+    world_state_ref: Dict[str, Any] = dataclasses.field(default_factory=dict)
 
     @staticmethod
     def build(
@@ -79,6 +81,9 @@ class FoundationTurnSnapshot:
             hash_material["investigations"] = investigation_state
         if information_state.get("information_items") or information_state.get("reputation_signals"):
             hash_material["information"] = information_state
+        world_state = world_state_consumers.copy_world_state(rolling)
+        if world_state:
+            hash_material["world_state"] = world_state
         stress_commit = _actor_stress_commitment(rolling)
         if stress_commit is not None:
             # Commit authoritative stress values into snapshot identity so the
@@ -100,6 +105,7 @@ class FoundationTurnSnapshot:
             world_event_state_ref=world_event_state,
             investigation_state_ref=investigation_state,
             information_state_ref=information_state,
+            world_state_ref=world_state,
             confirmed_consequence_refs=_consequence_refs(rolling),
             relationship_vector_ref={
                 "vectors": list(rolling.get("relationship_vectors") or []),
@@ -429,15 +435,22 @@ def _utility_input_refs(
                 actor.get("location_id") or "",
             ],
         )
+        actor_locations = [
+            rolling.get("scene") or rolling.get("location") or "",
+            actor.get("location_id") or "",
+            actor.get("last_seen") or "",
+        ]
+        actor_factions = [actor.get("faction_id") or "", actor.get("faction") or ""]
+        world_state_signals = world_state_consumers.world_state_signals_for_context(
+            rolling,
+            location_ids=actor_locations,
+            faction_ids=actor_factions,
+        )
         active_goals = goal_engine.active_goals_for_context(
             goal_state,
             actor_ids=[actor_id, actor.get("display_name") or ""],
-            location_ids=[
-                rolling.get("scene") or rolling.get("location") or "",
-                actor.get("location_id") or "",
-                actor.get("last_seen") or "",
-            ],
-            faction_ids=[actor.get("faction_id") or "", actor.get("faction") or ""],
+            location_ids=actor_locations,
+            faction_ids=actor_factions,
         )
         goal_priority = None
         goal_urgency = None
@@ -508,6 +521,8 @@ def _utility_input_refs(
                 ),
                 "last_action": latest_action.get("action_type"),
                 "destination": latest_action.get("destination") or latest_action.get("target_location"),
+                "world_state_signal_kinds": [row.get("signal_kind") for row in world_state_signals],
+                "world_state_signal_ids": [row.get("signal_id") for row in world_state_signals],
             }
         )
     return sorted(refs, key=lambda row: row["actor_id"])

@@ -10,7 +10,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 WORLD_STATE_CONSUMER_VERSION = 1
 MAX_WORLD_STATE_CONSUMER_EVENTS_PER_TICK = 4
@@ -48,6 +48,18 @@ CONSUMER_OWNED_COLLECTIONS = (
 PROMPT_HIDDEN_ROW_FIELDS = frozenset({"source_event_ids", "updated_turn"})
 MAX_WORLD_STATE_GUARD_RECEIPTS = 48
 MAX_GUARD_SUMMARY_CHARS = 240
+MAX_WORLD_STATE_CONTEXT_SIGNALS = 8
+
+WORLD_STATE_SIGNAL_KINDS = (
+    "resource_shortage",
+    "route_blocked",
+    "infrastructure_damaged",
+    "settlement_unstable",
+    "settlement_improving",
+    "faction_pressure",
+    "market_strained",
+    "actor_missing",
+)
 
 
 def _stable_id(prefix: str, *parts: Any) -> str:
@@ -1213,3 +1225,258 @@ def enforce_consumer_world_state(
 
     diagnostics["world_state_guard_receipts"] = len(local_receipts)
     return {"receipts": local_receipts, "adjustments": adjustments, "diagnostics": diagnostics}
+
+
+def _token_set(*values: Any) -> set:
+    tokens = set()
+    for value in values:
+        raw = value if isinstance(value, (list, tuple, set)) else [value]
+        for item in raw:
+            text = str(item or "").strip().lower()
+            if text:
+                tokens.add(text)
+    return tokens
+
+
+def _conditions_from(row: Mapping[str, Any]) -> set:
+    return {str(value).lower() for value in _bounded_str_list(row.get("conditions"), 12)}
+
+
+def _location_matches(row: Mapping[str, Any], location_tokens: set) -> bool:
+    if not location_tokens:
+        return False
+    for key in ("location_id", "id", "name"):
+        value = str(row.get(key) or "").strip().lower()
+        if value and value in location_tokens:
+            return True
+    return False
+
+
+def _append_signal(
+    signals: List[Dict[str, Any]],
+    *,
+    signal_kind: str,
+    signal_id: str,
+    location_id: str = "",
+    faction_id: str = "",
+    severity: int = 4,
+    status: str = "",
+    conditions: Optional[Sequence[str]] = None,
+) -> None:
+    if signal_kind not in WORLD_STATE_SIGNAL_KINDS:
+        return
+    if any(row.get("signal_kind") == signal_kind and row.get("signal_id") == signal_id for row in signals):
+        return
+    signals.append(
+        {
+            "signal_kind": signal_kind,
+            "signal_id": _bounded_str(signal_id, 160),
+            "location_id": _bounded_str(location_id, 120),
+            "faction_id": _bounded_str(faction_id, 120),
+            "severity": max(1, min(10, int(severity))),
+            "status": _bounded_str(status, 80),
+            "conditions": _bounded_str_list(list(conditions or []), 8),
+        }
+    )
+
+
+def world_state_signals_for_context(
+    rolling_state: Mapping[str, Any],
+    *,
+    location_ids: Sequence[str] = (),
+    faction_ids: Sequence[str] = (),
+    limit: int = MAX_WORLD_STATE_CONTEXT_SIGNALS,
+) -> List[Dict[str, Any]]:
+    """Deterministic read-side projection of structured world state for engine bridges."""
+    if not isinstance(rolling_state, Mapping):
+        return []
+    location_tokens = _token_set(location_ids)
+    faction_tokens = _token_set(faction_ids)
+    signals: List[Dict[str, Any]] = []
+
+    for row in rolling_state.get("world_resources") or []:
+        if not isinstance(row, Mapping):
+            continue
+        if location_tokens and not _location_matches(row, location_tokens):
+            continue
+        status = str(row.get("status") or "").lower()
+        trend = str(row.get("trend") or "").lower()
+        delta = _coerce_int(row.get("quantity_delta"), 0)
+        if status in {"shortage", "reduced", "exhausted"} or trend == "decreasing" or delta < 0:
+            _append_signal(
+                signals,
+                signal_kind="resource_shortage",
+                signal_id=_bounded_str(row.get("id") or row.get("name"), 160),
+                location_id=_bounded_str(row.get("location_id"), 120),
+                severity=max(4, min(8, 4 + abs(delta))),
+                status=status or trend or "shortage",
+            )
+
+    for row in rolling_state.get("travel_routes") or []:
+        if not isinstance(row, Mapping):
+            continue
+        if location_tokens and not _location_matches(row, location_tokens):
+            continue
+        conditions = _conditions_from(row)
+        status = str(row.get("status") or "").lower()
+        if status in {"blocked", "unsafe"} or conditions.intersection({"blocked", "unsafe", "route_obstructed"}):
+            _append_signal(
+                signals,
+                signal_kind="route_blocked",
+                signal_id=_bounded_str(row.get("id"), 160),
+                location_id=_bounded_str(row.get("location_id"), 120),
+                severity=5,
+                status=status or "blocked",
+                conditions=sorted(conditions),
+            )
+
+    for row in rolling_state.get("infrastructure_state") or []:
+        if not isinstance(row, Mapping):
+            continue
+        if location_tokens and not _location_matches(row, location_tokens):
+            continue
+        conditions = _conditions_from(row)
+        status = str(row.get("status") or "").lower()
+        if status in {"damaged", "blocked", "collapsed"} or conditions.intersection(
+            {"damaged", "blocked", "collapse", "structural_failure", "fire_damage"}
+        ):
+            _append_signal(
+                signals,
+                signal_kind="infrastructure_damaged",
+                signal_id=_bounded_str(row.get("id"), 160),
+                location_id=_bounded_str(row.get("location_id"), 120),
+                severity=6,
+                status=status or "damaged",
+                conditions=sorted(conditions),
+            )
+
+    for row in rolling_state.get("settlement_conditions") or []:
+        if not isinstance(row, Mapping):
+            continue
+        if location_tokens and not _location_matches(row, location_tokens):
+            continue
+        conditions = _conditions_from(row)
+        status = str(row.get("status") or "").lower()
+        if status in {"recovering", "improving"}:
+            _append_signal(
+                signals,
+                signal_kind="settlement_improving",
+                signal_id=_bounded_str(row.get("id"), 160),
+                location_id=_bounded_str(row.get("location_id"), 120),
+                severity=4,
+                status=status,
+                conditions=sorted(conditions),
+            )
+        elif status in {"unstable", "strained", "guarded"} or conditions.intersection(
+            {"protest", "argument", "alliance_fracture", "security_decreased", "evacuation_marker"}
+        ):
+            _append_signal(
+                signals,
+                signal_kind="settlement_unstable",
+                signal_id=_bounded_str(row.get("id"), 160),
+                location_id=_bounded_str(row.get("location_id"), 120),
+                severity=5,
+                status=status or "unstable",
+                conditions=sorted(conditions),
+            )
+
+    for row in rolling_state.get("market_state") or []:
+        if not isinstance(row, Mapping):
+            continue
+        if location_tokens and not _location_matches(row, location_tokens):
+            continue
+        conditions = _conditions_from(row)
+        status = str(row.get("status") or "").lower()
+        if status in {"strained", "blocked"} or "prices_rising" in conditions:
+            _append_signal(
+                signals,
+                signal_kind="market_strained",
+                signal_id=_bounded_str(row.get("id"), 160),
+                location_id=_bounded_str(row.get("location_id"), 120),
+                severity=5,
+                status=status or "strained",
+                conditions=sorted(conditions),
+            )
+        elif status == "active" and "trader_arrived" in conditions:
+            _append_signal(
+                signals,
+                signal_kind="settlement_improving",
+                signal_id=_bounded_str(row.get("id"), 160),
+                location_id=_bounded_str(row.get("location_id"), 120),
+                severity=4,
+                status="trade_available",
+                conditions=sorted(conditions),
+            )
+
+    for row in rolling_state.get("faction_pressure") or []:
+        if not isinstance(row, Mapping):
+            continue
+        faction_id = _bounded_str(row.get("id") or row.get("name"), 120)
+        if faction_tokens and faction_id.lower() not in faction_tokens:
+            continue
+        ticks = row.get("ticks") if isinstance(row.get("ticks"), Mapping) else {}
+        total = sum(abs(_coerce_int(value, 0)) for value in ticks.values()) if isinstance(ticks, Mapping) else 0
+        if total >= 2:
+            _append_signal(
+                signals,
+                signal_kind="faction_pressure",
+                signal_id=faction_id,
+                faction_id=faction_id,
+                severity=min(8, 2 + total),
+                status="pressure",
+            )
+
+    for row in rolling_state.get("actor_location_registry") or []:
+        if not isinstance(row, Mapping):
+            continue
+        if location_tokens and not _location_matches(row, location_tokens):
+            continue
+        if str(row.get("status") or "").lower() == "missing":
+            _append_signal(
+                signals,
+                signal_kind="actor_missing",
+                signal_id=_bounded_str(row.get("id"), 160),
+                location_id=_bounded_str(row.get("location_id"), 120),
+                severity=5,
+                status="missing",
+            )
+
+    ordered = sorted(
+        signals,
+        key=lambda row: (
+            -_coerce_int(row.get("severity"), 0),
+            str(row.get("signal_kind") or ""),
+            str(row.get("signal_id") or ""),
+        ),
+    )
+    return ordered[: max(0, min(MAX_WORLD_STATE_CONTEXT_SIGNALS, int(limit or 0)))]
+
+
+def copy_world_state(rolling_state: Mapping[str, Any]) -> Dict[str, Any]:
+    if not isinstance(rolling_state, Mapping):
+        return {}
+    out: Dict[str, Any] = {}
+    for key in CONSUMER_OWNED_COLLECTIONS:
+        rows = rolling_state.get(key)
+        if isinstance(rows, list) and rows:
+            out[key] = copy.deepcopy(rows)
+    return out
+
+
+def world_state_opportunity_labels(signals: Sequence[Mapping[str, Any]]) -> List[str]:
+    labels: List[str] = []
+    mapping = {
+        "resource_shortage": "secure scarce supplies",
+        "route_blocked": "reopen blocked route",
+        "infrastructure_damaged": "repair damaged infrastructure",
+        "settlement_unstable": "stabilize strained settlement",
+        "settlement_improving": "capitalize on improving conditions",
+        "faction_pressure": "address rising faction pressure",
+        "market_strained": "navigate strained market conditions",
+        "actor_missing": "locate missing person",
+    }
+    for row in signals:
+        label = mapping.get(str(row.get("signal_kind") or ""))
+        if label and label not in labels:
+            labels.append(label)
+    return labels[:4]

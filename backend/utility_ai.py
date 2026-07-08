@@ -10,8 +10,11 @@ from __future__ import annotations
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import goal_engine
+import information_engine
+import investigation_engine
 import situation_engine
 import stress
+import world_state_consumers
 from engine_determinism import (
     NUMERIC_CONTRACT_VERSION,
     build_seed_material,
@@ -33,6 +36,8 @@ DECISION_VERSION = 1
 PRESSURE_SCORING_BRIDGE_VERSION = 1
 SITUATION_SCORING_BRIDGE_VERSION = 1
 GOAL_SCORING_BRIDGE_VERSION = 1
+SOCIAL_COLLISION_SCORING_BRIDGE_VERSION = 1
+WORLD_STATE_SCORING_BRIDGE_VERSION = 1
 
 # Appendix A.4 base weights (Ch 27.4.2)
 BASE_WEIGHTS = {
@@ -63,6 +68,215 @@ MAX_SITUATION_TOTAL_SCORE_MODIFIER = 5.0
 MAX_GOALS_PER_UTILITY_ACTOR = 4
 MAX_GOAL_SCORE_MODIFIER = 3.5
 MAX_GOAL_TOTAL_SCORE_MODIFIER = 6.0
+MAX_RELATIONSHIP_SIGNALS_PER_UTILITY_ACTOR = 4
+MAX_REPUTATION_SIGNALS_PER_UTILITY_ACTOR = 3
+MAX_INFORMATION_ITEMS_PER_UTILITY_ACTOR = 4
+MAX_INVESTIGATION_SIGNALS_PER_UTILITY_ACTOR = 4
+MAX_EVIDENCE_ITEMS_PER_UTILITY_ACTOR = 4
+MAX_RELATIONSHIP_NODE_SCORE_MODIFIER = 3.0
+MAX_RELATIONSHIP_TOTAL_SCORE_MODIFIER = 6.0
+MAX_REPUTATION_NODE_SCORE_MODIFIER = 2.5
+MAX_REPUTATION_TOTAL_SCORE_MODIFIER = 5.0
+MAX_INFORMATION_NODE_SCORE_MODIFIER = 2.5
+MAX_INFORMATION_TOTAL_SCORE_MODIFIER = 5.0
+MAX_INVESTIGATION_NODE_SCORE_MODIFIER = 3.0
+MAX_INVESTIGATION_TOTAL_SCORE_MODIFIER = 6.0
+MAX_WORLD_STATE_SIGNALS_PER_UTILITY_ACTOR = 4
+MAX_WORLD_STATE_NODE_SCORE_MODIFIER = 3.0
+MAX_WORLD_STATE_TOTAL_SCORE_MODIFIER = 6.0
+
+WORLD_STATE_ACTION_MODIFIERS: Dict[str, Dict[str, float]] = {
+    "resource_shortage": {
+        "gather": 3.0,
+        "negotiate": 1.5,
+        "steal": 1.0,
+        "idle": -2.0,
+    },
+    "route_blocked": {
+        "fortify": 2.5,
+        "withdraw": 2.0,
+        "investigate": 1.5,
+        "trade": -2.5,
+    },
+    "infrastructure_damaged": {
+        "fortify": 3.0,
+        "gather": 1.5,
+        "investigate": 1.0,
+        "idle": -1.5,
+    },
+    "settlement_unstable": {
+        "protect": 2.5,
+        "negotiate": 1.5,
+        "withdraw": 1.0,
+        "pressure": 1.0,
+    },
+    "faction_pressure": {
+        "protect": 2.0,
+        "negotiate": 1.5,
+        "pressure": 1.0,
+        "avoid": 1.0,
+    },
+    "settlement_improving": {
+        "trade": 2.5,
+        "negotiate": 2.0,
+        "gather": 1.5,
+    },
+    "market_strained": {
+        "negotiate": 2.0,
+        "gather": 1.5,
+        "steal": 1.0,
+    },
+    "actor_missing": {
+        "investigate": 2.5,
+        "protect": 1.5,
+        "gather": 1.0,
+    },
+}
+
+RELATIONSHIP_VECTOR_THRESHOLD = 40
+RELATIONSHIP_TRUST_NEGATIVE_THRESHOLD = -40
+
+RELATIONSHIP_FEAR_ACTION_MODIFIERS: Dict[str, float] = {
+    "withdraw": 3.0,
+    "avoid": 2.5,
+    "flee": 3.0,
+    "confront": -2.5,
+    "pressure": -1.5,
+    "attack": -2.0,
+}
+
+RELATIONSHIP_RESENTMENT_ACTION_MODIFIERS: Dict[str, float] = {
+    "pressure": 3.0,
+    "confront": 2.5,
+    "negotiate": -2.0,
+    "protect": -1.5,
+    "help": -1.0,
+}
+
+RELATIONSHIP_TRUST_POSITIVE_ACTION_MODIFIERS: Dict[str, float] = {
+    "negotiate": 2.5,
+    "protect": 2.0,
+    "trade": 1.5,
+    "gather": 1.0,
+    "steal": -2.5,
+    "pressure": -2.0,
+}
+
+RELATIONSHIP_TRUST_NEGATIVE_ACTION_MODIFIERS: Dict[str, float] = {
+    "steal": 1.5,
+    "pressure": 2.0,
+    "confront": 1.5,
+    "negotiate": -1.5,
+    "protect": -1.0,
+}
+
+REPUTATION_ACTION_MODIFIERS: Dict[str, Dict[str, float]] = {
+    "dangerous": {
+        "avoid": 2.5,
+        "withdraw": 2.0,
+        "protect": 1.5,
+        "confront": -2.0,
+        "negotiate": -1.0,
+    },
+    "trustworthy": {
+        "negotiate": 2.5,
+        "protect": 2.0,
+        "trade": 1.5,
+        "gather": 1.0,
+    },
+    "suspicious": {
+        "investigate": 2.5,
+        "avoid": 1.5,
+        "negotiate": -1.5,
+        "conceal": 1.0,
+    },
+    "cruel": {
+        "avoid": 2.0,
+        "withdraw": 1.5,
+        "pressure": 1.0,
+        "protect": -1.0,
+    },
+    "competent": {
+        "negotiate": 1.5,
+        "gather": 1.0,
+        "investigate": 1.0,
+    },
+    "generous": {
+        "negotiate": 2.0,
+        "trade": 1.5,
+        "gather": 1.0,
+    },
+}
+
+REPUTATION_BAND_FACTORS = {
+    "strong_positive": 1.0,
+    "positive": 0.75,
+    "neutral": 0.35,
+    "negative": 0.75,
+    "strong_negative": 1.0,
+}
+
+INFORMATION_ACTION_MODIFIERS: Dict[str, Dict[str, float]] = {
+    "rumour": {
+        "investigate": 2.0,
+        "avoid": 0.5,
+        "gather": 0.5,
+    },
+    "claim": {
+        "negotiate": 1.5,
+        "investigate": 1.0,
+        "pressure": 1.0,
+    },
+    "truth": {
+        "investigate": 2.5,
+        "protect": 1.0,
+        "negotiate": 1.0,
+    },
+    "evidence_summary": {
+        "investigate": 3.0,
+        "pressure": 1.5,
+        "conceal": 1.0,
+    },
+    "reputation_signal": {
+        "investigate": 1.0,
+        "negotiate": 1.0,
+        "avoid": 0.5,
+    },
+}
+
+INFORMATION_RELIABILITY_FACTORS = {
+    "high": 1.0,
+    "medium": 0.75,
+    "low": 0.45,
+    "unknown": 0.35,
+}
+
+EVIDENCE_ACTION_MODIFIERS: Dict[str, Dict[str, float]] = {
+    "physical_clue": {
+        "investigate": 2.5,
+        "gather": 1.0,
+    },
+    "witness_statement": {
+        "investigate": 2.0,
+        "negotiate": 1.5,
+        "pressure": 1.0,
+    },
+    "lead": {
+        "investigate": 1.5,
+        "explore": 1.0,
+    },
+    "pattern": {
+        "investigate": 2.0,
+        "protect": 1.0,
+    },
+}
+
+INVESTIGATION_STATUS_FACTORS = {
+    "active": 1.0,
+    "forming": 0.65,
+    "blocked": 0.5,
+    "resolving": 0.85,
+}
 
 PRESSURE_ACTION_MODIFIERS: Dict[str, Dict[str, float]] = {
     "danger": {
@@ -265,6 +479,45 @@ _GOAL_SCORE_KEYS = (
     "goal_modifier",
     "goal_ids",
     "goal_bridge_version",
+)
+
+_RELATIONSHIP_SCORE_KEYS = (
+    "relationship_modifier",
+    "relationship_signals",
+    "relationship_bridge_version",
+)
+
+_REPUTATION_SCORE_KEYS = (
+    "reputation_modifier",
+    "reputation_signal_ids",
+    "reputation_bridge_version",
+)
+
+_INFORMATION_SCORE_KEYS = (
+    "information_modifier",
+    "information_ids",
+    "information_bridge_version",
+)
+
+_INVESTIGATION_SCORE_KEYS = (
+    "investigation_modifier",
+    "investigation_ids",
+    "evidence_ids",
+    "investigation_bridge_version",
+)
+
+_WORLD_STATE_SCORE_KEYS = (
+    "world_state_modifier",
+    "world_state_signal_ids",
+    "world_state_bridge_version",
+)
+
+_SOCIAL_SCORE_KEY_GROUPS = (
+    _RELATIONSHIP_SCORE_KEYS,
+    _REPUTATION_SCORE_KEYS,
+    _INFORMATION_SCORE_KEYS,
+    _INVESTIGATION_SCORE_KEYS,
+    _WORLD_STATE_SCORE_KEYS,
 )
 
 
@@ -659,6 +912,488 @@ def goal_score_modifier(
     }
 
 
+def _relationship_vector_for_actor(
+    snapshot: FoundationTurnSnapshot,
+    actor_id: str,
+) -> Dict[str, Any]:
+    actor = _actor_row(snapshot, actor_id)
+    actor_key = str(actor_id or "").strip().lower()
+    name_key = str(actor.get("display_name") or actor.get("name") or "").strip().lower()
+    for raw in (snapshot.relationship_vector_ref or {}).get("vectors") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        vec_id = str(raw.get("npc_id") or "").strip().lower()
+        vec_name = str(raw.get("name") or "").strip().lower()
+        if vec_id == actor_key or (name_key and vec_name == name_key):
+            return dict(raw)
+    return {}
+
+
+def _relationship_intensity(value: Any, *, low: int = 0, high: int = 100) -> float:
+    return _clamp(float(_coerce_relationship_int(value, default=0)), float(low), float(high)) / max(1.0, float(high))
+
+
+def _coerce_relationship_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _apply_bounded_action_modifiers(
+    *,
+    action_kind: str,
+    modifier_map: Mapping[str, float],
+    intensity_factor: float,
+    per_node_cap: float,
+    contributing: List[str],
+    contributor_id: str,
+    total: float,
+) -> float:
+    action = str(action_kind or "").strip().lower()
+    raw_modifier = float(modifier_map.get(action) or 0.0)
+    if raw_modifier == 0.0 or intensity_factor <= 0.0:
+        return total
+    contribution = _clamp(
+        raw_modifier * intensity_factor,
+        -per_node_cap,
+        per_node_cap,
+    )
+    if contribution == 0.0:
+        return total
+    if contributor_id and contributor_id not in contributing:
+        contributing.append(contributor_id)
+    return total + contribution
+
+
+def relationship_score_modifier(
+    snapshot: FoundationTurnSnapshot,
+    *,
+    actor_id: str,
+    action_kind: str,
+) -> Dict[str, Any]:
+    """Bounded Utility AI adjustment from canonical relationship vectors."""
+    vector = _relationship_vector_for_actor(snapshot, actor_id)
+    if not vector:
+        return {
+            "bridge_version": SOCIAL_COLLISION_SCORING_BRIDGE_VERSION,
+            "modifier": 0.0,
+            "signals": [],
+        }
+    action = str(action_kind or "").strip().lower()
+    total = 0.0
+    signals: List[str] = []
+    fear = _coerce_relationship_int(vector.get("fear"))
+    if fear >= RELATIONSHIP_VECTOR_THRESHOLD:
+        total = _apply_bounded_action_modifiers(
+            action_kind=action,
+            modifier_map=RELATIONSHIP_FEAR_ACTION_MODIFIERS,
+            intensity_factor=_relationship_intensity(fear),
+            per_node_cap=MAX_RELATIONSHIP_NODE_SCORE_MODIFIER,
+            contributing=signals,
+            contributor_id="fear",
+            total=total,
+        )
+    resentment = _coerce_relationship_int(vector.get("resentment"))
+    if resentment >= RELATIONSHIP_VECTOR_THRESHOLD:
+        total = _apply_bounded_action_modifiers(
+            action_kind=action,
+            modifier_map=RELATIONSHIP_RESENTMENT_ACTION_MODIFIERS,
+            intensity_factor=_relationship_intensity(resentment),
+            per_node_cap=MAX_RELATIONSHIP_NODE_SCORE_MODIFIER,
+            contributing=signals,
+            contributor_id="resentment",
+            total=total,
+        )
+    trust = _coerce_relationship_int(vector.get("trust"), default=0)
+    if trust >= RELATIONSHIP_VECTOR_THRESHOLD:
+        total = _apply_bounded_action_modifiers(
+            action_kind=action,
+            modifier_map=RELATIONSHIP_TRUST_POSITIVE_ACTION_MODIFIERS,
+            intensity_factor=_relationship_intensity(trust, low=0, high=100),
+            per_node_cap=MAX_RELATIONSHIP_NODE_SCORE_MODIFIER,
+            contributing=signals,
+            contributor_id="trust_positive",
+            total=total,
+        )
+    elif trust <= RELATIONSHIP_TRUST_NEGATIVE_THRESHOLD:
+        total = _apply_bounded_action_modifiers(
+            action_kind=action,
+            modifier_map=RELATIONSHIP_TRUST_NEGATIVE_ACTION_MODIFIERS,
+            intensity_factor=_relationship_intensity(abs(trust), low=0, high=100),
+            per_node_cap=MAX_RELATIONSHIP_NODE_SCORE_MODIFIER,
+            contributing=signals,
+            contributor_id="trust_negative",
+            total=total,
+        )
+    total = _clamp(
+        total,
+        -MAX_RELATIONSHIP_TOTAL_SCORE_MODIFIER,
+        MAX_RELATIONSHIP_TOTAL_SCORE_MODIFIER,
+    )
+    return {
+        "bridge_version": SOCIAL_COLLISION_SCORING_BRIDGE_VERSION,
+        "modifier": round(total, 4),
+        "signals": signals[:MAX_RELATIONSHIP_SIGNALS_PER_UTILITY_ACTOR],
+    }
+
+
+def _social_context_ids(
+    snapshot: FoundationTurnSnapshot,
+    *,
+    actor_id: str,
+    target_kind: str = "",
+    target_id: str = "",
+) -> Tuple[List[str], List[str], List[str]]:
+    actor = _actor_row(snapshot, actor_id)
+    actor_ids = [actor_id, actor.get("display_name") or "", actor.get("name") or ""]
+    location_ids = [
+        snapshot.location_ref,
+        actor.get("location_id") or "",
+        actor.get("location") or "",
+        actor.get("last_seen") or "",
+    ]
+    faction_ids = [actor.get("faction_id") or "", actor.get("faction") or ""]
+    target_kind = str(target_kind or "")
+    target_id = str(target_id or "")
+    if target_id:
+        if target_kind in {"actor", "npc", "character", "player"}:
+            actor_ids.append(target_id)
+        elif target_kind in {"location", "region", "place"}:
+            location_ids.append(target_id)
+        elif target_kind == "faction":
+            faction_ids.append(target_id)
+    return actor_ids, location_ids, faction_ids
+
+
+def reputation_score_modifier(
+    snapshot: FoundationTurnSnapshot,
+    *,
+    actor_id: str,
+    action_kind: str,
+    target_kind: str = "",
+    target_id: str = "",
+) -> Dict[str, Any]:
+    """Bounded Utility AI adjustment from canonical reputation signals."""
+    actor_ids, location_ids, faction_ids = _social_context_ids(
+        snapshot,
+        actor_id=actor_id,
+        target_kind=target_kind,
+        target_id=target_id,
+    )
+    subject_ids = [target_id] if target_id else actor_ids
+    matched = information_engine.reputation_for_context(
+        snapshot.information_state_ref,
+        subject_ids=subject_ids,
+        observer_scope_ids=actor_ids + location_ids + faction_ids,
+        limit=MAX_REPUTATION_SIGNALS_PER_UTILITY_ACTOR,
+    )
+    action = str(action_kind or "").strip().lower()
+    total = 0.0
+    contributing_ids: List[str] = []
+    for row in matched:
+        dimension = str(row.get("dimension") or "").strip().lower()
+        raw_map = REPUTATION_ACTION_MODIFIERS.get(dimension, {})
+        raw_modifier = float(raw_map.get(action) or 0.0)
+        if raw_modifier == 0.0:
+            continue
+        band_factor = float(REPUTATION_BAND_FACTORS.get(str(row.get("score_band") or "neutral"), 0.35))
+        contribution = _clamp(
+            raw_modifier * band_factor,
+            -MAX_REPUTATION_NODE_SCORE_MODIFIER,
+            MAX_REPUTATION_NODE_SCORE_MODIFIER,
+        )
+        if contribution == 0.0:
+            continue
+        total += contribution
+        signal_id = str(row.get("signal_id") or f"{dimension}:{row.get('subject_id') or ''}")
+        if signal_id and signal_id not in contributing_ids:
+            contributing_ids.append(signal_id)
+    total = _clamp(
+        total,
+        -MAX_REPUTATION_TOTAL_SCORE_MODIFIER,
+        MAX_REPUTATION_TOTAL_SCORE_MODIFIER,
+    )
+    return {
+        "bridge_version": SOCIAL_COLLISION_SCORING_BRIDGE_VERSION,
+        "modifier": round(total, 4),
+        "signal_ids": contributing_ids,
+    }
+
+
+def information_score_modifier(
+    snapshot: FoundationTurnSnapshot,
+    *,
+    actor_id: str,
+    action_kind: str,
+    target_kind: str = "",
+    target_id: str = "",
+) -> Dict[str, Any]:
+    """Bounded Utility AI adjustment from information the actor can access."""
+    actor_ids, location_ids, faction_ids = _social_context_ids(
+        snapshot,
+        actor_id=actor_id,
+        target_kind=target_kind,
+        target_id=target_id,
+    )
+    matched = information_engine.active_information_for_context(
+        snapshot.information_state_ref,
+        actor_ids=actor_ids,
+        location_ids=location_ids,
+        faction_ids=faction_ids,
+        limit=MAX_INFORMATION_ITEMS_PER_UTILITY_ACTOR,
+    )
+    action = str(action_kind or "").strip().lower()
+    total = 0.0
+    contributing_ids: List[str] = []
+    for row in matched:
+        info_type = str(row.get("information_type") or "").strip().lower()
+        raw_map = INFORMATION_ACTION_MODIFIERS.get(info_type, {})
+        raw_modifier = float(raw_map.get(action) or 0.0)
+        if raw_modifier == 0.0:
+            continue
+        reliability_factor = float(
+            INFORMATION_RELIABILITY_FACTORS.get(str(row.get("reliability_band") or "unknown"), 0.35)
+        )
+        gravity_factor = _clamp(float(row.get("gravity") or 0.0) / 100.0, 0.25, 1.0)
+        contribution = _clamp(
+            raw_modifier * reliability_factor * gravity_factor,
+            -MAX_INFORMATION_NODE_SCORE_MODIFIER,
+            MAX_INFORMATION_NODE_SCORE_MODIFIER,
+        )
+        if contribution == 0.0:
+            continue
+        total += contribution
+        info_id = str(row.get("information_id") or "")
+        if info_id and info_id not in contributing_ids:
+            contributing_ids.append(info_id)
+    total = _clamp(
+        total,
+        -MAX_INFORMATION_TOTAL_SCORE_MODIFIER,
+        MAX_INFORMATION_TOTAL_SCORE_MODIFIER,
+    )
+    return {
+        "bridge_version": SOCIAL_COLLISION_SCORING_BRIDGE_VERSION,
+        "modifier": round(total, 4),
+        "information_ids": contributing_ids,
+    }
+
+
+def investigation_score_modifier(
+    snapshot: FoundationTurnSnapshot,
+    *,
+    actor_id: str,
+    action_kind: str,
+    target_kind: str = "",
+    target_id: str = "",
+) -> Dict[str, Any]:
+    """Bounded Utility AI adjustment from investigations and known evidence."""
+    actor_ids, location_ids, _faction_ids = _social_context_ids(
+        snapshot,
+        actor_id=actor_id,
+        target_kind=target_kind,
+        target_id=target_id,
+    )
+    known_evidence = investigation_engine.known_evidence_for_context(
+        snapshot.investigation_state_ref,
+        actor_ids=actor_ids,
+        location_ids=location_ids,
+        limit=MAX_EVIDENCE_ITEMS_PER_UTILITY_ACTOR,
+    )
+    evidence_ids = [
+        str(row.get("evidence_id") or "")
+        for row in known_evidence
+        if row.get("evidence_id")
+    ]
+    active_investigations = investigation_engine.active_investigations_for_context(
+        snapshot.investigation_state_ref,
+        actor_ids=actor_ids,
+        location_ids=location_ids,
+        evidence_ids=evidence_ids,
+        limit=MAX_INVESTIGATION_SIGNALS_PER_UTILITY_ACTOR,
+    )
+    action = str(action_kind or "").strip().lower()
+    total = 0.0
+    contributing_investigation_ids: List[str] = []
+    contributing_evidence_ids: List[str] = []
+    for row in known_evidence:
+        evidence_type = str(row.get("evidence_type") or "").strip().lower()
+        raw_map = EVIDENCE_ACTION_MODIFIERS.get(evidence_type, {})
+        raw_modifier = float(raw_map.get(action) or 0.0)
+        if raw_modifier == 0.0:
+            continue
+        confidence_factor = _clamp(float(row.get("confidence") or row.get("reliability") or 50.0) / 100.0, 0.25, 1.0)
+        contribution = _clamp(
+            raw_modifier * confidence_factor,
+            -MAX_INVESTIGATION_NODE_SCORE_MODIFIER,
+            MAX_INVESTIGATION_NODE_SCORE_MODIFIER,
+        )
+        if contribution == 0.0:
+            continue
+        total += contribution
+        evidence_id = str(row.get("evidence_id") or "")
+        if evidence_id and evidence_id not in contributing_evidence_ids:
+            contributing_evidence_ids.append(evidence_id)
+    for row in active_investigations:
+        status_factor = float(INVESTIGATION_STATUS_FACTORS.get(str(row.get("status") or "active"), 0.65))
+        confidence_factor = _clamp(float(row.get("confidence") or 0.0) / 100.0, 0.25, 1.0)
+        raw_modifier = 2.0 if action == "investigate" else 1.0 if action in {"pressure", "negotiate"} else 0.0
+        if raw_modifier == 0.0:
+            continue
+        contribution = _clamp(
+            raw_modifier * max(status_factor, confidence_factor),
+            -MAX_INVESTIGATION_NODE_SCORE_MODIFIER,
+            MAX_INVESTIGATION_NODE_SCORE_MODIFIER,
+        )
+        if contribution == 0.0:
+            continue
+        total += contribution
+        investigation_id = str(row.get("investigation_id") or "")
+        if investigation_id and investigation_id not in contributing_investigation_ids:
+            contributing_investigation_ids.append(investigation_id)
+    total = _clamp(
+        total,
+        -MAX_INVESTIGATION_TOTAL_SCORE_MODIFIER,
+        MAX_INVESTIGATION_TOTAL_SCORE_MODIFIER,
+    )
+    return {
+        "bridge_version": SOCIAL_COLLISION_SCORING_BRIDGE_VERSION,
+        "modifier": round(total, 4),
+        "investigation_ids": contributing_investigation_ids,
+        "evidence_ids": contributing_evidence_ids,
+    }
+
+
+def _apply_social_score_adjustments(
+    snapshot: FoundationTurnSnapshot,
+    *,
+    actor_id: str,
+    action_kind: str,
+    target_kind: str,
+    target_id: str,
+    base_utility: float,
+) -> Tuple[float, Dict[str, Any]]:
+    evaluated: Dict[str, Any] = {}
+    utility = base_utility
+    relationship_adjustment = relationship_score_modifier(
+        snapshot,
+        actor_id=actor_id,
+        action_kind=action_kind,
+    )
+    relationship_modifier = float(relationship_adjustment.get("modifier") or 0.0)
+    if relationship_modifier != 0.0:
+        utility = _clamp(utility + relationship_modifier, 0.0, 100.0)
+        evaluated.update(
+            relationship_modifier=relationship_modifier,
+            relationship_signals=list(relationship_adjustment.get("signals") or []),
+            relationship_bridge_version=relationship_adjustment.get("bridge_version"),
+        )
+    reputation_adjustment = reputation_score_modifier(
+        snapshot,
+        actor_id=actor_id,
+        action_kind=action_kind,
+        target_kind=target_kind,
+        target_id=target_id,
+    )
+    reputation_modifier = float(reputation_adjustment.get("modifier") or 0.0)
+    if reputation_modifier != 0.0:
+        utility = _clamp(utility + reputation_modifier, 0.0, 100.0)
+        evaluated.update(
+            reputation_modifier=reputation_modifier,
+            reputation_signal_ids=list(reputation_adjustment.get("signal_ids") or []),
+            reputation_bridge_version=reputation_adjustment.get("bridge_version"),
+        )
+    information_adjustment = information_score_modifier(
+        snapshot,
+        actor_id=actor_id,
+        action_kind=action_kind,
+        target_kind=target_kind,
+        target_id=target_id,
+    )
+    information_modifier = float(information_adjustment.get("modifier") or 0.0)
+    if information_modifier != 0.0:
+        utility = _clamp(utility + information_modifier, 0.0, 100.0)
+        evaluated.update(
+            information_modifier=information_modifier,
+            information_ids=list(information_adjustment.get("information_ids") or []),
+            information_bridge_version=information_adjustment.get("bridge_version"),
+        )
+    investigation_adjustment = investigation_score_modifier(
+        snapshot,
+        actor_id=actor_id,
+        action_kind=action_kind,
+        target_kind=target_kind,
+        target_id=target_id,
+    )
+    investigation_modifier = float(investigation_adjustment.get("modifier") or 0.0)
+    if investigation_modifier != 0.0:
+        utility = _clamp(utility + investigation_modifier, 0.0, 100.0)
+        evaluated.update(
+            investigation_modifier=investigation_modifier,
+            investigation_ids=list(investigation_adjustment.get("investigation_ids") or []),
+            evidence_ids=list(investigation_adjustment.get("evidence_ids") or []),
+            investigation_bridge_version=investigation_adjustment.get("bridge_version"),
+        )
+    return utility, evaluated
+
+
+def world_state_score_modifier(
+    snapshot: FoundationTurnSnapshot,
+    *,
+    actor_id: str,
+    action_kind: str,
+    target_kind: str = "",
+    target_id: str = "",
+) -> Dict[str, Any]:
+    """Bounded Utility AI adjustment from persistent structured world state."""
+    actor_ids, location_ids, faction_ids = _social_context_ids(
+        snapshot,
+        actor_id=actor_id,
+        target_kind=target_kind,
+        target_id=target_id,
+    )
+    rolling_state = snapshot.world_state_ref if isinstance(snapshot.world_state_ref, Mapping) else {}
+    if not rolling_state:
+        rolling_state = {"scene": snapshot.location_ref}
+    matched = world_state_consumers.world_state_signals_for_context(
+        rolling_state,
+        location_ids=location_ids,
+        faction_ids=faction_ids,
+        limit=MAX_WORLD_STATE_SIGNALS_PER_UTILITY_ACTOR,
+    )
+    action = str(action_kind or "").strip().lower()
+    total = 0.0
+    contributing_ids: List[str] = []
+    for row in matched:
+        signal_kind = str(row.get("signal_kind") or "")
+        raw_map = WORLD_STATE_ACTION_MODIFIERS.get(signal_kind, {})
+        raw_modifier = float(raw_map.get(action) or 0.0)
+        if raw_modifier == 0.0:
+            continue
+        severity_factor = _clamp(float(row.get("severity") or 0.0) / 10.0, 0.25, 1.0)
+        contribution = _clamp(
+            raw_modifier * severity_factor,
+            -MAX_WORLD_STATE_NODE_SCORE_MODIFIER,
+            MAX_WORLD_STATE_NODE_SCORE_MODIFIER,
+        )
+        if contribution == 0.0:
+            continue
+        total += contribution
+        signal_id = str(row.get("signal_id") or "")
+        if signal_id and signal_id not in contributing_ids:
+            contributing_ids.append(signal_id)
+    total = _clamp(
+        total,
+        -MAX_WORLD_STATE_TOTAL_SCORE_MODIFIER,
+        MAX_WORLD_STATE_TOTAL_SCORE_MODIFIER,
+    )
+    return {
+        "bridge_version": WORLD_STATE_SCORING_BRIDGE_VERSION,
+        "modifier": round(total, 4),
+        "signal_ids": contributing_ids,
+    }
+
+
 def _hashable_candidate(row: Mapping[str, Any]) -> Dict[str, Any]:
     """Evaluated-candidate projection excluding P2 diagnostic-only keys."""
     return {key: value for key, value in row.items() if key not in _P2_SHADOW_KEYS}
@@ -802,6 +1537,10 @@ def _selected_output(row: Mapping[str, Any]) -> Dict[str, Any]:
     for key in _GOAL_SCORE_KEYS:
         if key in row:
             out[key] = row[key]
+    for key_group in _SOCIAL_SCORE_KEY_GROUPS:
+        for key in key_group:
+            if key in row:
+                out[key] = row[key]
     return out
 
 
@@ -827,6 +1566,10 @@ def _score_table_output(row: Mapping[str, Any]) -> Dict[str, Any]:
     for key in _GOAL_SCORE_KEYS:
         if key in row:
             out[key] = row[key]
+    for key_group in _SOCIAL_SCORE_KEY_GROUPS:
+        for key in key_group:
+            if key in row:
+                out[key] = row[key]
     return out
 
 
@@ -904,6 +1647,24 @@ def select_action(
         goal_modifier = float(goal_adjustment.get("modifier") or 0.0)
         if goal_modifier != 0.0:
             base_utility = _clamp(base_utility + goal_modifier, 0.0, 100.0)
+        base_utility, social_adjustments = _apply_social_score_adjustments(
+            snapshot,
+            actor_id=actor_id,
+            action_kind=action_kind,
+            target_kind=target_kind,
+            target_id=target_id,
+            base_utility=base_utility,
+        )
+        world_state_adjustment = world_state_score_modifier(
+            snapshot,
+            actor_id=actor_id,
+            action_kind=action_kind,
+            target_kind=target_kind,
+            target_id=target_id,
+        )
+        world_state_modifier = float(world_state_adjustment.get("modifier") or 0.0)
+        if world_state_modifier != 0.0:
+            base_utility = _clamp(base_utility + world_state_modifier, 0.0, 100.0)
         c_hash = candidate_set_hash(
             actor_id=actor_id,
             action_kind=action_kind,
@@ -956,6 +1717,14 @@ def select_action(
                 goal_modifier=goal_modifier,
                 goal_ids=list(goal_adjustment.get("goal_ids") or []),
                 goal_bridge_version=goal_adjustment.get("bridge_version"),
+            )
+        if social_adjustments:
+            evaluated.update(social_adjustments)
+        if world_state_modifier != 0.0:
+            evaluated.update(
+                world_state_modifier=world_state_modifier,
+                world_state_signal_ids=list(world_state_adjustment.get("signal_ids") or []),
+                world_state_bridge_version=world_state_adjustment.get("bridge_version"),
             )
         feasible.append(evaluated)
 
