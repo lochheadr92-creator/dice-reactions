@@ -100,6 +100,7 @@ ORIGIN_TYPES = (
     "run_identity",
     "scenario_pressure",
     "structured_event",
+    "pressure_genesis",
 )
 
 TICK_MAGNITUDE_DELTA = 4

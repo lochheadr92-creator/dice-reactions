@@ -113,6 +113,12 @@ CANONICAL_MEMORY_RETRIEVAL_PROMPT_INJECTION_ACCEPTED: bool = False
 # clock (see docs/ch33-lifecycle-phase1.md).
 ENABLE_NPC_LIFECYCLE: bool = _bool_env("ENABLE_NPC_LIFECYCLE")
 
+# Stage 6C-0 — Pressure Genesis scaffold. Default OFF. With the flag OFF,
+# prepare_action_turn does not touch replayability_state at all (flag-off
+# byte-identity gate). This flag alone ships no rule table or commit path —
+# see docs/stage-6c-pressure-genesis-brief.md for the staged rollout.
+ENABLE_PRESSURE_GENESIS: bool = _bool_env("ENABLE_PRESSURE_GENESIS")
+
 # Cost mode. "normal" (default) or "low". When low, prose is compressed
 # and max_tokens is reduced — causality / continuity preserved.
 COST_MODE: str = os.environ.get("COST_MODE", "normal").lower()
@@ -169,4 +175,5 @@ def get_runtime_config() -> dict:
             CANONICAL_MEMORY_RETRIEVAL_PROMPT_INJECTION_ACCEPTED
         ),
         "enable_npc_lifecycle": ENABLE_NPC_LIFECYCLE,
+        "enable_pressure_genesis": ENABLE_PRESSURE_GENESIS,
     }

@@ -33,6 +33,7 @@ import npc_agendas as agendas
 import npc_action_engine
 import npc_world_moves as world_moves
 import opening_state
+import pressure_genesis
 import pressure_graph
 import relationships
 import simulation_clock
@@ -910,6 +911,13 @@ def prepare_action_turn(
                     receipt_type="echo_scheduled",
                     turn_number=turn_number,
                 )
+
+    # Stage 6C-0 scaffold: flag-gated no-op. With ENABLE_PRESSURE_GENESIS off
+    # (default), this branch never runs and `state` is untouched -- required
+    # for the flag-off byte-identity fingerprint gate. On, it only proves the
+    # state-block seam; no rule table or commit path exists yet (6C-1/6C-2).
+    if pressure_genesis.genesis_enabled():
+        state.setdefault("pressure_genesis", pressure_genesis.empty_genesis_state())
 
     world_consumption = world_consumers.consume_pressure_world_events(
         state,
