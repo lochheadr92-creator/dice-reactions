@@ -3,7 +3,7 @@ Centralised AI routing & runtime configuration.
 
 Single source of truth for:
   • the default model used for new chronicles
-  • the safe fallback chain (Sonnet → DeepSeek → Haiku)
+  • the safe fallback chain (Sonnet → DeepSeek)
   • retry / timeout knobs
   • debug-panel feature flag
   • cost-mode preset
@@ -26,23 +26,56 @@ def _csv_env(name: str, default: List[str]) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
-# Primary routing — curated four-model catalogue (see ai_service.SUPPORTED_MODELS)
+# Primary routing — curated admin model catalogue (see ai_service.SUPPORTED_MODELS)
 # ---------------------------------------------------------------------------
 MODEL_SONNET: str = "anthropic/claude-sonnet-4.5"
 MODEL_DEEPSEEK: str = "deepseek/deepseek-chat-v3-0324"
 MODEL_HAIKU: str = "anthropic/claude-haiku-4.5"
+LEGACY_HAIKU_MODEL_IDS = frozenset({"anthropic/claude-3-5-haiku", "anthropic/claude-3-haiku"})
 # Qwen2.5-72B fine-tune — explicit admin selection only; never auto-fallback.
 MODEL_QWEN_UNCENSORED: str = "anthracite-org/magnum-v4-72b"
 
-DEFAULT_MODEL: str = os.environ.get("DEFAULT_MODEL", MODEL_SONNET)
+DEPRECATED_AUTOMATIC_MODEL_IDS = frozenset({MODEL_HAIKU, *LEGACY_HAIKU_MODEL_IDS})
 
-# Ordered automatic fallback catalogue. Uncensored models are excluded.
-FALLBACK_MODELS: List[str] = _csv_env(
+
+def _default_model_env() -> str:
+    requested = os.environ.get("DEFAULT_MODEL", MODEL_SONNET).strip()
+    if not requested or requested in DEPRECATED_AUTOMATIC_MODEL_IDS:
+        return MODEL_SONNET
+    return requested
+
+
+DEFAULT_MODEL: str = _default_model_env()
+
+
+def _fallback_env(name: str, default: List[str]) -> List[str]:
+    selected = _csv_env(name, default)
+    filtered: List[str] = []
+    for model_id in selected:
+        if model_id in DEPRECATED_AUTOMATIC_MODEL_IDS:
+            continue
+        if model_id == MODEL_QWEN_UNCENSORED:
+            continue
+        if model_id not in filtered:
+            filtered.append(model_id)
+    return filtered or list(default)
+
+
+# Ordered automatic fallback catalogue. Uncensored and deprecated models are excluded.
+FALLBACK_MODELS: List[str] = _fallback_env(
     "FALLBACK_MODELS",
-    [MODEL_SONNET, MODEL_DEEPSEEK, MODEL_HAIKU],
+    [MODEL_SONNET, MODEL_DEEPSEEK],
 )
 
-AUTOMATIC_FALLBACK_MODELS = frozenset({MODEL_SONNET, MODEL_DEEPSEEK, MODEL_HAIKU})
+AUTOMATIC_FALLBACK_MODELS = frozenset(FALLBACK_MODELS)
+
+
+def normalize_runtime_model(model_id: Optional[str] = None) -> str:
+    """Map missing or deprecated automatic models to the configured primary."""
+    requested = (model_id or DEFAULT_MODEL).strip()
+    if not requested or requested in DEPRECATED_AUTOMATIC_MODEL_IDS:
+        return DEFAULT_MODEL
+    return requested
 
 
 def build_automatic_fallback_chain(
@@ -52,20 +85,16 @@ def build_automatic_fallback_chain(
 ) -> List[str]:
     """Resolve the ordered fallback chain for automatic provider stepping.
 
-    Premium primary (Sonnet) steps to DeepSeek first, then Haiku.
-    Explicit Haiku primary steps to DeepSeek only.
+    Premium primary (Sonnet) steps to DeepSeek.
+    Deprecated Haiku primary is normalized to the configured primary.
     Uncensored Qwen is never included unless it is the requested primary.
     """
     _ = cost_mode  # reserved — chain order is stable; cost_mode affects tokens elsewhere
-    primary = (primary_model or DEFAULT_MODEL).strip()
+    primary = normalize_runtime_model(primary_model)
     if primary == MODEL_QWEN_UNCENSORED:
         return [primary]
     chain: List[str] = [primary]
-    if primary == MODEL_HAIKU:
-        if MODEL_DEEPSEEK not in chain:
-            chain.append(MODEL_DEEPSEEK)
-        return chain
-    for model_id in (MODEL_DEEPSEEK, MODEL_HAIKU):
+    for model_id in FALLBACK_MODELS:
         if model_id != primary and model_id not in chain:
             chain.append(model_id)
     return chain

@@ -18,14 +18,12 @@ import ai_config  # noqa: E402
 import ai_service  # noqa: E402
 
 
-def test_supported_models_catalogue_is_four_models_only():
+def test_supported_models_catalogue_excludes_haiku():
     models = ai_service.get_supported_models()
     ids = [m["id"] for m in models]
-    assert len(ids) == 4
     assert ids == [
         ai_config.MODEL_SONNET,
         ai_config.MODEL_DEEPSEEK,
-        ai_config.MODEL_HAIKU,
         ai_config.MODEL_QWEN_UNCENSORED,
     ]
 
@@ -34,11 +32,10 @@ def test_default_model_is_sonnet():
     assert ai_config.DEFAULT_MODEL == ai_config.MODEL_SONNET
 
 
-def test_fallback_models_order_sonnet_deepseek_haiku():
+def test_fallback_models_order_sonnet_deepseek():
     assert ai_config.FALLBACK_MODELS == [
         ai_config.MODEL_SONNET,
         ai_config.MODEL_DEEPSEEK,
-        ai_config.MODEL_HAIKU,
     ]
 
 
@@ -47,13 +44,12 @@ def test_automatic_fallback_chain_from_sonnet():
     assert chain == [
         ai_config.MODEL_SONNET,
         ai_config.MODEL_DEEPSEEK,
-        ai_config.MODEL_HAIKU,
     ]
 
 
-def test_automatic_fallback_chain_from_haiku_explicit():
+def test_automatic_fallback_chain_from_haiku_is_normalized_to_default():
     chain = ai_config.build_automatic_fallback_chain(ai_config.MODEL_HAIKU)
-    assert chain == [ai_config.MODEL_HAIKU, ai_config.MODEL_DEEPSEEK]
+    assert chain == [ai_config.MODEL_SONNET, ai_config.MODEL_DEEPSEEK]
 
 
 def test_uncensored_never_in_automatic_chain():
@@ -61,7 +57,38 @@ def test_uncensored_never_in_automatic_chain():
     assert chain == [ai_config.MODEL_QWEN_UNCENSORED]
 
 
-def test_chat_completion_deepseek_before_haiku_on_sonnet_failure():
+def test_haiku_primary_is_never_called_automatically():
+    calls: list[str] = []
+
+    async def fake_once(model_id, messages, temp, mt, extra_headers=None):
+        calls.append(model_id)
+        return "ok", {
+            "model": model_id,
+            "latency_ms": 1,
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+            "provider": "test",
+            "provider_route": "openrouter",
+            "status": ai_service.KIND_OK,
+        }
+
+    with patch.object(ai_service, "_call_model_once", new=AsyncMock(side_effect=fake_once)):
+        result = asyncio.run(
+            ai_service.chat_completion_with_meta(
+                messages=[{"role": "user", "content": "hi"}],
+                primary_model=ai_config.MODEL_HAIKU,
+                fallback_chain=[ai_config.MODEL_HAIKU, ai_config.MODEL_DEEPSEEK],
+                max_retries_per_model=1,
+            )
+        )
+
+    assert result["model_used"] == ai_config.MODEL_SONNET
+    assert calls == [ai_config.MODEL_SONNET]
+    assert ai_config.MODEL_HAIKU not in calls
+
+
+def test_chat_completion_deepseek_on_sonnet_failure_without_haiku():
     calls: list[str] = []
 
     async def fake_once(model_id, messages, temp, mt, extra_headers=None):
@@ -90,4 +117,4 @@ def test_chat_completion_deepseek_before_haiku_on_sonnet_failure():
 
     assert result["model_used"] == ai_config.MODEL_DEEPSEEK
     assert calls[:2] == [ai_config.MODEL_SONNET, ai_config.MODEL_DEEPSEEK]
-    assert ai_config.MODEL_HAIKU not in calls[:2]
+    assert ai_config.MODEL_HAIKU not in calls

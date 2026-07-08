@@ -26,8 +26,8 @@ function friendlyFromText(text: string): { title: string; message: string } {
     return {
       title: "Model is busy",
       message: model
-        ? `${model} is rate-limited right now. Ask an operator to switch the admin model to DeepSeek or Haiku.`
-        : "The active model is being rate-limited upstream. Ask an operator to switch the admin model to DeepSeek or Haiku.",
+        ? `${model} is rate-limited right now. Ask an operator to switch the admin model to DeepSeek or Sonnet.`
+        : "The active model is being rate-limited upstream. Ask an operator to switch the admin model to DeepSeek or Sonnet.",
     };
   }
 
@@ -36,7 +36,7 @@ function friendlyFromText(text: string): { title: string; message: string } {
     return {
       title: "Out of credits",
       message:
-        "The active OpenRouter model needs credits. Add credits at openrouter.ai/settings/credits, or ask an operator to switch to DeepSeek or Haiku.",
+        "The active OpenRouter model needs credits. Add credits at openrouter.ai/settings/credits, or ask an operator to switch to DeepSeek or Sonnet.",
     };
   }
 

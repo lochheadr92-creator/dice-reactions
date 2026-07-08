@@ -38,6 +38,7 @@ from ai_config import (  # noqa: E402
     get_runtime_config,
     resolve_context_budget,
     build_automatic_fallback_chain,
+    normalize_runtime_model,
     NORMAL_CONTEXT_BUDGET_TOKENS,
     LOW_COST_CONTEXT_BUDGET_TOKENS,
     ADVANCED_CONTEXT_BUDGET_TOKENS,
@@ -802,6 +803,24 @@ def parse_turn(raw: str) -> ParsedTurn:
 ADMIN_SETTINGS_KEY = "ai_settings"
 
 
+def _sanitize_automatic_fallback_models(raw: Optional[List[str]]) -> List[str]:
+    source = raw if isinstance(raw, list) else list(FALLBACK_MODELS)
+    filtered: List[str] = []
+    for model_id in source:
+        if model_id in AUTOMATIC_FALLBACK_MODELS and model_id not in filtered:
+            filtered.append(model_id)
+    return filtered or list(FALLBACK_MODELS)
+
+
+def _normalize_ai_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(settings)
+    normalized["model"] = normalize_runtime_model(normalized.get("model") or DEFAULT_MODEL)
+    normalized["fallback_models"] = _sanitize_automatic_fallback_models(
+        normalized.get("fallback_models")
+    )
+    return normalized
+
+
 async def get_ai_settings() -> Dict[str, Any]:
     """Return effective AI settings: DB overrides on top of env defaults."""
     defaults = {
@@ -814,7 +833,27 @@ async def get_ai_settings() -> Dict[str, Any]:
     doc = await db.admin_settings.find_one({"key": ADMIN_SETTINGS_KEY}, {"_id": 0})
     stored = (doc or {}).get("settings") or {}
     merged = {**defaults, **{k: v for k, v in stored.items() if v is not None}}
-    return merged
+    return _normalize_ai_settings(merged)
+
+
+def _resolve_requested_model(session: Dict[str, Any], settings: Dict[str, Any]) -> str:
+    settings_model = normalize_runtime_model(settings.get("model") or DEFAULT_MODEL)
+    active_raw = session.get("active_model")
+    if not active_raw:
+        return settings_model
+
+    active_text = str(active_raw).strip()
+    active_model = normalize_runtime_model(active_text)
+    if active_model != active_text:
+        return settings_model
+    fallback_chain = session.get("fallback_chain")
+    if not isinstance(fallback_chain, list) or not fallback_chain:
+        return settings_model if active_model != settings_model else active_model
+
+    session_primary = normalize_runtime_model(str(fallback_chain[0]))
+    if session_primary != settings_model:
+        return settings_model
+    return active_model
 
 
 # ----------------------------------------------------------------------
@@ -2320,11 +2359,7 @@ async def _generate_turn(
         max_tokens = min(max_tokens, LOW_COST_MAX_TOKENS)
 
     # ---- Session-level model lock + fallback chain ----
-    requested_model = (
-        session.get("active_model")
-        or settings.get("model")
-        or DEFAULT_MODEL
-    )
+    requested_model = _resolve_requested_model(session, settings)
     fallback_chain = build_automatic_fallback_chain(
         requested_model,
         cost_mode=cost_mode,
@@ -2332,10 +2367,9 @@ async def _generate_turn(
 
     # ---- Hints embedded into the upcoming user message ----
     hint_lines: List[str] = []
-    primary_pref = settings.get("model") or DEFAULT_MODEL
+    primary_pref = normalize_runtime_model(settings.get("model") or DEFAULT_MODEL)
     if (
-        session.get("active_model")
-        and session.get("active_model") != primary_pref
+        requested_model != primary_pref
         and session.get("model_switches")
     ):
         # A fallback has already been activated on this session — protect continuity.
@@ -2811,7 +2845,9 @@ async def _generate_validated_turn(
 
         # Retry stays on the model that just answered; provider-level fallback
         # is still permitted if the retry call itself fails.
-        primary_for_retry = meta.get("model_used") or settings.get("model")
+        primary_for_retry = normalize_runtime_model(
+            meta.get("model_used") or settings.get("model") or DEFAULT_MODEL
+        )
         retry_cost_mode = (
             session.get("cost_mode")
             or settings.get("cost_mode")
@@ -3055,9 +3091,10 @@ async def admin_runtime(_: None = Depends(require_admin)):
     if not ENABLE_DEBUG_PANEL:
         raise HTTPException(status_code=404, detail="Debug panel disabled")
     settings = await get_ai_settings()
+    active_default_model = normalize_runtime_model(settings.get("model") or DEFAULT_MODEL)
     return {
-        "active_default_model": settings.get("model"),
-        "fallback_chain": settings.get("fallback_models") or list(FALLBACK_MODELS),
+        "active_default_model": active_default_model,
+        "fallback_chain": build_automatic_fallback_chain(active_default_model),
         "cost_mode": settings.get("cost_mode") or DEFAULT_COST_MODE,
         "developer_mode": settings.get("developer_mode", False),
         "context_budgets": {
@@ -3079,6 +3116,8 @@ async def admin_session_diagnostics(
     session = await db.sessions.find_one({"id": session_id}, {"_id": 0})
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    settings = await get_ai_settings()
+    effective_model = _resolve_requested_model(session, settings)
     latest = (
         await db.turns.find({"session_id": session_id}, {"_id": 0})
         .sort("turn_number", -1)
@@ -3087,9 +3126,8 @@ async def admin_session_diagnostics(
     last_debug = (latest[0].get("debug") if latest else None) or {}
     return {
         "session_id": session_id,
-        "active_model": session.get("active_model"),
-        "fallback_chain": session.get("fallback_chain")
-        or list(FALLBACK_MODELS),
+        "active_model": effective_model,
+        "fallback_chain": build_automatic_fallback_chain(effective_model),
         "cost_mode": session.get("cost_mode") or DEFAULT_COST_MODE,
         "model_switches": session.get("model_switches") or [],
         "turn_count": session.get("turn_count", 0),
@@ -3433,6 +3471,8 @@ async def _create_new_story(req: NewStoryRequest):
         scenario=scenario,
     )
 
+    primary_model = normalize_runtime_model(settings.get("model") or DEFAULT_MODEL)
+
     session = SessionRecord(
         device_id=req.device_id,
         genre=effective_genre,
@@ -3449,9 +3489,9 @@ async def _create_new_story(req: NewStoryRequest):
         creation_request_id=_normalize_creation_request_id(req.creation_request_id),
         replayability_state=replayability_state,
         # ---- session-locked AI routing snapshot ----
-        active_model=settings.get("model") or DEFAULT_MODEL,
+        active_model=primary_model,
         fallback_chain=build_automatic_fallback_chain(
-            settings.get("model") or DEFAULT_MODEL,
+            primary_model,
             cost_mode=(settings.get("cost_mode") or DEFAULT_COST_MODE).lower(),
         ),
         cost_mode=(settings.get("cost_mode") or DEFAULT_COST_MODE).lower(),

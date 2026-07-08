@@ -59,7 +59,6 @@ def test_default_and_fallback_models_use_curated_catalogue():
     assert ai_service.FALLBACK_MODELS == [
         ai_config.MODEL_SONNET,
         ai_config.MODEL_DEEPSEEK,
-        ai_config.MODEL_HAIKU,
     ]
 
 
@@ -108,10 +107,10 @@ def test_catalogue_excludes_openai_when_unconfigured(monkeypatch):
     assert ai_service.DEFAULT_MODEL in ids
 
 
-def test_catalogue_stays_four_models_when_openai_key_configured(monkeypatch):
+def test_catalogue_stays_curated_when_openai_key_configured(monkeypatch):
     monkeypatch.setattr(ai_service, "OPENAI_API_KEY", "sk-test-not-real")
     ids = {m["id"] for m in ai_service.get_supported_models()}
-    assert len(ids) == 4
+    assert len(ids) == 3
     assert not any(i.startswith(ai_service.OPENAI_PROVIDER_PREFIX) for i in ids)
     assert ai_service.DEFAULT_MODEL in ids
 

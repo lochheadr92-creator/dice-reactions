@@ -93,6 +93,7 @@ export type CustomWorldSetup = {
 };
 
 const DEVICE_ID_HEADER = "X-Device-Id";
+const ADMIN_API_KEY_HEADER = "X-Admin-Api-Key";
 
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -103,6 +104,10 @@ async function handle<T>(res: Response): Promise<T> {
 
 function deviceHeaders(deviceId: string): Record<string, string> {
   return { [DEVICE_ID_HEADER]: deviceId };
+}
+
+function adminHeaders(adminKey: string): Record<string, string> {
+  return { [ADMIN_API_KEY_HEADER]: adminKey };
 }
 
 export type NewStoryPayload = {
@@ -232,5 +237,46 @@ export type HealthResponse = {
 
 export async function getHealth(): Promise<HealthResponse> {
   const res = await fetch(`${API}/health`);
+  return handle(res);
+}
+
+export type AdminModel = {
+  id: string;
+  label: string;
+  context?: number;
+  note?: string;
+};
+
+export type AdminSettings = {
+  model: string;
+  temperature?: number;
+  max_tokens?: number;
+  history_window?: number;
+  fallback_models?: string[];
+  developer_mode?: boolean;
+  [key: string]: unknown;
+};
+
+export type AdminSettingsResponse = {
+  settings: AdminSettings;
+  models: AdminModel[];
+};
+
+export async function getAdminSettings(adminKey: string): Promise<AdminSettingsResponse> {
+  const res = await fetch(`${API}/admin/settings`, {
+    headers: adminHeaders(adminKey),
+  });
+  return handle(res);
+}
+
+export async function updateAdminSettings(
+  adminKey: string,
+  patch: Partial<AdminSettings>
+): Promise<{ settings: AdminSettings }> {
+  const res = await fetch(`${API}/admin/settings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...adminHeaders(adminKey) },
+    body: JSON.stringify(patch),
+  });
   return handle(res);
 }

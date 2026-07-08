@@ -8,7 +8,7 @@ swapping providers or models trivial — just adjust ``chat_completion``.
 Features:
     * OpenRouter chat completions over httpx (async)
     * Default model: anthropic/claude-sonnet-4.5  (env-overridable)
-    * Safe fallback chain: Sonnet → DeepSeek → Haiku
+    * Safe fallback chain: Sonnet → DeepSeek
     * Adjustable model / temperature / max_tokens per call
     * Retry with exponential backoff on transient failures (5xx, 408, 429)
     * Error classification for fallback decisions
@@ -33,6 +33,7 @@ from ai_config import (
     MAX_RETRIES,
     PROVIDER_TIMEOUT,
     build_automatic_fallback_chain,
+    normalize_runtime_model,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,12 +85,6 @@ SUPPORTED_MODELS: List[Dict[str, Any]] = [
         "note": "First automatic fallback · cost-saving rescue",
     },
     {
-        "id": "anthropic/claude-haiku-4.5",
-        "label": "Claude Haiku 4.5",
-        "context": 200000,
-        "note": "Fast lightweight fallback · explicit cheap mode",
-    },
-    {
         "id": "anthracite-org/magnum-v4-72b",
         "label": "Magnum v4 72B · Qwen UNCENSORED",
         "context": 32768,
@@ -107,7 +102,7 @@ class AIServiceError(Exception):
 
 
 def get_supported_models() -> List[Dict[str, Any]]:
-    """Return the curated four-model catalogue for admin selection."""
+    """Return the curated admin model catalogue."""
     return list(SUPPORTED_MODELS)
 
 
@@ -343,7 +338,7 @@ async def chat_completion_with_meta(
         else MAX_RETRIES
     )
 
-    requested = primary_model or DEFAULT_MODEL
+    requested = normalize_runtime_model(primary_model or DEFAULT_MODEL)
     # Build ordered chain: primary first, then automatic fallbacks (never uncensored).
     if fallback_chain:
         chain_source = [

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -7,30 +7,44 @@ import {
   ScrollView,
   Switch,
   Alert,
+  TextInput,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONTS } from "../src/theme";
 import { getSettings, saveSettings, AppSettings } from "../src/storage";
+import { getAdminSettings, updateAdminSettings } from "../src/api";
+import type { AdminSettingsResponse } from "../src/api";
 
 export default function SettingsScreen() {
   const router = useRouter();
   const [settings, setSettings] = useState<AppSettings>({ debugDefault: false, fontScale: 1 });
 
   const [devUnlocked, setDevUnlocked] = useState(false);
-  const [versionTaps, setVersionTaps] = useState(0);
+  const versionTapCount = useRef(0);
+  const versionTapReset = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [adminKey, setAdminKey] = useState("");
+  const [adminData, setAdminData] = useState<AdminSettingsResponse | null>(null);
+  const [adminError, setAdminError] = useState("");
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [savingModel, setSavingModel] = useState<string | null>(null);
 
   useEffect(() => {
     getSettings().then((s) => {
       setSettings(s);
       setDevUnlocked(!!s.developerUnlocked);
     });
+    return () => {
+      if (versionTapReset.current) {
+        clearTimeout(versionTapReset.current);
+      }
+    };
   }, []);
 
   const bumpVersionTap = async () => {
-    const next = versionTaps + 1;
-    setVersionTaps(next);
+    const next = versionTapCount.current + 1;
+    versionTapCount.current = next;
     if (next >= 7 && !devUnlocked) {
       setDevUnlocked(true);
       const updated = { ...settings, developerUnlocked: true };
@@ -41,11 +55,20 @@ export default function SettingsScreen() {
         "Local diagnostics preferences unlocked. Server admin settings require operator credentials — see docs/api.md."
       );
     }
-    setTimeout(() => setVersionTaps(0), 2000);
+    if (versionTapReset.current) {
+      clearTimeout(versionTapReset.current);
+    }
+    versionTapReset.current = setTimeout(() => {
+      versionTapCount.current = 0;
+    }, 2000);
   };
 
   const lockDeveloper = async () => {
     setDevUnlocked(false);
+    versionTapCount.current = 0;
+    setAdminData(null);
+    setAdminError("");
+    setAdminKey("");
     const updated = { ...settings, developerUnlocked: false, debugDefault: false };
     setSettings(updated);
     await saveSettings(updated);
@@ -55,6 +78,52 @@ export default function SettingsScreen() {
     const next = { ...settings, ...patch };
     setSettings(next);
     await saveSettings(next);
+  };
+
+  const adminModelLabel = (modelId: string | undefined) => {
+    if (!modelId) return "Unknown";
+    return adminData?.models.find((m) => m.id === modelId)?.label || modelId;
+  };
+
+  const loadAdminSettings = async () => {
+    const key = adminKey.trim();
+    if (!key) {
+      Alert.alert("Admin key required", "Enter the server ADMIN_API_KEY to use AI engine controls.");
+      return;
+    }
+    setAdminLoading(true);
+    setAdminError("");
+    try {
+      const data = await getAdminSettings(key);
+      setAdminData(data);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setAdminError(message);
+      setAdminData(null);
+    } finally {
+      setAdminLoading(false);
+    }
+  };
+
+  const selectModel = async (modelId: string) => {
+    const key = adminKey.trim();
+    if (!key) {
+      Alert.alert("Admin key required", "Enter the server ADMIN_API_KEY to use AI engine controls.");
+      return;
+    }
+    setSavingModel(modelId);
+    setAdminError("");
+    try {
+      const result = await updateAdminSettings(key, { model: modelId });
+      setAdminData((current) =>
+        current ? { ...current, settings: result.settings } : { settings: result.settings, models: [] }
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setAdminError(message);
+    } finally {
+      setSavingModel(null);
+    }
   };
 
   return (
@@ -130,6 +199,75 @@ export default function SettingsScreen() {
             </View>
             <Ionicons name="lock-closed-outline" size={18} color={COLORS.textSecondary} />
           </TouchableOpacity>
+        )}
+
+        {devUnlocked && <Text style={[styles.section, { marginTop: 36 }]}>ADMIN</Text>}
+        {devUnlocked && (
+          <View style={styles.adminPanel} testID="admin-ai-engine">
+            <Text style={styles.rowTitle}>ADMIN - AI ENGINE</Text>
+            <Text style={styles.rowHelp}>
+              Enter the server admin key to read and update runtime model selection.
+            </Text>
+            <TextInput
+              value={adminKey}
+              onChangeText={setAdminKey}
+              placeholder="ADMIN_API_KEY"
+              placeholderTextColor={COLORS.textMuted}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={styles.adminInput}
+              testID="admin-key-input"
+            />
+            <TouchableOpacity
+              style={[styles.adminButton, adminLoading && styles.adminButtonDisabled]}
+              onPress={loadAdminSettings}
+              disabled={adminLoading}
+              testID="admin-load-settings"
+            >
+              <Text style={styles.adminButtonText}>
+                {adminLoading ? "LOADING" : "LOAD AI SETTINGS"}
+              </Text>
+            </TouchableOpacity>
+            {adminError ? (
+              <Text style={styles.adminError} testID="admin-error">
+                {adminError}
+              </Text>
+            ) : null}
+            {adminData ? (
+              <View style={styles.adminModelBox}>
+                <Text style={styles.adminLabel}>ACTIVE MODEL</Text>
+                <Text style={styles.activeModel} testID="active-model-value">
+                  {adminModelLabel(adminData.settings.model)}
+                </Text>
+                <View style={styles.modelList}>
+                  {adminData.models.map((model) => {
+                    const selected = adminData.settings.model === model.id;
+                    const saving = savingModel === model.id;
+                    return (
+                      <TouchableOpacity
+                        key={model.id}
+                        style={[styles.modelButton, selected && styles.modelButtonActive]}
+                        onPress={() => selectModel(model.id)}
+                        disabled={savingModel !== null}
+                        testID={`model-select-${model.id}`}
+                      >
+                        <Text
+                          style={[
+                            styles.modelButtonText,
+                            selected && styles.modelButtonTextActive,
+                          ]}
+                        >
+                          {saving ? "SAVING" : model.label}
+                        </Text>
+                        <Text style={styles.modelNote}>{model.note || model.id}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            ) : null}
+          </View>
         )}
 
         <Text style={[styles.section, { marginTop: 36 }]}>· ABOUT ·</Text>
@@ -215,6 +353,92 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
   },
   scaleChipTextActive: { color: COLORS.primary },
+  adminPanel: {
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.borderDim,
+    backgroundColor: COLORS.surfaceDeep,
+    gap: 12,
+  },
+  adminInput: {
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    color: COLORS.textPrimary,
+    fontFamily: FONTS.mono,
+    fontSize: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: 4,
+  },
+  adminButton: {
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.primarySoft,
+    paddingVertical: 11,
+    alignItems: "center",
+  },
+  adminButtonDisabled: {
+    opacity: 0.55,
+  },
+  adminButtonText: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.primary,
+    fontSize: 11,
+    letterSpacing: 2,
+  },
+  adminError: {
+    fontFamily: FONTS.bodyItalic,
+    color: COLORS.danger,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  adminModelBox: {
+    borderTopWidth: 1,
+    borderTopColor: COLORS.borderDim,
+    paddingTop: 12,
+  },
+  adminLabel: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.textMuted,
+    fontSize: 10,
+    letterSpacing: 2,
+  },
+  activeModel: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.textPrimary,
+    fontSize: 12,
+    marginTop: 6,
+  },
+  modelList: {
+    gap: 8,
+    marginTop: 12,
+  },
+  modelButton: {
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  modelButtonActive: {
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.primarySoft,
+  },
+  modelButtonText: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.textSecondary,
+    fontSize: 11,
+    letterSpacing: 1,
+  },
+  modelButtonTextActive: {
+    color: COLORS.primary,
+  },
+  modelNote: {
+    fontFamily: FONTS.bodyItalic,
+    color: COLORS.textMuted,
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: 4,
+  },
   aboutBox: {
     padding: 16,
     borderWidth: 1,
