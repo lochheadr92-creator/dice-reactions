@@ -912,12 +912,37 @@ def prepare_action_turn(
                     turn_number=turn_number,
                 )
 
-    # Stage 6C-0 scaffold: flag-gated no-op. With ENABLE_PRESSURE_GENESIS off
-    # (default), this branch never runs and `state` is untouched -- required
-    # for the flag-off byte-identity fingerprint gate. On, it only proves the
-    # state-block seam; no rule table or commit path exists yet (6C-1/6C-2).
-    if pressure_genesis.genesis_enabled():
-        state.setdefault("pressure_genesis", pressure_genesis.empty_genesis_state())
+    # Stage 6C-1: flag-gated deterministic pressure generation from existing
+    # canonical signals (blocked goals, open investigations, overloaded actor
+    # stress). With ENABLE_PRESSURE_GENESIS off (default), evolve_pressure_genesis
+    # returns immediately and `state` is untouched -- the flag-off byte-identity
+    # fingerprint gate (backend/tools/simulate_world.py) is the acceptance test
+    # for this invariant, not a unit test mock.
+    genesis_result = pressure_genesis.evolve_pressure_genesis(
+        state,
+        working_rolling,
+        turn_number,
+        run_seed=run_seed,
+    )
+    genesis_diag = genesis_result.get("diagnostics") or {}
+    diagnostics.update(
+        {
+            key: value
+            for key, value in genesis_diag.items()
+            if value not in (False, 0, None, [], {})
+        }
+    )
+    for receipt in genesis_result.get("receipts") or []:
+        if not isinstance(receipt, Mapping):
+            continue
+        receipt_id = str(receipt.get("receipt_id") or "")
+        if receipt_id:
+            _append_transition_receipt(
+                state,
+                source_event_id=receipt_id,
+                receipt_type=str(receipt.get("receipt_type") or "pressure_genesis_evolved"),
+                turn_number=turn_number,
+            )
 
     world_consumption = world_consumers.consume_pressure_world_events(
         state,
