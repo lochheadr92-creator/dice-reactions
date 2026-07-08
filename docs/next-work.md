@@ -55,8 +55,28 @@ Practical backlog from confirmed repo gaps on the **`emergent`** branch. No spec
 | **Resolution** | `npc_agendas.py`, `npc_world_moves.py`, `arc_diversity.py` orchestrated in `replayability.py`; ≤1 deterministic NPC move per turn before narration; Policy A legacy skip; world execution `TURN_COUPLED_AUTONOMY_ONLY` |
 | **Tests** | Living Cast modules run under emergent deterministic CI |
 | **ADR** | ADR-020; amended by ADR-024 scoring bridge |
-| **Remaining blocker** | Relationship provenance |
-| **Follow-up** | Relationship provenance remediation; full PRD Ch 25 Actor Resolution |
+| **Remaining blocker** | None — relationship provenance (the prior golden-path blocker) was resolved 2026-07-02; see NW-RELPROV-01 below |
+| **Follow-up** | Full PRD Ch 25 Actor Resolution remains open; see NW-RELPROV-02 below for a separate, narrow Living Cast provenance-symmetry gap |
+
+### NW-RELPROV-01: Relationship provenance remediation (Phase 1) ✅
+
+| Field | Detail |
+|-------|--------|
+| **Status** | Merged and live on `emergent` (merge commit `5009dec`, branch `phase1-relationship-provenance`, 2026-07-02). Not recorded in this doc, `feature-status.md`, or `current-state.md` at merge time — reconciled here 2026-07-08. No dedicated ADR was written for this remediation. |
+| **Problem it closed** | Relationship vectors could previously be described as mutated by "player intent + generated prose" (see `current-state.md`'s pre-2026-07-02 reconciliation table) — a State-is-truth violation if generated narrative ever fed the mutation path. |
+| **Resolution** | `backend/relationship_provenance.py` — single authoritative mutation path (`apply_relationship_events`) driven only by structured events derived from the player's declared action (`resolve_player_action_events`), never from generated prose. `backend/relationships.py`'s `update_relationship_calculus` now delegates to it directly; the `parsed` (generated-narrative) argument is kept only for call-site compatibility and is provably never read. |
+| **Tests** | `backend/tests/test_relationship_provenance.py` — 15 passed (structured-event updates, prose-driven-update rejection, replay determinism, malformed-event rejection, no duplicate application, event-ordering stability, provenance traceability, dev-only leakage containment). `backend/tests/test_relationship_calculus.py` — 11 passed (existing calculus suite unaffected by the delegation). Both re-run 2026-07-08. |
+| **Follow-up** | See NW-RELPROV-02 (narrow, separate gap) |
+
+### NW-RELPROV-02: Living Cast relationship-effect provenance not wired
+
+| Field | Detail |
+|-------|--------|
+| **Problem** | `relationship_provenance.living_cast_effect_provenance()` exists and is unit-tested but is never called from `relationships.apply_living_cast_relationship_effects` (the actual Living Cast NPC-effect application path, invoked from `replayability.py`) or anywhere else reachable at runtime. Player-action relationship mutation has full structured-event provenance (NW-RELPROV-01); NPC-authored (Living Cast) relationship mutation does not yet get a provenance record anywhere it can be inspected. |
+| **Evidence** | `grep` for `living_cast_effect_provenance(` — only defined in `relationship_provenance.py` and called from `tests/test_relationship_provenance.py`; zero call sites in `relationships.py` or `replayability.py` (2026-07-08). |
+| **Impact** | Cosmetic/diagnostic gap only — does not affect gameplay, determinism, or the State-is-truth guarantee (Living Cast effects were already structured/engine-owned before this). It just means Living Cast relationship deltas aren't traceable the same way player-action deltas are. |
+| **Recommended action** | Either wire `living_cast_effect_provenance` into `apply_living_cast_relationship_effects`'s call site, or explicitly document this as a deferred Phase 2 and scope it there. Do not conflate with NW-RELPROV-01 — that blocker is resolved. |
+| **Files** | `backend/relationships.py` (`apply_living_cast_relationship_effects`), `backend/relationship_provenance.py` (`living_cast_effect_provenance`) |
 
 ### NW-PRESSURE-01: ADR-023 pressure authority remediation ✅
 
@@ -276,6 +296,17 @@ Practical backlog from confirmed repo gaps on the **`emergent`** branch. No spec
 | **Evidence** | 205 backend + 17 frontend tests passed locally 2026-06-20 |
 | **Files** | `.github/workflows/deterministic-ci.yml`, `backend/pytest.ini`, `backend/tests/conftest.py`, `frontend/yarn.lock` |
 | **Follow-up** | Add `yarn lint` to CI when Expo lint runs reliably on Ubuntu runners; run live `@pytest.mark.live` bundle manually |
+
+### NW-P2-04: Reconcile engine-layer docs (situation/goal/npc_action/world_event/investigation/information + pressure_graph/pressure_genesis)
+
+| Field | Detail |
+|-------|--------|
+| **Problem** | `situation_engine.py`, `goal_engine.py`, `npc_action_engine.py`, `world_event_engine.py`, `investigation_engine.py`, `information_engine.py`, `pressure_graph.py`, and `pressure_genesis.py` (Stage 6C) are live on `emergent`, each wired into `replayability.prepare_action_turn` via an `evolve_*` call, and each has a dedicated test file — none of this appears anywhere in this backlog or in `feature-status.md` prior to 2026-07-08. |
+| **Evidence (2026-07-08, offline)** | Test counts, all passing: `test_situation_engine.py` (11), `test_goal_engine.py` (12), `test_npc_action_engine.py` (9), `test_world_event_engine.py` (5), `test_investigation_engine.py` (5), `test_information_engine.py` (12), `test_pressure_graph.py` (26), `test_pressure_genesis.py` (17, Stage 6C-0 scaffold + 6C-1 rule table). Wiring into `prepare_action_turn` confirmed by direct code read, not just test presence. |
+| **Impact** | Anyone reading only `next-work.md`/`feature-status.md` would not know this engine layer exists — same class of staleness NW-DOC-01 fixed in 2026-06-17, recurred since. |
+| **Recommended action** | A dedicated documentation pass (similar to NW-DOC-01) per module: confirm exact wiring/ownership, add `feature-status.md` rows, and record design intent/limits — this backlog entry only confirms presence + offline test status, not full behavioural acceptance. Mark each as "present, needs doc verification" until that pass runs. |
+| **Files** | `docs/feature-status.md`, `docs/next-work.md`, `docs/current-state.md` |
+| **Dependencies** | None |
 
 ---
 

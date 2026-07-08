@@ -33,9 +33,9 @@ This document is the canonical operational snapshot of the repository **as it ex
 | World execution mode | `TURN_COUPLED_AUTONOMY_ONLY` | Same (turn-coupled; no offline sim) |
 | Event sourcing | Turn log only on `emergent` HEAD | **LOCAL SUBSTITUTE** — bounded transition receipts provide idempotency and causal pointers but do not provide canonical reconstruction or durable complete event history; **DEFERRED** — full contract unavailable beyond PRD summary |
 | Pressure authority | **ADR-023 complete** — `replayability_state.pressure_graph` is canonical; `rolling_state.active_pressures` is a derived, engine-owned projection | Recovery branch superseded by canonical `emergent` implementation |
-| Relationship provenance | **Unresolved** — vectors mutated from player intent + generated prose | Same blocker; blocks merge |
+| Relationship provenance | **Unresolved** — vectors mutated from player intent + generated prose *(superseded 2026-07-02 — resolved; this reconciliation table predates the fix. See "Relationship Provenance Remediation — Phase 1 (2026-07-02)" below.)* | Same blocker; blocks merge *(no longer accurate for `emergent` HEAD — see below)* |
 | Feature development | **Frozen** | Recovery work is provisional; not merge-ready |
-| Golden-path blockers | Relationship provenance | Same |
+| Golden-path blockers | Relationship provenance *(resolved 2026-07-02 — see below; no golden-path blocker identified from this reconciliation pass as of 2026-07-08)* | Same |
 
 **Bible text in repository:** Chapters 1–21 full text in `memory/DESIGN_BIBLE.txt`. Chapters 22–32 have **PRD tracker summaries only** — full Chapter 22–32 conformance is **unverified**. Chapter 26 is a **PRD extension associated with Chapter 20**, not a recovered standalone Bible chapter.
 
@@ -570,3 +570,64 @@ grudges/dispositions, leadership succession, player-character death handling,
 `backend/tests/test_npc_lifecycle.py`, `backend/tests/test_simulation_clock.py`,
 `backend/tests/test_simulation_clock_hardening.py`,
 `docs/ch33-lifecycle-phase1.md`.
+
+---
+
+## Relationship Provenance Remediation — Phase 1 (2026-07-02, reconciled 2026-07-08)
+
+The "Relationship provenance | Unresolved" finding in the "Bible implementation
+reality (2026-06-24 reconciliation)" table above predates this fix and is no
+longer accurate for `emergent` HEAD. It was merged 2026-07-02 (merge commit
+`5009dec`, branch `phase1-relationship-provenance`) but was never recorded in
+this document, `feature-status.md`, or `next-work.md` at the time — reconciled
+here 2026-07-08.
+
+**What changed:** `backend/relationship_provenance.py` is now the single
+authoritative relationship-mutation path (`apply_relationship_events`),
+driven only by structured events resolved from the player's declared action
+(`resolve_player_action_events`). `backend/relationships.py`'s
+`update_relationship_calculus` delegates to it directly; its `parsed`
+(generated-narrative) argument is retained only for call-site compatibility
+and is provably never read — prose cannot mutate a vector.
+
+**Evidence:** `backend/relationship_provenance.py`; delegation in
+`backend/relationships.py` (`update_relationship_calculus`, lines ~212-242);
+`backend/tests/test_relationship_provenance.py` — **15 passed**;
+`backend/tests/test_relationship_calculus.py` — **11 passed** (existing suite
+unaffected by the delegation). Both re-run 2026-07-08.
+
+**What remains genuinely open:** full PRD Ch 25 Actor Resolution (Living Cast
+follow-up, unrelated to this fix). Separately, a narrow symmetry gap:
+`relationship_provenance.living_cast_effect_provenance()` exists and is
+unit-tested but is not called from `relationships.apply_living_cast_relationship_effects`
+— Living Cast NPC-authored relationship deltas aren't traced the same way
+player-action deltas now are. Cosmetic/diagnostic only; does not affect
+determinism or State-is-truth. Tracked as `next-work.md` NW-RELPROV-02 —
+do not conflate with the resolved player-action provenance blocker
+(NW-RELPROV-01).
+
+---
+
+## Engine layer presence note (2026-07-08)
+
+`docs/next-work.md` and `docs/feature-status.md` did not mention the
+following modules as of 2026-07-08, despite each being present on `emergent`
+HEAD, wired into `replayability.prepare_action_turn` via an `evolve_*` call
+(confirmed by direct code read), and covered by a passing dedicated test
+file (offline, re-run 2026-07-08):
+
+| Module | Test file | Result |
+|--------|-----------|--------|
+| `situation_engine.py` | `test_situation_engine.py` | 11 passed |
+| `goal_engine.py` | `test_goal_engine.py` | 12 passed |
+| `npc_action_engine.py` | `test_npc_action_engine.py` | 9 passed |
+| `world_event_engine.py` | `test_world_event_engine.py` | 5 passed |
+| `investigation_engine.py` | `test_investigation_engine.py` | 5 passed |
+| `information_engine.py` | `test_information_engine.py` | 12 passed |
+| `pressure_graph.py` | `test_pressure_graph.py` | 26 passed |
+| `pressure_genesis.py` (Stage 6C-0/6C-1) | `test_pressure_genesis.py` | 17 passed |
+
+This note records presence and offline test status only — it is not a full
+design/behavioural verification pass for each module (no live-turn or
+integration-specific claims beyond what `test_replayability_integration.py`
+already covers). Tracked as `next-work.md` NW-P2-04.
