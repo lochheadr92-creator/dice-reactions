@@ -1646,12 +1646,14 @@ def project_promoted_situations_for_rolling(
             import runtime_scheduling
 
             if runtime_scheduling.scheduling_enabled():
+                bands = runtime_scheduling.scheduling_item_bands(replayability_state)
                 situations = [
                     row
                     for row in situations
                     if runtime_scheduling.situation_projection_eligible(
                         str(row.get("situation_id") or ""),
                         meta,
+                        item_bands=bands,
                     )
                 ]
         except Exception:

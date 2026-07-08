@@ -11,7 +11,6 @@ memory_retrieval pipeline; source_truth_preserved is always True.
 
 from __future__ import annotations
 
-import copy
 import hashlib
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
@@ -21,8 +20,9 @@ import gravity_governance
 from engine_determinism import stable_hash
 from foundation_snapshot import FoundationTurnSnapshot
 
-RUNTIME_SCHEDULING_SCHEMA_VERSION = 1
-MAX_SCHEDULING_RECEIPTS = 64
+RUNTIME_SCHEDULING_SCHEMA_VERSION = 2
+MAX_SCHEDULING_RECEIPTS = 20
+_MAX_RECEIPT_DETAIL = 72
 _DURABLE_SCHEDULING_RECEIPT_TYPES = frozenset(
     {
         "actor_promoted",
@@ -84,6 +84,7 @@ def _append_receipt(
     detail: str,
     after: Optional[Mapping[str, Any]] = None,
 ) -> bool:
+    _ = after
     if receipt_type not in SCHEDULING_RECEIPT_TYPES:
         return False
     rid = _stable_receipt_id(receipt_type, turn_number, subject_id, detail)
@@ -94,10 +95,8 @@ def _append_receipt(
         "receipt_type": receipt_type,
         "turn": turn_number,
         "subject_id": subject_id,
-        "detail": str(detail or "")[:160],
+        "detail": str(detail or "")[:_MAX_RECEIPT_DETAIL],
     }
-    if after:
-        receipt["after"] = dict(after)
     receipts.append(receipt)
     if len(receipts) > MAX_SCHEDULING_RECEIPTS:
         receipts[:] = receipts[-MAX_SCHEDULING_RECEIPTS:]
@@ -146,6 +145,53 @@ def _slim_item_bands(item_bands: Mapping[str, str]) -> Dict[str, str]:
         for item_id, band in item_bands.items()
         if str(band) not in ("keep_active", "")
     }
+
+
+def scheduling_item_bands(replayability_state: Mapping[str, Any]) -> Dict[str, str]:
+    """Read projection bands from compact runtime scheduling persistence."""
+    if not isinstance(replayability_state, Mapping):
+        return {}
+    rs = replayability_state.get("runtime_scheduling_v1") or {}
+    if not isinstance(rs, Mapping):
+        return {}
+    legacy = rs.get("item_bands") or {}
+    if isinstance(legacy, Mapping) and legacy:
+        return {str(k): str(v) for k, v in legacy.items()}
+    items = (rs.get("gravity_state") or {}).get("items") or {}
+    if not isinstance(items, Mapping):
+        return {}
+    return {
+        str(item_id): str(row.get("band") or "keep_active")
+        for item_id, row in items.items()
+        if isinstance(row, Mapping)
+    }
+
+
+def _compact_durable_receipt(receipt: Mapping[str, Any]) -> Dict[str, Any]:
+    return {
+        "receipt_id": receipt.get("receipt_id"),
+        "receipt_type": receipt.get("receipt_type"),
+        "turn": receipt.get("turn"),
+        "subject_id": receipt.get("subject_id"),
+        "detail": str(receipt.get("detail") or "")[:_MAX_RECEIPT_DETAIL],
+    }
+
+
+def _should_append_durable_receipt(
+    durable: Sequence[Mapping[str, Any]],
+    receipt: Mapping[str, Any],
+) -> bool:
+    """Skip duplicate consecutive defer/gravity receipts for the same subject."""
+    subject = str(receipt.get("subject_id") or "")
+    rtype = str(receipt.get("receipt_type") or "")
+    detail = str(receipt.get("detail") or "")
+    for prior in reversed(durable):
+        if str(prior.get("subject_id") or "") != subject:
+            continue
+        if str(prior.get("receipt_type") or "") != rtype:
+            break
+        return str(prior.get("detail") or "") != detail
+    return True
 
 
 def _last_action_turn_by_actor(replayability_state: Mapping[str, Any]) -> Dict[str, int]:
@@ -311,6 +357,9 @@ def _gravity_change_receipts(
         new = str(new_bands.get(item_id) or "")
         if not new or old == new:
             continue
+        # Initial band assignment is not a disposition transition.
+        if not old:
+            continue
         if new == "keep_active":
             rtype = "gravity_keep_active"
         elif new in _PROJECTION_COMPRESSED_BANDS:
@@ -360,14 +409,20 @@ def should_update_actor(
 def situation_projection_eligible(
     situation_id: str,
     gravity_metadata: Optional[Mapping[str, Any]],
+    *,
+    item_bands: Optional[Mapping[str, str]] = None,
 ) -> bool:
     """True when a situation may appear in active_situations projection."""
     if not foundation_promotion.gravity_enabled():
         return True
-    if not isinstance(gravity_metadata, Mapping):
-        return True
+    bands: Dict[str, str] = {}
+    if isinstance(item_bands, Mapping):
+        bands = {str(k): str(v) for k, v in item_bands.items()}
+    elif isinstance(gravity_metadata, Mapping):
+        legacy = gravity_metadata.get("item_bands") or {}
+        if isinstance(legacy, Mapping):
+            bands = {str(k): str(v) for k, v in legacy.items()}
     item_id = f"situation:{situation_id}"
-    bands = gravity_metadata.get("item_bands") or {}
     band = str(bands.get(item_id) or "keep_active")
     return band not in _PROJECTION_FADED_BANDS
 
@@ -523,19 +578,27 @@ def _compact_actor_state(actor_prepared: Optional[Mapping[str, Any]]) -> Dict[st
         for actor_id, row in actors.items():
             if not isinstance(row, Mapping):
                 continue
-            compact[str(actor_id)] = {
-                "tier": row.get("tier"),
-                "last_interaction_sim_minutes": row.get("last_interaction_sim_minutes"),
-                "referenceable": row.get("referenceable"),
-                "life_status": row.get("life_status"),
-            }
+            entry: Dict[str, Any] = {"tier": row.get("tier")}
+            last = row.get("last_interaction_sim_minutes")
+            if last is not None:
+                entry["last_interaction_sim_minutes"] = last
+            compact[str(actor_id)] = entry
     return {
         "schema_version": actor_resolution.ACTOR_RESOLUTION_SCHEMA_VERSION,
         "actors": compact,
     }
 
 
-def _compact_gravity_state(gravity_prepared: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+def _compact_gravity_state(
+    gravity_prepared: Optional[Mapping[str, Any]],
+    *,
+    slim_bands: Optional[Mapping[str, str]] = None,
+) -> Dict[str, Any]:
+    if isinstance(slim_bands, Mapping) and slim_bands:
+        return {
+            "schema_version": gravity_governance.GRAVITY_GOVERNANCE_SCHEMA_VERSION,
+            "items": {str(item_id): {"band": str(band)} for item_id, band in slim_bands.items()},
+        }
     if not isinstance(gravity_prepared, Mapping):
         return {"schema_version": gravity_governance.GRAVITY_GOVERNANCE_SCHEMA_VERSION, "items": {}}
     raw = gravity_prepared.get("prepared_state") or {}
@@ -548,12 +611,7 @@ def _compact_gravity_state(gravity_prepared: Optional[Mapping[str, Any]]) -> Dic
             band = str(row.get("band") or "keep_active")
             if band == "keep_active":
                 continue
-            compact[str(item_id)] = {
-                "band": band,
-                "retention_score": row.get("retention_score"),
-                "protected": row.get("protected"),
-                "source_truth_preserved": True,
-            }
+            compact[str(item_id)] = {"band": band}
     return {
         "schema_version": gravity_governance.GRAVITY_GOVERNANCE_SCHEMA_VERSION,
         "items": compact,
@@ -578,31 +636,20 @@ def apply_runtime_scheduling(
     item_bands = dict(scheduling_result.get("item_bands") or {})
     slim_bands = _slim_item_bands(item_bands)
 
-    turn_receipts = list(scheduling_result.get("receipts") or [])[-MAX_SCHEDULING_RECEIPTS:]
     state["runtime_scheduling_v1"] = {
         "schema_version": RUNTIME_SCHEDULING_SCHEMA_VERSION,
         "turn": turn_number,
         "state_hash": scheduling_result.get("state_hash"),
-        "acting_actor_ids": list(scheduling_result.get("acting_actor_ids") or []),
-        "tiers_by_actor_id": dict(scheduling_result.get("tiers_by_actor_id") or {}),
-        "item_bands": slim_bands,
-        "actor_last_action_turn": dict(scheduling_result.get("actor_last_action_turn") or {}),
-        "updated_actor_ids": list(scheduling_result.get("updated_actors") or []),
-        "deferred_actor_ids": [
-            str(row.get("actor_id") or "")
-            for row in scheduling_result.get("deferred_actors") or []
-            if isinstance(row, Mapping)
-        ],
-        "receipts": copy.deepcopy(turn_receipts),
         "actor_resolution_state": _compact_actor_state(
             actor_prepared if isinstance(actor_prepared, Mapping) else None
         ),
         "gravity_state": _compact_gravity_state(
-            gravity_prepared if isinstance(gravity_prepared, Mapping) else None
+            gravity_prepared if isinstance(gravity_prepared, Mapping) else None,
+            slim_bands=slim_bands,
         ),
     }
 
-    # Scheduling-layer gravity metadata — projection/retrieval only, not canonical truth.
+    # Scheduling-layer gravity metadata — counts only; bands live in gravity_state.items.
     faded_ids = [item_id for item_id, band in item_bands.items() if band in _PROJECTION_FADED_BANDS]
     compressed_ids = [
         item_id for item_id, band in item_bands.items() if band in _PROJECTION_COMPRESSED_BANDS
@@ -610,15 +657,12 @@ def apply_runtime_scheduling(
     state["gravity_metadata"] = {
         "schema_version": RUNTIME_SCHEDULING_SCHEMA_VERSION,
         "turn": turn_number,
-        "item_bands": slim_bands,
         "source_truth_preserved": True,
         "compressed_count": len(compressed_ids),
         "faded_count": len(faded_ids),
         "active_count": sum(1 for band in item_bands.values() if band == "keep_active"),
     }
 
-    # Durable log keeps disposition-changing receipts only; per-turn actor_updated
-    # stays in runtime_scheduling_v1.receipts for turn inspection.
     durable = state.setdefault("scheduling_receipts", [])
     for receipt in scheduling_result.get("receipts") or []:
         if not isinstance(receipt, Mapping):
@@ -626,8 +670,12 @@ def apply_runtime_scheduling(
         if str(receipt.get("receipt_type") or "") not in _DURABLE_SCHEDULING_RECEIPT_TYPES:
             continue
         rid = str(receipt.get("receipt_id") or "")
-        if rid and not any(isinstance(r, Mapping) and r.get("receipt_id") == rid for r in durable):
-            durable.append(dict(receipt))
+        compact = _compact_durable_receipt(receipt)
+        if not rid or any(isinstance(r, Mapping) and r.get("receipt_id") == rid for r in durable):
+            continue
+        if not _should_append_durable_receipt(durable, compact):
+            continue
+        durable.append(compact)
     if len(durable) > MAX_SCHEDULING_RECEIPTS:
         state["scheduling_receipts"] = durable[-MAX_SCHEDULING_RECEIPTS:]
 

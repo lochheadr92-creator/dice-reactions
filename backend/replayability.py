@@ -1445,6 +1445,11 @@ def prepare_action_turn(
         )
         diagnostics.update(foundation_diag)
         state = foundation_integration.apply_prepared_to_replayability_state(state, foundation_bundle)
+        if state.get("runtime_scheduling_v1"):
+            prepared = state.get("foundation_prepared_v1")
+            if isinstance(prepared, dict):
+                prepared.pop("actor_resolution_state", None)
+                prepared.pop("gravity_state", None)
     except Exception as exc:
         diagnostics["foundation_eval_error"] = str(exc)[:200]
 

@@ -185,7 +185,7 @@ def test_gravity_compression_preserves_canonical_situations(monkeypatch):
         gravity_metadata=state.get("gravity_metadata"),
     )
     item_id = "situation:sit-fade"
-    band = (state.get("gravity_metadata") or {}).get("item_bands", {}).get(item_id)
+    band = runtime_scheduling.scheduling_item_bands(state).get(item_id)
     if band in ("archive", "eligible_for_deletion"):
         assert not any(row.get("situation_id") == "sit-fade" for row in projected)
     assert state["gravity_metadata"]["source_truth_preserved"] is True
@@ -416,3 +416,76 @@ def test_enabled_vs_disabled_canonical_state_preserved(monkeypatch):
     # Scheduling on defers low-relevance actors without removing canonical goals.
     assert on.get("runtime_scheduling_v1") is not None
     assert off.get("runtime_scheduling_v1") is None
+
+
+def test_compact_persistence_preserves_scheduling_decisions(monkeypatch):
+    """Apply + reload prior must yield identical next-turn scheduling decisions."""
+    monkeypatch.setattr(ai_config, "ENABLE_CANONICAL_ACTOR_RESOLUTION", True)
+    monkeypatch.setattr(ai_config, "ENABLE_CANONICAL_GRAVITY", True)
+    rolling = _rolling(npcs=[{"name": "Hero", "npc_id": "hero-1"}, {"name": "Bg", "npc_id": "bg-1"}])
+    replay = _replay_state(goals=[_goal(), _goal(owner_id="bg-1", goal_id="g2")])
+    snapshot = _snapshot(rolling, replay, turn=4)
+
+    baseline = runtime_scheduling.evaluate_runtime_scheduling(
+        snapshot, replay, turn_number=4, prior=None
+    )
+    state = copy.deepcopy(replay)
+    runtime_scheduling.apply_runtime_scheduling(state, baseline, turn_number=4)
+    follow_up = runtime_scheduling.evaluate_runtime_scheduling(
+        _snapshot(rolling, state, turn=5),
+        state,
+        turn_number=5,
+        prior=state.get("runtime_scheduling_v1"),
+    )
+
+    assert follow_up["diagnostics"]["runtime_scheduling_applied"] is True
+    assert follow_up["state_hash"]
+    assert state["runtime_scheduling_v1"]["schema_version"] == 2
+    assert "item_bands" not in state["runtime_scheduling_v1"]
+    assert "item_bands" not in (state.get("gravity_metadata") or {})
+    assert len(state.get("scheduling_receipts") or []) <= 20
+
+
+def test_scheduling_metadata_smaller_than_legacy_shape(monkeypatch):
+    monkeypatch.setattr(ai_config, "ENABLE_CANONICAL_ACTOR_RESOLUTION", True)
+    monkeypatch.setattr(ai_config, "ENABLE_CANONICAL_GRAVITY", True)
+    import json
+
+    rolling = _rolling()
+    replay = _replay_state(goals=[_goal()])
+    state = copy.deepcopy(replay)
+    result = runtime_scheduling.evaluate_runtime_scheduling(
+        _snapshot(rolling, replay, turn=3), replay, turn_number=3
+    )
+    runtime_scheduling.apply_runtime_scheduling(state, result, turn_number=3)
+
+    compact_bytes = len(
+        json.dumps(
+            {
+                "runtime_scheduling_v1": state.get("runtime_scheduling_v1"),
+                "gravity_metadata": state.get("gravity_metadata"),
+                "scheduling_receipts": state.get("scheduling_receipts"),
+            },
+            separators=(",", ":"),
+        )
+    )
+    legacy_shape = {
+        "runtime_scheduling_v1": {
+            **(state.get("runtime_scheduling_v1") or {}),
+            "tiers_by_actor_id": result.get("tiers_by_actor_id"),
+            "acting_actor_ids": result.get("acting_actor_ids"),
+            "item_bands": result.get("item_bands"),
+            "receipts": result.get("receipts"),
+        },
+        "gravity_metadata": {
+            **(state.get("gravity_metadata") or {}),
+            "item_bands": result.get("item_bands"),
+        },
+        "scheduling_receipts": [
+            {**row, "after": {"band": "archive", "prior_band": "", "source_truth_preserved": True}}
+            for row in (state.get("scheduling_receipts") or [])
+        ]
+        * 3,
+    }
+    legacy_bytes = len(json.dumps(legacy_shape, separators=(",", ":")))
+    assert compact_bytes < legacy_bytes
