@@ -255,6 +255,35 @@ MAX_EVIDENCE_EXPOSURE_SIGNALS_PER_UTILITY_ACTOR = 4
 MAX_EVIDENCE_EXPOSURE_NODE_SCORE_MODIFIER = 3.0
 MAX_EVIDENCE_EXPOSURE_TOTAL_SCORE_MODIFIER = 6.0
 EVIDENCE_EXPOSURE_SCORING_BRIDGE_VERSION = 1
+MAX_AMBITION_SIGNALS_PER_UTILITY_ACTOR = 2
+MAX_AMBITION_NODE_SCORE_MODIFIER = 3.0
+MAX_AMBITION_TOTAL_SCORE_MODIFIER = 5.0
+AMBITION_SCORING_BRIDGE_VERSION = 1
+
+AMBITION_GOAL_ACTION_MODIFIERS: Dict[str, Dict[str, float]] = {
+    "secure_resources": {"gather": 3.0, "negotiate": 2.0, "steal": 1.0, "idle": -1.5},
+    "protect_person": {"protect": 3.0, "withdraw": 1.5, "negotiate": 1.0},
+    "protect_location": {"protect": 2.5, "fortify": 2.5, "gather": 1.0},
+    "gain_influence": {"negotiate": 2.5, "pressure": 2.0, "investigate": 1.0},
+    "uncover_truth": {"investigate": 3.0, "gather": 1.5, "pressure": 1.0},
+    "escape_danger": {"withdraw": 3.0, "conceal": 2.0, "fortify": 1.0},
+    "repay_debt": {"negotiate": 2.5, "gather": 2.0, "trade": 1.5},
+    "preserve_faction": {"protect": 2.5, "negotiate": 2.0, "fortify": 1.5},
+    "remove_rival": {"pressure": 3.0, "investigate": 1.5, "negotiate": 1.0},
+    "restore_loss": {"gather": 2.5, "fortify": 2.0, "negotiate": 1.5},
+}
+
+AMBITION_PLAN_ACTION_MODIFIERS: Dict[str, Dict[str, float]] = {
+    "gather": {"gather": 2.0, "negotiate": 1.0},
+    "protect": {"protect": 2.0, "fortify": 1.0},
+    "investigate": {"investigate": 2.5, "gather": 1.0},
+    "negotiate": {"negotiate": 2.5, "pressure": 0.5},
+    "pressure": {"pressure": 2.5, "negotiate": 1.0},
+    "conceal": {"conceal": 2.5, "withdraw": 1.0},
+    "fortify": {"fortify": 2.5, "protect": 1.0},
+    "withdraw": {"withdraw": 2.5, "conceal": 1.0},
+    "defect": {"withdraw": 2.0, "pressure": 1.5},
+}
 
 EVIDENCE_EXPOSURE_ACTION_MODIFIERS: Dict[str, Dict[str, float]] = {
     "implicated_private": {
@@ -551,6 +580,12 @@ _EVIDENCE_EXPOSURE_SCORE_KEYS = (
     "evidence_exposure_bridge_version",
 )
 
+_AMBITION_SCORE_KEYS = (
+    "ambition_modifier",
+    "ambition_signal_ids",
+    "ambition_bridge_version",
+)
+
 _SOCIAL_SCORE_KEY_GROUPS = (
     _RELATIONSHIP_SCORE_KEYS,
     _REPUTATION_SCORE_KEYS,
@@ -558,6 +593,7 @@ _SOCIAL_SCORE_KEY_GROUPS = (
     _INVESTIGATION_SCORE_KEYS,
     _WORLD_STATE_SCORE_KEYS,
     _EVIDENCE_EXPOSURE_SCORE_KEYS,
+    _AMBITION_SCORE_KEYS,
 )
 
 
@@ -1377,6 +1413,66 @@ def _apply_social_score_adjustments(
     return utility, evaluated
 
 
+def ambition_score_modifier(
+    snapshot: FoundationTurnSnapshot,
+    *,
+    actor_id: str,
+    action_kind: str,
+    target_kind: str = "",
+    target_id: str = "",
+) -> Dict[str, Any]:
+    """Bounded Utility AI adjustment from persistent NPC ambitions."""
+    import npc_agendas as agenda_mod
+
+    actor_ids, _location_ids, _faction_ids = _social_context_ids(
+        snapshot,
+        actor_id=actor_id,
+        target_kind=target_kind,
+        target_id=target_id,
+    )
+    agendas_state = {"active": list(snapshot.agenda_refs)}
+    matched = agenda_mod.ambition_signals_for_context(
+        agendas_state,
+        actor_ids=actor_ids,
+        limit=MAX_AMBITION_SIGNALS_PER_UTILITY_ACTOR,
+    )
+    action = str(action_kind or "").strip().lower()
+    total = 0.0
+    contributing_ids: List[str] = []
+    for row in matched:
+        ambition_kind = str(row.get("ambition_kind") or "")
+        plan_kind = str(row.get("plan_kind") or "")
+        for modifier_map, kind in (
+            (AMBITION_GOAL_ACTION_MODIFIERS, ambition_kind),
+            (AMBITION_PLAN_ACTION_MODIFIERS, plan_kind),
+        ):
+            raw_modifier = float(modifier_map.get(kind, {}).get(action) or 0.0)
+            if raw_modifier == 0.0:
+                continue
+            severity_factor = _clamp(float(row.get("severity") or 0.0) / 10.0, 0.25, 1.0)
+            contribution = _clamp(
+                raw_modifier * severity_factor,
+                -MAX_AMBITION_NODE_SCORE_MODIFIER,
+                MAX_AMBITION_NODE_SCORE_MODIFIER,
+            )
+            if contribution == 0.0:
+                continue
+            total += contribution
+        signal_id = str(row.get("signal_id") or "")
+        if signal_id and signal_id not in contributing_ids:
+            contributing_ids.append(signal_id)
+    total = _clamp(
+        total,
+        -MAX_AMBITION_TOTAL_SCORE_MODIFIER,
+        MAX_AMBITION_TOTAL_SCORE_MODIFIER,
+    )
+    return {
+        "bridge_version": AMBITION_SCORING_BRIDGE_VERSION,
+        "modifier": round(total, 4),
+        "signal_ids": contributing_ids,
+    }
+
+
 def evidence_exposure_score_modifier(
     snapshot: FoundationTurnSnapshot,
     *,
@@ -1770,6 +1866,16 @@ def select_action(
         evidence_exposure_modifier = float(evidence_exposure_adjustment.get("modifier") or 0.0)
         if evidence_exposure_modifier != 0.0:
             base_utility = _clamp(base_utility + evidence_exposure_modifier, 0.0, 100.0)
+        ambition_adjustment = ambition_score_modifier(
+            snapshot,
+            actor_id=actor_id,
+            action_kind=action_kind,
+            target_kind=target_kind,
+            target_id=target_id,
+        )
+        ambition_modifier = float(ambition_adjustment.get("modifier") or 0.0)
+        if ambition_modifier != 0.0:
+            base_utility = _clamp(base_utility + ambition_modifier, 0.0, 100.0)
         c_hash = candidate_set_hash(
             actor_id=actor_id,
             action_kind=action_kind,
@@ -1836,6 +1942,12 @@ def select_action(
                 evidence_exposure_modifier=evidence_exposure_modifier,
                 evidence_exposure_signal_ids=list(evidence_exposure_adjustment.get("signal_ids") or []),
                 evidence_exposure_bridge_version=evidence_exposure_adjustment.get("bridge_version"),
+            )
+        if ambition_modifier != 0.0:
+            evaluated.update(
+                ambition_modifier=ambition_modifier,
+                ambition_signal_ids=list(ambition_adjustment.get("signal_ids") or []),
+                ambition_bridge_version=ambition_adjustment.get("bridge_version"),
             )
         feasible.append(evaluated)
 

@@ -13,6 +13,7 @@ import hashlib
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import investigation_engine
+import npc_agendas
 import world_state_consumers
 
 GOAL_ENGINE_VERSION = 1
@@ -636,6 +637,8 @@ EVIDENCE_EXPOSURE_TO_GOAL_TYPE = {
     "accused_pressure": "hide_evidence",
 }
 
+AMBITION_TO_GOAL_TYPE = dict(npc_agendas.AGENDA_GOAL_TO_ENGINE_GOAL)
+
 
 def _candidate_from_world_state_signal(
     signal: Mapping[str, Any],
@@ -729,6 +732,53 @@ def _candidate_from_evidence_exposure(
             "evidence_refs": [f"evidence_exposure:{signal_id}"] + ([evidence_id] if evidence_id else []),
             "expiry": turn_number + DEFAULT_EXPIRY_TURNS,
             "source_event_ids": [signal_id],
+            "plan_steps": _generate_plan(goal_type),
+            "dedupe_key": dedupe,
+            "last_reinforced_turn": turn_number,
+        },
+        run_seed=run_seed,
+    )
+
+
+def _candidate_from_ambition_signal(
+    signal: Mapping[str, Any],
+    *,
+    turn_number: int,
+    run_seed: str,
+) -> Optional[Dict[str, Any]]:
+    ambition_kind = str(signal.get("ambition_kind") or "")
+    goal_type = AMBITION_TO_GOAL_TYPE.get(ambition_kind)
+    npc_id = _bounded_str(signal.get("npc_id"), 120)
+    agenda_id = _bounded_str(signal.get("agenda_id") or signal.get("signal_id"), 160)
+    if not goal_type or not npc_id or not agenda_id:
+        return None
+    dedupe = _dedupe_key("npc", npc_id, goal_type, agenda_id)
+    severity = _clamp_int(signal.get("severity"), 0, 10, default=5)
+    progress = _clamp_int(signal.get("progress"), 0, 100, default=15)
+    return _normalise_goal(
+        {
+            "goal_id": _goal_id(run_seed, dedupe),
+            "owner_type": "npc",
+            "owner_id": npc_id,
+            "goal_type": goal_type,
+            "title": _goal_title(goal_type),
+            "status": "active" if severity >= 4 else "forming",
+            "priority": severity,
+            "urgency": severity,
+            "progress": min(60, progress),
+            "confidence": min(100, 35 + progress // 2),
+            "created_turn": turn_number,
+            "updated_turn": turn_number,
+            "parent_situation_ids": [],
+            "supporting_pressure_ids": [],
+            "target_actor_ids": [],
+            "target_location_ids": [],
+            "required_resources": GOAL_REQUIRED_RESOURCES.get(goal_type, ()),
+            "blockers": [],
+            "prerequisites": GOAL_PREREQUISITES.get(goal_type, ()),
+            "evidence_refs": [f"ambition:{agenda_id}"],
+            "expiry": turn_number + DEFAULT_EXPIRY_TURNS,
+            "source_event_ids": [agenda_id],
             "plan_steps": _generate_plan(goal_type),
             "dedupe_key": dedupe,
             "last_reinforced_turn": turn_number,
@@ -1135,6 +1185,16 @@ def evolve_goals(
         if len(candidates) >= MAX_GOAL_INPUTS_PER_TICK:
             break
         candidate = _candidate_from_evidence_exposure(signal, turn_number=turn_number, run_seed=seed)
+        if candidate:
+            candidates.append(candidate)
+
+    for signal in npc_agendas.ambition_signals_for_context(
+        replayability_state.get("npc_agendas") or {},
+        rolling_state=rolling_state,
+    ):
+        if len(candidates) >= MAX_GOAL_INPUTS_PER_TICK:
+            break
+        candidate = _candidate_from_ambition_signal(signal, turn_number=turn_number, run_seed=seed)
         if candidate:
             candidates.append(candidate)
 

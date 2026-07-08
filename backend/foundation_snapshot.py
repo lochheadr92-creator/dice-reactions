@@ -12,6 +12,7 @@ import goal_engine
 import information_engine
 import investigation_engine
 import npc_action_engine
+import npc_agendas
 import situation_engine
 import world_event_engine
 import world_state_consumers
@@ -81,6 +82,9 @@ class FoundationTurnSnapshot:
             hash_material["investigations"] = investigation_state
         if information_state.get("information_items") or information_state.get("reputation_signals"):
             hash_material["information"] = information_state
+        ambition_state = npc_agendas.copy_ambition_state(replay.get("npc_agendas"))
+        if ambition_state.get("active"):
+            hash_material["ambitions"] = ambition_state
         world_state = world_state_consumers.copy_world_state(rolling)
         if world_state:
             hash_material["world_state"] = world_state
@@ -112,7 +116,7 @@ class FoundationTurnSnapshot:
             },
             agenda_refs=tuple(
                 dict(row)
-                for row in (replay.get("npc_agendas") or {}).get("agendas") or []
+                for row in npc_agendas.copy_ambition_state(replay.get("npc_agendas")).get("active") or []
                 if isinstance(row, dict)
             ),
             location_ref=str(rolling.get("scene") or rolling.get("location") or ""),
@@ -452,6 +456,11 @@ def _utility_input_refs(
             actor_ids=[actor_id, actor.get("display_name") or ""],
             location_ids=actor_locations,
         )
+        ambition_signals = npc_agendas.ambition_signals_for_context(
+            replay.get("npc_agendas") or {},
+            actor_ids=[actor_id, actor.get("display_name") or ""],
+            rolling_state=rolling,
+        )
         active_goals = goal_engine.active_goals_for_context(
             goal_state,
             actor_ids=[actor_id, actor.get("display_name") or ""],
@@ -535,6 +544,8 @@ def _utility_input_refs(
                     for row in evidence_exposure_signals
                     for behaviour in (row.get("behaviours") or [])
                 ][:4],
+                "ambition_kinds": [row.get("ambition_kind") for row in ambition_signals],
+                "ambition_signal_ids": [row.get("signal_id") for row in ambition_signals],
             }
         )
     return sorted(refs, key=lambda row: row["actor_id"])

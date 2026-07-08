@@ -10,7 +10,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import re
-from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from run_identity import select_from_namespace
 
@@ -370,3 +370,157 @@ def strip_model_agenda_mutations(
 
 def copy_agendas_state(state: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     return copy.deepcopy(state) if isinstance(state, dict) else init_npc_agendas()
+
+
+# --- Ambition bridge (Stage 6C-7): read-side projections for goals / utility / promotion ---
+
+MAX_AMBITION_CONTEXT_SIGNALS = 4
+MAX_AMBITION_BRIDGE_NPCS = 8
+MIN_AMBITION_PROGRESS = 10
+AMBITION_BRIDGE_VERSION = 1
+AMBITIOUS_NPC_STATUSES = frozenset({"active", "breaking"})
+
+AGENDA_GOAL_TO_ENGINE_GOAL = {
+    "secure_resources": "secure_food",
+    "protect_person": "protect_family",
+    "protect_location": "defend_settlement",
+    "gain_influence": "remove_rival_influence",
+    "uncover_truth": "find_murderer",
+    "escape_danger": "escape_city",
+    "repay_debt": "secure_trade_route",
+    "preserve_faction": "defend_settlement",
+    "remove_rival": "remove_rival_influence",
+    "restore_loss": "restore_route",
+}
+
+
+def _token_set(*values: Any) -> set:
+    tokens = set()
+    for value in values:
+        raw = value if isinstance(value, (list, tuple, set)) else [value]
+        for item in raw:
+            text = str(item or "").strip().lower()
+            if text:
+                tokens.add(text)
+    return tokens
+
+
+def _npc_ids_in_rolling(rolling_state: Optional[Mapping[str, Any]]) -> Optional[set]:
+    if not isinstance(rolling_state, Mapping):
+        return None
+    ids = set()
+    for row in rolling_state.get("npcs") or []:
+        if not isinstance(row, Mapping):
+            continue
+        npc_id = str(row.get("npc_id") or "").strip().lower()
+        if npc_id:
+            ids.add(npc_id)
+    return ids
+
+
+def _important_agenda_rows(
+    agendas_state: Mapping[str, Any],
+    *,
+    rolling_state: Optional[Mapping[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    scene_npc_ids = _npc_ids_in_rolling(rolling_state)
+    rows: List[Dict[str, Any]] = []
+    for agenda in agendas_state.get("active") or []:
+        if not isinstance(agenda, dict):
+            continue
+        if str(agenda.get("status") or "") not in AMBITIOUS_NPC_STATUSES:
+            continue
+        npc_id = str(agenda.get("npc_id") or "").strip()
+        if not npc_id:
+            continue
+        if int(agenda.get("progress") or 0) < MIN_AMBITION_PROGRESS:
+            continue
+        if scene_npc_ids is not None and npc_id.lower() not in scene_npc_ids:
+            continue
+        rows.append(agenda)
+    rows.sort(
+        key=lambda row: (
+            -int(row.get("progress") or 0),
+            str(row.get("npc_id") or ""),
+        )
+    )
+    return rows[:MAX_AMBITION_BRIDGE_NPCS]
+
+
+def ambition_signals_for_context(
+    agendas_state: Mapping[str, Any],
+    *,
+    actor_ids: Sequence[str] = (),
+    rolling_state: Optional[Mapping[str, Any]] = None,
+    limit: int = MAX_AMBITION_CONTEXT_SIGNALS,
+) -> List[Dict[str, Any]]:
+    """Deterministic read-side projection of persistent NPC ambitions for engine bridges."""
+    if not isinstance(agendas_state, Mapping):
+        return []
+    context_actors = _token_set(actor_ids)
+    signals: List[Dict[str, Any]] = []
+    for agenda in _important_agenda_rows(agendas_state, rolling_state=rolling_state):
+        npc_id = str(agenda.get("npc_id") or "")
+        if context_actors and npc_id.lower() not in context_actors:
+            continue
+        progress = int(agenda.get("progress") or 0)
+        goal_kind = str(agenda.get("goal_kind") or "")
+        if goal_kind not in GOAL_KINDS:
+            continue
+        agenda_id_val = str(agenda.get("agenda_id") or agenda_id(npc_id))
+        signals.append(
+            {
+                "ambition_kind": goal_kind,
+                "signal_id": agenda_id_val,
+                "agenda_id": agenda_id_val,
+                "npc_id": npc_id,
+                "plan_kind": str(agenda.get("plan_kind") or ""),
+                "fear_kind": str(agenda.get("fear_kind") or ""),
+                "progress": progress,
+                "severity": max(4, min(10, progress // 10)),
+                "status": str(agenda.get("status") or "active"),
+            }
+        )
+    return signals[: max(0, min(MAX_AMBITION_CONTEXT_SIGNALS, int(limit or 0)))]
+
+
+def ambition_opportunity_labels(signals: Sequence[Mapping[str, Any]]) -> List[str]:
+    labels_by_kind = {
+        "secure_resources": "help secure scarce resources",
+        "protect_person": "support protecting someone important",
+        "protect_location": "aid defense of a key location",
+        "gain_influence": "navigate a bid for influence",
+        "uncover_truth": "follow a long-running truth hunt",
+        "escape_danger": "assist an escape from mounting danger",
+        "repay_debt": "broker repayment of a lingering debt",
+        "preserve_faction": "shore up a fraying faction",
+        "remove_rival": "counter a rival's rising power",
+        "restore_loss": "help recover what was lost",
+    }
+    labels: List[str] = []
+    for row in signals:
+        label = labels_by_kind.get(str(row.get("ambition_kind") or ""))
+        if label and label not in labels:
+            labels.append(label)
+        if len(labels) >= 4:
+            break
+    return labels[:4]
+
+
+def copy_ambition_state(agendas_state: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(agendas_state, Mapping):
+        return {"active": []}
+    active = []
+    for row in _important_agenda_rows(agendas_state):
+        active.append(
+            {
+                "agenda_id": row.get("agenda_id"),
+                "npc_id": row.get("npc_id"),
+                "goal_kind": row.get("goal_kind"),
+                "plan_kind": row.get("plan_kind"),
+                "fear_kind": row.get("fear_kind"),
+                "progress": row.get("progress"),
+                "status": row.get("status"),
+            }
+        )
+    return {"active": active}

@@ -13,6 +13,7 @@ import hashlib
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import investigation_engine
+import npc_agendas
 import world_state_consumers
 
 SITUATION_ENGINE_VERSION = 1
@@ -92,6 +93,8 @@ PROMOTED_SITUATION_FIELDS = (
     "world_state_opportunities",
     "evidence_exposure_signals",
     "evidence_exposure_behaviours",
+    "ambition_signals",
+    "ambition_opportunities",
 )
 
 CREATION_PRESSURE_THRESHOLD = 50
@@ -1461,14 +1464,44 @@ def _evidence_exposure_signals_for_situation(
     ]
 
 
+def _ambition_signals_for_situation(
+    row: Mapping[str, Any],
+    replayability_state: Mapping[str, Any],
+    *,
+    rolling_state: Optional[Mapping[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    actors = list(row.get("involved_actor_ids") or [])
+    matched = npc_agendas.ambition_signals_for_context(
+        replayability_state.get("npc_agendas") or {},
+        actor_ids=actors,
+        rolling_state=rolling_state,
+    )
+    return [
+        {
+            "ambition_kind": signal.get("ambition_kind"),
+            "signal_id": signal.get("signal_id"),
+            "npc_id": signal.get("npc_id"),
+            "plan_kind": signal.get("plan_kind"),
+            "progress": signal.get("progress"),
+        }
+        for signal in matched
+    ]
+
+
 def _player_opportunities_for_situation(
     row: Mapping[str, Any],
     related_goals: Sequence[Mapping[str, Any]],
     *,
     world_state_signals: Sequence[Mapping[str, Any]] = (),
     evidence_exposure_signals: Sequence[Mapping[str, Any]] = (),
+    ambition_signals: Sequence[Mapping[str, Any]] = (),
 ) -> List[str]:
     opportunities: List[str] = []
+    for label in npc_agendas.ambition_opportunity_labels(ambition_signals):
+        if label not in opportunities:
+            opportunities.append(label)
+        if len(opportunities) >= MAX_PROMOTED_OPPORTUNITIES:
+            return opportunities[:MAX_PROMOTED_OPPORTUNITIES]
     for label in investigation_engine.evidence_exposure_opportunity_labels(evidence_exposure_signals):
         if label not in opportunities:
             opportunities.append(label)
@@ -1548,6 +1581,11 @@ def project_promoted_situation(
     )
     world_state_signals = _world_state_signals_for_situation(row, rolling_state)
     evidence_exposure_signals = _evidence_exposure_signals_for_situation(row, replayability_state)
+    ambition_signals = _ambition_signals_for_situation(
+        row,
+        replayability_state,
+        rolling_state=rolling_state,
+    )
     return {
         "situation_id": row.get("situation_id"),
         "type": row.get("type"),
@@ -1568,6 +1606,7 @@ def project_promoted_situation(
             related_goals,
             world_state_signals=world_state_signals,
             evidence_exposure_signals=evidence_exposure_signals,
+            ambition_signals=ambition_signals,
         ),
         "related_goals": related_goals,
         "related_information": related_information,
@@ -1580,6 +1619,8 @@ def project_promoted_situation(
         "evidence_exposure_behaviours": investigation_engine.evidence_exposure_opportunity_labels(
             evidence_exposure_signals
         ),
+        "ambition_signals": ambition_signals,
+        "ambition_opportunities": npc_agendas.ambition_opportunity_labels(ambition_signals),
     }
 
 
