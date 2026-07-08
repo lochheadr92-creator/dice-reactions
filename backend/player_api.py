@@ -7,6 +7,7 @@ never pass through by default. Nested dicts and lists are scrubbed recursively.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
@@ -240,7 +241,35 @@ def build_player_choices(choices: Any) -> List[Dict[str, str]]:
     return out
 
 
-def build_player_turn(turn: Dict[str, Any]) -> Dict[str, Any]:
+def build_player_debug(debug: Any) -> Dict[str, str]:
+    """Sanitized per-turn debug KV for dev-mode play UI only."""
+    if not debug or not isinstance(debug, dict):
+        return {}
+    out: Dict[str, str] = {}
+    for key, value in debug.items():
+        if _nested_key_blocked(key):
+            continue
+        if value is None:
+            continue
+        if isinstance(value, dict):
+            nested = _sanitize_nested_value(value)
+            if nested:
+                out[key] = _scrub_player_string(json.dumps(nested))
+            continue
+        if isinstance(value, list):
+            nested = _sanitize_nested_value(value)
+            if nested:
+                out[key] = _scrub_player_string(json.dumps(nested))
+            continue
+        out[key] = _scrub_player_string(value)
+    return out
+
+
+def build_player_turn(
+    turn: Dict[str, Any],
+    *,
+    include_debug: bool = False,
+) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for field in PLAYER_TURN_FIELDS:
         if field not in turn:
@@ -260,6 +289,10 @@ def build_player_turn(turn: Dict[str, Any]) -> Dict[str, Any]:
             out[field] = _scrub_player_string(value)
         else:
             out[field] = value
+    if include_debug:
+        debug_out = build_player_debug(turn.get("debug"))
+        if debug_out:
+            out["debug"] = debug_out
     return out
 
 

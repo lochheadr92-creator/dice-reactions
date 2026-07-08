@@ -33,7 +33,7 @@ def test_default_model_routes_to_openrouter():
     r = ai_service.resolve_provider_route(ai_service.DEFAULT_MODEL)
     assert r["provider"] == "openrouter"
     assert r["base_url"] == ai_service.OPENROUTER_BASE_URL
-    assert r["api_model"] == "anthropic/claude-haiku-4.5"
+    assert r["api_model"] == ai_config.MODEL_SONNET
     assert r["key_env"] == "OPENROUTER_API_KEY"
     # OpenRouter-specific attribution headers must be preserved unchanged.
     assert "HTTP-Referer" in r["extra_headers"]
@@ -54,11 +54,12 @@ def test_default_model_constant_is_openrouter():
     assert not ai_service.DEFAULT_MODEL.startswith(ai_service.OPENAI_PROVIDER_PREFIX)
 
 
-def test_default_and_fallback_models_use_current_anthropic_ids():
-    assert ai_service.DEFAULT_MODEL == "anthropic/claude-haiku-4.5"
-    assert ai_service.FALLBACK_MODELS[:2] == [
-        "anthropic/claude-haiku-4.5",
-        "anthropic/claude-sonnet-4.5",
+def test_default_and_fallback_models_use_curated_catalogue():
+    assert ai_service.DEFAULT_MODEL == ai_config.MODEL_SONNET
+    assert ai_service.FALLBACK_MODELS == [
+        ai_config.MODEL_SONNET,
+        ai_config.MODEL_DEEPSEEK,
+        ai_config.MODEL_HAIKU,
     ]
 
 
@@ -107,11 +108,11 @@ def test_catalogue_excludes_openai_when_unconfigured(monkeypatch):
     assert ai_service.DEFAULT_MODEL in ids
 
 
-def test_catalogue_includes_openai_when_configured(monkeypatch):
+def test_catalogue_stays_four_models_when_openai_key_configured(monkeypatch):
     monkeypatch.setattr(ai_service, "OPENAI_API_KEY", "sk-test-not-real")
     ids = {m["id"] for m in ai_service.get_supported_models()}
-    assert any(i.startswith(ai_service.OPENAI_PROVIDER_PREFIX) for i in ids)
-    # OpenRouter models remain present (default provider unchanged).
+    assert len(ids) == 4
+    assert not any(i.startswith(ai_service.OPENAI_PROVIDER_PREFIX) for i in ids)
     assert ai_service.DEFAULT_MODEL in ids
 
 

@@ -340,3 +340,296 @@ def test_pressure_bridge_replay_decisions_are_identical():
     first = utility_ai.select_action(candidates, snapshot=snapshot, actor_resolution=actor_resolution)
     second = utility_ai.select_action(candidates, snapshot=snapshot, actor_resolution=actor_resolution)
     assert first == second
+
+
+def _social_snapshot(*, rolling=None, replayability=None, turn=4):
+    rolling_state = rolling or {
+        "scene": "dock",
+        "npcs": [{"name": "Guard", "npc_id": "g1", "location_id": "dock"}],
+    }
+    replay = {
+        "run_seed": "utility-seed",
+        "pressure_graph": {"nodes": [], "foreground_node_id": None},
+        **(replayability or {}),
+    }
+    return FoundationTurnSnapshot.build(
+        run_seed="utility-seed",
+        turn_sequence=turn,
+        rolling_state=rolling_state,
+        replayability_state=replay,
+    )
+
+
+def _visible_information_item(
+    information_id="info-rumour",
+    *,
+    summary="raid warning",
+    gravity=80,
+    location_id="dock",
+):
+    return {
+        "information_id": information_id,
+        "information_type": "rumour",
+        "summary": summary,
+        "source_event_ids": ["evt-rumour"],
+        "subject_refs": [{"subject_type": "location", "subject_id": location_id}],
+        "known_by": [{"scope_type": "settlement", "scope_id": location_id}],
+        "observer_access": [
+            {
+                "access_type": "local_community",
+                "scope_type": "settlement",
+                "scope_id": location_id,
+                "source_event_ids": ["evt-rumour"],
+                "reliability": 80,
+                "distortion_level": 4,
+                "acquired_at": {"turn": 3},
+            }
+        ],
+        "reliability": 80,
+        "reliability_band": "high",
+        "distortion_level": 4,
+        "visibility_scope": "settlement",
+        "gravity": gravity,
+        "created_at": {"turn": 3},
+        "updated_at": {"turn": 3},
+    }
+
+
+def test_relationship_resentment_boosts_pressure_and_changes_selection():
+    actor_resolution = {"acting_actor_ids": ["g1"], "tiers_by_actor_id": {"g1": "hero"}}
+    candidates = [
+        _candidate("g1", action_kind="negotiate", target_kind="player", target_id="player"),
+        _candidate("g1", action_kind="pressure", target_kind="player", target_id="player"),
+    ]
+    resentful = _social_snapshot(
+        rolling={
+            "scene": "dock",
+            "npcs": [{"name": "Guard", "npc_id": "g1", "location_id": "dock"}],
+            "relationship_vectors": [
+                {"name": "Guard", "npc_id": "g1", "trust": -20, "loyalty": 10, "fear": 10, "resentment": 85}
+            ],
+        }
+    )
+    trusting = _social_snapshot(
+        rolling={
+            "scene": "dock",
+            "npcs": [{"name": "Guard", "npc_id": "g1", "location_id": "dock"}],
+            "relationship_vectors": [
+                {"name": "Guard", "npc_id": "g1", "trust": 85, "loyalty": 70, "fear": 5, "resentment": 5}
+            ],
+        }
+    )
+
+    resentful_result = utility_ai.select_action(candidates, snapshot=resentful, actor_resolution=actor_resolution)
+    trusting_result = utility_ai.select_action(candidates, snapshot=trusting, actor_resolution=actor_resolution)
+
+    resent_pressure = _score_row(resentful_result, actor_id="g1", action_kind="pressure")
+    resent_negotiate = _score_row(resentful_result, actor_id="g1", action_kind="negotiate")
+    trust_negotiate = _score_row(trusting_result, actor_id="g1", action_kind="negotiate")
+    assert resent_pressure["relationship_modifier"] > 0
+    assert "resentment" in resent_pressure["relationship_signals"]
+    assert trust_negotiate["relationship_modifier"] > 0
+    assert "trust_positive" in trust_negotiate["relationship_signals"]
+    assert resentful_result["selected_action_kind"] == "pressure"
+    assert trusting_result["selected_action_kind"] == "negotiate"
+    assert resent_negotiate["base_utility"] < trust_negotiate["base_utility"]
+
+
+def test_reputation_dangerous_boosts_avoid_over_negotiate():
+    actor_resolution = {"acting_actor_ids": ["g1"], "tiers_by_actor_id": {"g1": "hero"}}
+    candidates = [
+        _candidate("g1", action_kind="avoid", target_kind="player", target_id="player"),
+        _candidate("g1", action_kind="negotiate", target_kind="player", target_id="player"),
+    ]
+    baseline = _social_snapshot()
+    dangerous = _social_snapshot(
+        replayability={
+            "reputation_signals": [
+                {
+                    "signal_id": "rep-danger-player",
+                    "subject_type": "actor",
+                    "subject_id": "player",
+                    "dimension": "dangerous",
+                    "score": 60,
+                    "observer_scope": {"scope_type": "public", "scope_id": "public"},
+                    "confidence": 80,
+                    "reliability": 80,
+                }
+            ]
+        }
+    )
+
+    baseline_result = utility_ai.select_action(candidates, snapshot=baseline, actor_resolution=actor_resolution)
+    dangerous_result = utility_ai.select_action(candidates, snapshot=dangerous, actor_resolution=actor_resolution)
+
+    assert "reputation_modifier" not in _score_row(baseline_result, actor_id="g1", action_kind="avoid")
+    avoid_row = _score_row(dangerous_result, actor_id="g1", action_kind="avoid")
+    negotiate_row = _score_row(dangerous_result, actor_id="g1", action_kind="negotiate")
+    assert avoid_row["reputation_modifier"] > 0
+    assert negotiate_row["reputation_modifier"] < 0
+    assert dangerous_result["selected_action_kind"] == "avoid"
+
+
+def test_information_rumour_boosts_investigate():
+    actor_resolution = {"acting_actor_ids": ["g1"], "tiers_by_actor_id": {"g1": "hero"}}
+    candidates = [
+        _candidate("g1", action_kind="investigate"),
+        _candidate("g1", action_kind="idle"),
+    ]
+    baseline = _social_snapshot()
+    informed = _social_snapshot(
+        replayability={"information_items": [_visible_information_item()]},
+    )
+
+    baseline_result = utility_ai.select_action(candidates, snapshot=baseline, actor_resolution=actor_resolution)
+    informed_result = utility_ai.select_action(candidates, snapshot=informed, actor_resolution=actor_resolution)
+
+    assert "information_modifier" not in _score_row(baseline_result, actor_id="g1", action_kind="investigate")
+    investigate_row = _score_row(informed_result, actor_id="g1", action_kind="investigate")
+    assert investigate_row["information_modifier"] > 0
+    assert investigate_row["information_ids"]
+    assert informed_result["selected_action_kind"] == "investigate"
+
+
+def test_investigation_evidence_boosts_investigate():
+    actor_resolution = {"acting_actor_ids": ["g1"], "tiers_by_actor_id": {"g1": "hero"}}
+    candidates = [
+        _candidate("g1", action_kind="investigate"),
+        _candidate("g1", action_kind="gather"),
+    ]
+    baseline = _social_snapshot()
+    investigating = _social_snapshot(
+        replayability={
+            "evidence": [
+                {
+                    "evidence_id": "ev-clue",
+                    "evidence_type": "physical_clue",
+                    "confidence": 85,
+                    "reliability": 85,
+                    "discovered_by": ["g1"],
+                    "source_event_ids": ["evt-clue"],
+                    "created_turn": 3,
+                    "updated_turn": 3,
+                }
+            ],
+            "investigations": [
+                {
+                    "investigation_id": "inv-case",
+                    "status": "active",
+                    "confidence": 70,
+                    "progress": 20,
+                    "created_turn": 3,
+                    "updated_turn": 3,
+                    "evidence_ids": ["ev-clue"],
+                    "assigned_actor_ids": ["g1"],
+                }
+            ],
+        }
+    )
+
+    baseline_result = utility_ai.select_action(candidates, snapshot=baseline, actor_resolution=actor_resolution)
+    investigating_result = utility_ai.select_action(
+        candidates,
+        snapshot=investigating,
+        actor_resolution=actor_resolution,
+    )
+
+    assert "investigation_modifier" not in _score_row(baseline_result, actor_id="g1", action_kind="investigate")
+    investigate_row = _score_row(investigating_result, actor_id="g1", action_kind="investigate")
+    assert investigate_row["investigation_modifier"] > 0
+    assert investigate_row["evidence_ids"] == ["ev-clue"]
+    assert investigate_row["investigation_ids"] == ["inv-case"]
+    assert investigating_result["selected_action_kind"] == "investigate"
+
+
+def test_social_collision_absent_keeps_legacy_scores():
+    actor_resolution = {"acting_actor_ids": ["g1"], "tiers_by_actor_id": {"g1": "hero"}}
+    candidates = [_candidate("g1", action_kind="investigate")]
+    baseline = utility_ai.select_action(
+        candidates,
+        snapshot=_social_snapshot(),
+        actor_resolution=actor_resolution,
+    )
+    unrelated = utility_ai.select_action(
+        candidates,
+        snapshot=_social_snapshot(
+            rolling={
+                "scene": "dock",
+                "npcs": [{"name": "Other", "npc_id": "g2", "location_id": "castle"}],
+                "relationship_vectors": [
+                    {"name": "Other", "npc_id": "g2", "trust": 90, "loyalty": 90, "fear": 0, "resentment": 90}
+                ],
+            },
+            replayability={
+                "information_items": [_visible_information_item(location_id="castle")],
+                "reputation_signals": [
+                    {
+                        "signal_id": "rep-other",
+                        "subject_type": "actor",
+                        "subject_id": "g2",
+                        "dimension": "dangerous",
+                        "score": 90,
+                        "observer_scope": {"scope_type": "public", "scope_id": "public"},
+                    }
+                ],
+            },
+        ),
+        actor_resolution=actor_resolution,
+    )
+
+    base_row = _score_row(baseline, actor_id="g1")
+    unrelated_row = _score_row(unrelated, actor_id="g1")
+    assert base_row["base_utility"] == unrelated_row["base_utility"] == 50.0
+    for key in (
+        "relationship_modifier",
+        "reputation_modifier",
+        "information_modifier",
+        "investigation_modifier",
+    ):
+        assert key not in base_row
+        assert key not in unrelated_row
+
+
+def test_social_collision_bridge_replay_is_deterministic():
+    snapshot = _social_snapshot(
+        rolling={
+            "scene": "dock",
+            "npcs": [{"name": "Guard", "npc_id": "g1", "location_id": "dock"}],
+            "relationship_vectors": [
+                {"name": "Guard", "npc_id": "g1", "trust": 10, "loyalty": 20, "fear": 70, "resentment": 55}
+            ],
+        },
+        replayability={
+            "information_items": [_visible_information_item()],
+            "reputation_signals": [
+                {
+                    "signal_id": "rep-suspicious-player",
+                    "subject_type": "actor",
+                    "subject_id": "player",
+                    "dimension": "suspicious",
+                    "score": 35,
+                    "observer_scope": {"scope_type": "public", "scope_id": "public"},
+                }
+            ],
+            "evidence": [
+                {
+                    "evidence_id": "ev-witness",
+                    "evidence_type": "witness_statement",
+                    "confidence": 75,
+                    "reliability": 75,
+                    "discovered_by": ["g1"],
+                }
+            ],
+        },
+    )
+    candidates = [
+        _candidate("g1", action_kind="investigate"),
+        _candidate("g1", action_kind="avoid"),
+        _candidate("g1", action_kind="negotiate", target_kind="player", target_id="player"),
+    ]
+    actor_resolution = {"acting_actor_ids": ["g1"], "tiers_by_actor_id": {"g1": "hero"}}
+
+    first = utility_ai.select_action(candidates, snapshot=snapshot, actor_resolution=actor_resolution)
+    second = utility_ai.select_action(candidates, snapshot=snapshot, actor_resolution=actor_resolution)
+
+    assert first == second

@@ -28,13 +28,16 @@ from ai_service import (  # noqa: E402
     DEFAULT_HISTORY_WINDOW,
 )
 from ai_config import (  # noqa: E402
+    AUTOMATIC_FALLBACK_MODELS,
     FALLBACK_MODELS,
     MAX_RETRIES,
     ENABLE_DEBUG_PANEL,
     COST_MODE as DEFAULT_COST_MODE,
     LOW_COST_MAX_TOKENS,
+    MODEL_QWEN_UNCENSORED,
     get_runtime_config,
     resolve_context_budget,
+    build_automatic_fallback_chain,
     NORMAL_CONTEXT_BUDGET_TOKENS,
     LOW_COST_CONTEXT_BUDGET_TOKENS,
     ADVANCED_CONTEXT_BUDGET_TOKENS,
@@ -2305,10 +2308,9 @@ async def _generate_turn(
         or settings.get("model")
         or DEFAULT_MODEL
     )
-    fallback_chain = (
-        session.get("fallback_chain")
-        or settings.get("fallback_models")
-        or list(FALLBACK_MODELS)
+    fallback_chain = build_automatic_fallback_chain(
+        requested_model,
+        cost_mode=cost_mode,
     )
 
     # ---- Hints embedded into the upcoming user message ----
@@ -2791,10 +2793,14 @@ async def _generate_validated_turn(
         # Retry stays on the model that just answered; provider-level fallback
         # is still permitted if the retry call itself fails.
         primary_for_retry = meta.get("model_used") or settings.get("model")
-        fallback_chain = (
-            session.get("fallback_chain")
-            or settings.get("fallback_models")
-            or list(FALLBACK_MODELS)
+        retry_cost_mode = (
+            session.get("cost_mode")
+            or settings.get("cost_mode")
+            or DEFAULT_COST_MODE
+        )
+        fallback_chain = build_automatic_fallback_chain(
+            primary_for_retry,
+            cost_mode=retry_cost_mode,
         )
 
         result2 = await gateway.invoke_llm(
@@ -2872,6 +2878,11 @@ async def _generate_validated_turn(
 # ======================================================================
 # ROUTES
 # ======================================================================
+def _session_debug_allowed(session: Dict[str, Any], settings: Dict[str, Any]) -> bool:
+    """Per-turn debug is exposed only when server dev mode and session debug_mode are on."""
+    return bool(settings.get("developer_mode")) and bool(session.get("debug_mode"))
+
+
 def _meta_into_debug(
     base: Optional[Dict[str, str]], meta: Dict[str, Any]
 ) -> Dict[str, str]:
@@ -3131,6 +3142,18 @@ async def admin_post_settings(
         supported_ids = {m["id"] for m in get_supported_models()}
         if req.model not in supported_ids:
             raise HTTPException(status_code=400, detail=f"Unsupported model: {req.model}")
+    if req.fallback_models is not None:
+        if MODEL_QWEN_UNCENSORED in req.fallback_models:
+            raise HTTPException(
+                status_code=400,
+                detail="Uncensored model cannot be placed in the automatic fallback chain",
+            )
+        for model_id in req.fallback_models:
+            if model_id not in AUTOMATIC_FALLBACK_MODELS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported fallback model: {model_id}",
+                )
     if req.default_mode is not None and req.default_mode not in ("basic", "advanced"):
         raise HTTPException(status_code=400, detail="default_mode must be 'basic' or 'advanced'")
     if req.compression_level is not None and req.compression_level not in ("light", "standard", "aggressive"):
@@ -3177,9 +3200,11 @@ async def _build_existing_creation_response(req: NewStoryRequest) -> Optional[Di
     )
     if not turn_doc:
         raise HTTPException(status_code=409, detail=_CREATION_IN_PROGRESS_DETAIL)
+    settings = await get_ai_settings()
+    include_debug = _session_debug_allowed(session_doc, settings)
     return {
         "session_id": session_doc["id"],
-        "turn": build_player_turn(turn_doc),
+        "turn": build_player_turn(turn_doc, include_debug=include_debug),
         "session": build_new_story_session_payload(session_doc),
     }
 
@@ -3406,9 +3431,9 @@ async def _create_new_story(req: NewStoryRequest):
         replayability_state=replayability_state,
         # ---- session-locked AI routing snapshot ----
         active_model=settings.get("model") or DEFAULT_MODEL,
-        fallback_chain=(
-            list(settings.get("fallback_models") or [])
-            or list(FALLBACK_MODELS)
+        fallback_chain=build_automatic_fallback_chain(
+            settings.get("model") or DEFAULT_MODEL,
+            cost_mode=(settings.get("cost_mode") or DEFAULT_COST_MODE).lower(),
         ),
         cost_mode=(settings.get("cost_mode") or DEFAULT_COST_MODE).lower(),
     )
@@ -3586,9 +3611,10 @@ async def _create_new_story(req: NewStoryRequest):
 
     session_doc = session.model_dump(mode="json")
     session_doc["replayability_state"] = replayability_state
+    include_debug = _session_debug_allowed(session_doc, settings)
     return {
         "session_id": session.id,
-        "turn": build_player_turn(turn.model_dump(mode="json")),
+        "turn": build_player_turn(turn.model_dump(mode="json"), include_debug=include_debug),
         "session": build_new_story_session_payload(session_doc),
     }
 
@@ -3826,7 +3852,14 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
             expected_turn_count=expected_turn_count,
         )
 
-        return {"turn": build_player_turn(turn.model_dump(mode="json"))}
+        settings = await get_ai_settings()
+        include_debug = bool(settings.get("developer_mode")) and bool(req.debug_mode)
+        return {
+            "turn": build_player_turn(
+                turn.model_dump(mode="json"),
+                include_debug=include_debug,
+            )
+        }
     except ActionLeaseConflict:
         raise HTTPException(status_code=409, detail=ACTION_CONFLICT_DETAIL)
     except ActionLeaseLost:
@@ -3945,20 +3978,24 @@ async def list_sessions(device_id: str = Depends(require_device_id)):
 
 @api_router.get("/story/session/{session_id}")
 async def get_session(session_id: str, device_id: str = Depends(require_device_id)):
-    session = await fetch_owned_session(db, session_id, device_id)
+    raw_session = await fetch_owned_session(db, session_id, device_id)
     turns = await db.turns.find({"session_id": session_id}, {"_id": 0}).sort("turn_number", 1).to_list(length=500)
-    session = build_player_session(session)
-    turns = [build_player_turn(t) for t in turns]
+    settings = await get_ai_settings()
+    include_debug = _session_debug_allowed(raw_session, settings)
+    session = build_player_session(raw_session)
+    turns = [build_player_turn(t, include_debug=include_debug) for t in turns]
     return {"session": session, "turns": turns}
 
 
 @api_router.get("/story/session/{session_id}/latest")
 async def get_latest_turn(session_id: str, device_id: str = Depends(require_device_id)):
-    await fetch_owned_session(db, session_id, device_id)
+    session = await fetch_owned_session(db, session_id, device_id)
     turn = await db.turns.find_one({"session_id": session_id}, {"_id": 0}, sort=[("turn_number", -1)])
     if not turn:
         raise HTTPException(status_code=404, detail="No turns found")
-    return {"turn": build_player_turn(turn)}
+    settings = await get_ai_settings()
+    include_debug = _session_debug_allowed(session, settings)
+    return {"turn": build_player_turn(turn, include_debug=include_debug)}
 
 
 @api_router.delete("/story/session/{session_id}")

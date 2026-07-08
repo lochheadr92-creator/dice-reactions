@@ -3,7 +3,7 @@ Centralised AI routing & runtime configuration.
 
 Single source of truth for:
   • the default model used for new chronicles
-  • the safe fallback chain (Haiku → Sonnet → Mythomax)
+  • the safe fallback chain (Sonnet → DeepSeek → Haiku)
   • retry / timeout knobs
   • debug-panel feature flag
   • cost-mode preset
@@ -14,7 +14,7 @@ All values are env-overridable so deployments can tune without code changes.
 from __future__ import annotations
 
 import os
-from typing import List
+from typing import List, Optional
 
 
 def _csv_env(name: str, default: List[str]) -> List[str]:
@@ -26,23 +26,49 @@ def _csv_env(name: str, default: List[str]) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
-# Primary routing
+# Primary routing — curated four-model catalogue (see ai_service.SUPPORTED_MODELS)
 # ---------------------------------------------------------------------------
-# Claude Haiku 4.5 — strong instruction following, low cost, ~200k context.
-DEFAULT_MODEL: str = os.environ.get(
-    "DEFAULT_MODEL", "anthropic/claude-haiku-4.5"
-)
+MODEL_SONNET: str = "anthropic/claude-sonnet-4.5"
+MODEL_DEEPSEEK: str = "deepseek/deepseek-chat-v3-0324"
+MODEL_HAIKU: str = "anthropic/claude-haiku-4.5"
+# Qwen2.5-72B fine-tune — explicit admin selection only; never auto-fallback.
+MODEL_QWEN_UNCENSORED: str = "anthracite-org/magnum-v4-72b"
 
-# Ordered fallback chain. The first entry is the default; subsequent entries
-# are tried only after the previous one fails with a fallback-trigger error.
+DEFAULT_MODEL: str = os.environ.get("DEFAULT_MODEL", MODEL_SONNET)
+
+# Ordered automatic fallback catalogue. Uncensored models are excluded.
 FALLBACK_MODELS: List[str] = _csv_env(
     "FALLBACK_MODELS",
-    [
-        "anthropic/claude-haiku-4.5",     # primary
-        "anthropic/claude-sonnet-4.5",    # higher fidelity safety net
-        "gryphe/mythomax-l2-13b",         # ultimate cheap backup
-    ],
+    [MODEL_SONNET, MODEL_DEEPSEEK, MODEL_HAIKU],
 )
+
+AUTOMATIC_FALLBACK_MODELS = frozenset({MODEL_SONNET, MODEL_DEEPSEEK, MODEL_HAIKU})
+
+
+def build_automatic_fallback_chain(
+    primary_model: Optional[str] = None,
+    *,
+    cost_mode: str = "normal",
+) -> List[str]:
+    """Resolve the ordered fallback chain for automatic provider stepping.
+
+    Premium primary (Sonnet) steps to DeepSeek first, then Haiku.
+    Explicit Haiku primary steps to DeepSeek only.
+    Uncensored Qwen is never included unless it is the requested primary.
+    """
+    _ = cost_mode  # reserved — chain order is stable; cost_mode affects tokens elsewhere
+    primary = (primary_model or DEFAULT_MODEL).strip()
+    if primary == MODEL_QWEN_UNCENSORED:
+        return [primary]
+    chain: List[str] = [primary]
+    if primary == MODEL_HAIKU:
+        if MODEL_DEEPSEEK not in chain:
+            chain.append(MODEL_DEEPSEEK)
+        return chain
+    for model_id in (MODEL_DEEPSEEK, MODEL_HAIKU):
+        if model_id != primary and model_id not in chain:
+            chain.append(model_id)
+    return chain
 
 # ---------------------------------------------------------------------------
 # Retry / timeout

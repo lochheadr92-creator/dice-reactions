@@ -24,6 +24,7 @@ export type Turn = {
   choices: TurnChoice[];
   state: Record<string, string>;
   ledger: Record<string, string>;
+  debug?: Record<string, string>;
   created_at: string;
 };
 

@@ -7,8 +7,8 @@ swapping providers or models trivial — just adjust ``chat_completion``.
 
 Features:
     * OpenRouter chat completions over httpx (async)
-    * Default model: anthropic/claude-haiku-4.5  (env-overridable)
-    * Safe fallback chain: Haiku 4.5 → Sonnet 4.5 → Mythomax
+    * Default model: anthropic/claude-sonnet-4.5  (env-overridable)
+    * Safe fallback chain: Sonnet → DeepSeek → Haiku
     * Adjustable model / temperature / max_tokens per call
     * Retry with exponential backoff on transient failures (5xx, 408, 429)
     * Error classification for fallback decisions
@@ -26,10 +26,13 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 from ai_config import (
+    AUTOMATIC_FALLBACK_MODELS,
     DEFAULT_MODEL,
     FALLBACK_MODELS,
+    MODEL_QWEN_UNCENSORED,
     MAX_RETRIES,
     PROVIDER_TIMEOUT,
+    build_automatic_fallback_chain,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,155 +72,28 @@ APP_TITLE = os.environ.get("APP_TITLE", "Dice Reaction Story Engine")
 # ---------------------------------------------------------------------------
 SUPPORTED_MODELS: List[Dict[str, Any]] = [
     {
-        "id": "anthropic/claude-haiku-4.5",
-        "label": "Claude Haiku 4.5",
-        "context": 200000,
-        "note": "Default · fast · affordable · strong format compliance",
-    },
-    {
         "id": "anthropic/claude-sonnet-4.5",
         "label": "Claude Sonnet 4.5",
         "context": 1000000,
-        "note": "Fallback tier · top-tier reasoning · 1M context",
+        "note": "Default · primary quality model · 1M context",
     },
     {
-        "id": "anthropic/claude-3-5-haiku",
-        "label": "Claude 3.5 Haiku",
+        "id": "deepseek/deepseek-chat-v3-0324",
+        "label": "DeepSeek V3",
+        "context": 164000,
+        "note": "First automatic fallback · cost-saving rescue",
+    },
+    {
+        "id": "anthropic/claude-haiku-4.5",
+        "label": "Claude Haiku 4.5",
         "context": 200000,
-        "note": "Legacy Anthropic · fast · low cost",
-    },
-    {
-        "id": "anthropic/claude-3-5-sonnet",
-        "label": "Claude 3.5 Sonnet",
-        "context": 200000,
-        "note": "Legacy Anthropic · higher fidelity",
-    },
-    {
-        "id": "gryphe/mythomax-l2-13b",
-        "label": "Mythomax L2 13B",
-        "context": 4096,
-        "note": "Final fallback · cheap · loose format compliance",
-    },
-    {
-        "id": "anthropic/claude-opus-4.5",
-        "label": "Claude Opus 4.5",
-        "context": 200000,
-        "note": "Highest fidelity · slower / pricier",
-    },
-    {
-        "id": "openai/gpt-4o",
-        "label": "GPT-4o",
-        "context": 128000,
-        "note": "Balanced quality / cost",
-    },
-    {
-        "id": "openai/gpt-4o-mini",
-        "label": "GPT-4o Mini",
-        "context": 128000,
-        "note": "Fast & cheap",
-    },
-    {
-        "id": "openai/gpt-4.1",
-        "label": "GPT-4.1",
-        "context": 1047576,
-        "note": "OpenAI flagship · 1M context",
-    },
-    {
-        "id": "meta-llama/llama-3.3-70b-instruct",
-        "label": "Llama 3.3 70B",
-        "context": 131072,
-        "note": "Open-weight workhorse",
-    },
-    {
-        "id": "google/gemini-2.5-pro",
-        "label": "Gemini 2.5 Pro",
-        "context": 1048576,
-        "note": "Massive context · top quality",
-    },
-    {
-        "id": "google/gemini-2.5-flash",
-        "label": "Gemini 2.5 Flash",
-        "context": 1048576,
-        "note": "Fast Gemini · 1M context",
-    },
-    {
-        "id": "mistralai/mistral-large-2407",
-        "label": "Mistral Large 2407",
-        "context": 128000,
-        "note": "Strong reasoning",
-    },
-    {
-        "id": "sao10k/l3.3-euryale-70b",
-        "label": "Euryale 70B (L3.3)",
-        "context": 131072,
-        "note": "Roleplay specialised",
-    },
-    {
-        "id": "sao10k/l3.1-70b-hanami-x1",
-        "label": "Hanami X1 70B",
-        "context": 16384,
-        "note": "Narrative storytelling specialist",
-    },
-    {
-        "id": "thedrummer/cydonia-24b-v4.1",
-        "label": "Cydonia 24B v4.1 · UNCENSORED",
-        "context": 131072,
-        "note": "Paid · uncensored creative · 128k ctx · cheap",
+        "note": "Fast lightweight fallback · explicit cheap mode",
     },
     {
         "id": "anthracite-org/magnum-v4-72b",
-        "label": "Magnum v4 72B · UNCENSORED",
+        "label": "Magnum v4 72B · Qwen UNCENSORED",
         "context": 32768,
-        "note": "Paid · top-tier uncensored prose · pricier",
-    },
-    {
-        "id": "thedrummer/rocinante-12b",
-        "label": "Rocinante 12B · UNCENSORED",
-        "context": 32768,
-        "note": "Paid · uncensored · ultra-cheap & fast",
-    },
-    {
-        "id": "openai/gpt-oss-120b:free",
-        "label": "GPT-OSS 120B · FREE",
-        "context": 131072,
-        "note": "OpenAI open-weights · free tier",
-    },
-    {
-        "id": "meta-llama/llama-3.3-70b-instruct:free",
-        "label": "Llama 3.3 70B · FREE",
-        "context": 131072,
-        "note": "Free tier · upstream rate-limited",
-    },
-    {
-        "id": "nousresearch/hermes-3-llama-3.1-405b:free",
-        "label": "Hermes 3 405B · FREE",
-        "context": 131072,
-        "note": "Free · creative writing strong",
-    },
-    {
-        "id": "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
-        "label": "Dolphin Mistral 24B · FREE",
-        "context": 32768,
-        "note": "Free · uncensored creative",
-    },
-]
-
-# Optional direct-OpenAI models. Surfaced (and accepted by admin validation)
-# ONLY when OPENAI_API_KEY is configured — see get_supported_models(). Selecting
-# one routes the call to api.openai.com instead of OpenRouter. The "openai-direct/"
-# namespace is intentionally distinct from OpenRouter's own "openai/..." ids.
-OPENAI_DIRECT_MODELS: List[Dict[str, Any]] = [
-    {
-        "id": "openai-direct/gpt-4o-mini",
-        "label": "GPT-4o Mini · OpenAI Direct",
-        "context": 128000,
-        "note": "Direct OpenAI · opt-in · requires OPENAI_API_KEY",
-    },
-    {
-        "id": "openai-direct/gpt-4o",
-        "label": "GPT-4o · OpenAI Direct",
-        "context": 128000,
-        "note": "Direct OpenAI · opt-in · requires OPENAI_API_KEY",
+        "note": "Explicit selection only · Qwen2.5 creative · never auto-fallback",
     },
 ]
 
@@ -231,14 +107,7 @@ class AIServiceError(Exception):
 
 
 def get_supported_models() -> List[Dict[str, Any]]:
-    """Return the curated list of model options for the admin UI.
-
-    Direct-OpenAI models are appended ONLY when OPENAI_API_KEY is configured, so
-    OpenAI stays opt-in and is never selectable (nor passes admin validation)
-    without a key. The OpenRouter catalogue is always returned unchanged.
-    """
-    if openai_is_configured():
-        return list(SUPPORTED_MODELS) + list(OPENAI_DIRECT_MODELS)
+    """Return the curated four-model catalogue for admin selection."""
     return list(SUPPORTED_MODELS)
 
 
@@ -475,12 +344,20 @@ async def chat_completion_with_meta(
     )
 
     requested = primary_model or DEFAULT_MODEL
-    # Build the ordered chain: requested first, then any fallback models not equal to it.
-    chain_source = list(fallback_chain) if fallback_chain else list(FALLBACK_MODELS)
+    # Build ordered chain: primary first, then automatic fallbacks (never uncensored).
+    if fallback_chain:
+        chain_source = [
+            m for m in fallback_chain
+            if m and m != MODEL_QWEN_UNCENSORED and m in AUTOMATIC_FALLBACK_MODELS
+        ]
+    else:
+        chain_source = build_automatic_fallback_chain(requested)
     chain: List[str] = [requested]
     for m in chain_source:
-        if m and m not in chain:
+        if m and m not in chain and m != MODEL_QWEN_UNCENSORED:
             chain.append(m)
+    if requested == MODEL_QWEN_UNCENSORED:
+        chain = [requested]
 
     fallback_events: List[Dict[str, Any]] = []
     attempts_per_model: Dict[str, int] = {}

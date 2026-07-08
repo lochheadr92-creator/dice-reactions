@@ -430,6 +430,52 @@ class TestPlayerRouteSanitisation:
         assert r.status_code == 200, r.text
         turn = r.json()["turn"]
         assert "rolling_state" not in turn
-        assert "debug" not in turn
         assert "raw" not in turn
+        assert "debug" in turn
+        assert turn["debug"].get("model_used") == "test"
+        _disable_developer_mode(client)
+
+    def test_story_action_strips_debug_without_session_debug_mode(self, client, mongo_env):
+        _enable_developer_mode(client)
+        owner = f"dev-owner-{uuid.uuid4()}"
+        sid = _seed_session(mongo_env, owner)
+
+        raw_turn = (
+            "<narrative>You step forward.</narrative>"
+            "<paragraphs><p>You step forward.</p></paragraphs>"
+            "<choices><choice label=\"A\">Continue</choice></choices>"
+            "<state><Health>wounded</Health></state>"
+            "<ledger><Carried>torch</Carried></ledger>"
+            "<rolling_state>{\"scene\": \"ruins\"}</rolling_state>"
+            "<debug><Roll>14</Roll></debug>"
+        )
+
+        async def fake_chat(**kwargs):
+            return {
+                "content": raw_turn,
+                "model_used": "test",
+                "model_requested": "test",
+                "telemetry": {"provider": "test"},
+                "fallback_events": [],
+                "attempts_per_model": {},
+            }
+
+        original = gateway.invoke_llm
+        gateway.invoke_llm = fake_chat
+        try:
+            r = client.post(
+                "/api/story/action",
+                headers=_device_headers(owner),
+                json={
+                    "session_id": sid,
+                    "action_text": "step forward",
+                    "debug_mode": False,
+                },
+            )
+        finally:
+            gateway.invoke_llm = original
+
+        assert r.status_code == 200, r.text
+        turn = r.json()["turn"]
+        assert "debug" not in turn
         _disable_developer_mode(client)

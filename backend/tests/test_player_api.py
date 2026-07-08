@@ -15,6 +15,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from player_api import (  # noqa: E402
     build_new_story_session_payload,
     build_player_choices,
+    build_player_debug,
     build_player_ledger,
     build_player_paragraphs,
     build_player_session,
@@ -92,6 +93,36 @@ def test_turn_allowlist_drops_engine_payloads():
     assert "raw" not in out
     assert "telemetry_blob" not in out
     assert "Pressure" in out["state"]
+
+
+def test_turn_include_debug_sanitizes_kv():
+    raw = {
+        "id": "turn-2",
+        "session_id": "sess-1",
+        "turn_number": 2,
+        "narrative": "Wind.",
+        "paragraphs": ["Wind."],
+        "choices": [],
+        "state": {},
+        "ledger": {},
+        "debug": {
+            "model_used": "test-model",
+            "latency_ms": "1200",
+            "rolling_state": "must drop",
+            "raw": "must drop",
+        },
+        "created_at": datetime.now(timezone.utc),
+    }
+    out = build_player_turn(raw, include_debug=True)
+    assert out["debug"]["model_used"] == "test-model"
+    assert out["debug"]["latency_ms"] == "1200"
+    assert "rolling_state" not in out["debug"]
+    assert "raw" not in out["debug"]
+
+
+def test_build_player_debug_empty_and_blocked():
+    assert build_player_debug(None) == {}
+    assert build_player_debug({"secret_registry": "hidden", "Roll": "14"}) == {"Roll": "14"}
 
 
 def test_unknown_state_and_ledger_keys_dropped():

@@ -106,7 +106,6 @@ export default function PlayScreen() {
   const [showWhy, setShowWhy] = useState(false);
   const [whyHistory, setWhyHistory] = useState<HistoryTurn[]>([]);
   const [whyLoading, setWhyLoading] = useState(false);
-  const [showDebug, setShowDebug] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
   const [mode, setMode] = useState<"basic" | "advanced">("advanced");
   const [devUnlocked, setDevUnlocked] = useState(false);
@@ -493,6 +492,18 @@ export default function PlayScreen() {
                   {p}
                 </Animated.Text>
               ))}
+
+              {devUnlocked && debugMode && turn.debug && Object.keys(turn.debug).length > 0 ? (
+                <View style={styles.debugBlock} testID={`debug-block-${turn.turn_number}`}>
+                  <Text style={styles.debugHeader}>· DEBUG · TURN {turn.turn_number} ·</Text>
+                  {Object.entries(turn.debug).map(([k, v]) => (
+                    <View key={k} style={styles.debugLine}>
+                      <Text style={styles.debugKey}>{k.toUpperCase()}</Text>
+                      <Text style={styles.debugVal}>{v}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
 
               {i < turns.length - 1 && <View style={styles.turnDivider} />}
             </View>
