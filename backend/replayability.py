@@ -30,6 +30,7 @@ import investigation_engine
 import living_cast_shadow
 import living_cast_provenance as provenance
 import npc_agendas as agendas
+import npc_settlement_traits
 import npc_action_engine
 import npc_world_moves as world_moves
 import opening_state
@@ -264,6 +265,8 @@ def empty_replayability_state() -> Dict[str, Any]:
         "lc_relationship_applied_receipt_id": None,
         "pressure_signal_consumed_ids": [],
         "pressure_applied_world_event_ids": [],
+        "npc_traits": npc_settlement_traits.init_npc_traits_state(),
+        "settlement_traits": npc_settlement_traits.init_settlement_traits_state(),
     }
 
 
@@ -544,6 +547,8 @@ def init_new_story(
         "lc_relationship_applied_receipt_id": None,
         "pressure_signal_consumed_ids": [],
         "pressure_applied_world_event_ids": [],
+        "npc_traits": npc_settlement_traits.init_npc_traits_state(),
+        "settlement_traits": npc_settlement_traits.init_settlement_traits_state(),
     }
 
     effective_scenario_id = str(scenario_id or (scenario or {}).get("id") or "")
@@ -576,6 +581,20 @@ def init_new_story(
             identity=identity,
             scenario_id=effective_scenario_id,
         )
+
+    trait_bundle = npc_settlement_traits.seed_traits_for_new_story(
+        run_seed=seed,
+        identity=identity,
+        opening=opening,
+        npc_seed_records=seed_npcs,
+        agendas_state=state.get("npc_agendas"),
+        scenario=scenario,
+        custom_world_setup=custom_world_setup,
+        setup=setup,
+        scenario_id=effective_scenario_id,
+    )
+    state["npc_traits"] = trait_bundle["npc_traits"]
+    state["settlement_traits"] = trait_bundle["settlement_traits"]
 
     opening_source = _opening_unresolved_source(opening, seed)
     echoes.schedule_from_structured_events(

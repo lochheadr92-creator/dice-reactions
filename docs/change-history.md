@@ -4,6 +4,19 @@ Lightweight log of documentation and operational changes. One entry per meaningf
 
 ---
 
+## 2026-07-09 — Stage 6D-1A: passive NPC & settlement traits (docs)
+
+| Field | Detail |
+|-------|--------|
+| **Change** | Documented engine-owned passive trait seeding at story init (`npc_traits`, `settlement_traits` on `replayability_state`). Traits are deterministic (`sha256` namespaces only), not read by `prepare_action_turn`, prompts, planners, or behaviour systems; player API unchanged. |
+| **Reason** | Stage 6D-1A complete — metadata substrate for future Historical Weight, memory, and pressure signals without changing gameplay. |
+| **Runtime files** | `backend/npc_settlement_traits.py`; wired in `replayability.empty_replayability_state()` and `replayability.init_new_story()` |
+| **Tests run** | `test_npc_settlement_traits.py` — **5/5**; `test_npc_agendas.py` + `test_foundation_promotion_hardening.py` — **51/51**; `test_simulation_harness` (determinism) + `test_scheduling_consequences.py` — **15/15** |
+| **Documentation updated** | `current-state.md`, `feature-status.md`, `next-work.md`, `change-history.md` |
+| **Remaining risks** | Traits are passive only — no consumption by utility, stress, memory retrieval, or settlement projection yet; Historical Weight not started |
+
+---
+
 ## 2026-06-20 — Bible implementation status truth correction (`emergent` docs)
 
 | Field | Detail |

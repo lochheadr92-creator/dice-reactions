@@ -101,7 +101,7 @@ Do **not** report 39.8%. The chapter matrix remains authoritative.
 |--------|--------|----------|
 | Story session CRUD | Implemented | Code (`server.py` routes) |
 | Early-Game Pacing Governor v1 | Implemented (deterministic structural Stage 1) | Code (`pacing.py`) + Tests (`test_early_game_pacing.py` ✅) |
-| Replayability Engine v1 | Implemented (deterministic — session `replayability_state`); ADR-023 pressure authority complete | Code (`replayability.py`, `run_identity.py`, `opening_state.py`, `pressure_graph.py`, `consequence_echoes.py`) + Tests (`test_run_identity.py`, `test_opening_state.py`, `test_pressure_graph.py`, `test_consequence_echoes.py`, `test_replayability_integration.py` ✅) |
+| Replayability Engine v1 | Implemented (deterministic — session `replayability_state`); ADR-023 pressure authority complete; Stage 6D-1A passive `npc_traits` / `settlement_traits` seeded at init (not consumed by turn path) | Code (`replayability.py`, `npc_settlement_traits.py`, `run_identity.py`, `opening_state.py`, `pressure_graph.py`, `consequence_echoes.py`) + Tests (`test_run_identity.py`, `test_opening_state.py`, `test_pressure_graph.py`, `test_consequence_echoes.py`, `test_replayability_integration.py`, `test_npc_settlement_traits.py` ✅) |
 | P1 actor stress substrate | **Canonical — `TURN_INTEGRATION_VERIFIED` / `UTILITY_STRESS_INPUT_COMPLETE`** | Code (`stress.py`, `foundation_snapshot.py`, `replayability.py`, `server.py`) + Tests (`test_stress.py`, `test_stress_integration.py`) |
 | Foundation Utility AI | **ADR-024 Phase 1 + NW-UTILITY-01 complete; deterministic live-handoff proof complete; feature-gated live selection available; default OFF; `TURN_INTEGRATION_UNVERIFIED`** — shadow comparison remains active in both modes; authorised band-aware Utility AI winners drive NPC choice only when enabled | Code (`ai_config.py`, `utility_ai.py`, `living_cast_shadow.py`, `replayability.py`) + Tests (foundation acceptance / utility / `test_living_cast_shadow` agreement + disagreement live-handoff proof / Living Cast integration) |
 | Turn generation pipeline | Implemented | Code |
@@ -626,8 +626,38 @@ file (offline, re-run 2026-07-08):
 | `information_engine.py` | `test_information_engine.py` | 12 passed |
 | `pressure_graph.py` | `test_pressure_graph.py` | 26 passed |
 | `pressure_genesis.py` (Stage 6C-0/6C-1) | `test_pressure_genesis.py` | 17 passed |
+| `npc_settlement_traits.py` (Stage 6D-1A) | `test_npc_settlement_traits.py` | 5 passed |
 
 This note records presence and offline test status only — it is not a full
 design/behavioural verification pass for each module (no live-turn or
 integration-specific claims beyond what `test_replayability_integration.py`
 already covers). Tracked as `next-work.md` NW-P2-04.
+
+---
+
+## Stage 6D-1A — passive NPC & settlement traits (2026-07-09)
+
+**Status:** Implemented on `emergent`. **Passive metadata only** — does not
+affect prompts, `prepare_action_turn`, behaviour, or player-facing payloads.
+
+**Storage:** `session.replayability_state` only (engine-owned; not in
+`rolling_state` or player API allowlists).
+
+| Field | Shape | Seeded from |
+|-------|-------|-------------|
+| `npc_traits.by_npc_id` | `ambition`, `fear`, `loyalty_anchor`, `personal_stakes`, `risk_tolerance`, `pressure_sensitivity`, `social_role`, `display_name` | NPC seed records, agendas, role/stance, `run_identity`, relationships (when present) |
+| `settlement_traits.by_location_id` | `prosperity`, `stability`, `fear`, `crime`, `culture_tag`, `dominant_pressure`, `local_stakes`, `settlement_id` | `starting_location`, scenario/setup, opening facts, identity pressure signals |
+
+**Determinism:** `sha256(run_seed:entity:trait:field)` namespaces via
+`select_from_namespace` — no new randomness.
+
+**Runtime:** `backend/npc_settlement_traits.py`; wired in
+`empty_replayability_state()` and `init_new_story()`.
+
+**Verification (2026-07-09):** `test_npc_settlement_traits.py` 5/5;
+`test_npc_agendas.py` + `test_foundation_promotion_hardening.py` 51/51;
+`test_simulation_harness` determinism + `test_scheduling_consequences.py` 15/15.
+`prepare_action_turn` output identical with or without trait keys on input state.
+
+**Not yet:** Historical Weight; trait reads by utility/stress/memory/settlement
+consumers; rolling_state projection of settlement traits.

@@ -121,6 +121,17 @@ Practical backlog from confirmed repo gaps on the **`emergent`** branch. No spec
 | **ADR** | ADR-019 |
 | **Follow-up** | Richer structured-event sources from ledger/guards; Living World Test remains separate |
 
+### NW-STAGE-6D-01A: Passive NPC & settlement traits ✅
+
+| Field | Detail |
+|-------|--------|
+| **Status** | Complete on `emergent` (2026-07-09). Engine-owned, deterministic, passive metadata in `replayability_state` only |
+| **Resolution** | `backend/npc_settlement_traits.py` — `seed_traits_for_new_story()` wired into `empty_replayability_state()` and `init_new_story()`. Fields: `npc_traits` (`ambition`, `fear`, `loyalty_anchor`, `personal_stakes`, `risk_tolerance`, `pressure_sensitivity`, `social_role`, `display_name`) and `settlement_traits` (`prosperity`, `stability`, `fear`, `crime`, `culture_tag`, `dominant_pressure`, `local_stakes`, `settlement_id`). Derived via `sha256(run_seed:entity:trait:field)` namespaces only — no new randomness |
+| **Explicitly not done** | Traits are **not** read by `prepare_action_turn`, prompts, planners, behaviour systems, or player API/session payloads. Gameplay fingerprint unchanged when trait keys stripped |
+| **Tests** | `test_npc_settlement_traits.py` — **5/5**; `test_npc_agendas.py` + `test_foundation_promotion_hardening.py` — **51/51**; `test_simulation_harness` determinism + `test_scheduling_consequences.py` — **15/15** |
+| **Docs** | `current-state.md`, `feature-status.md`, `change-history.md`, this entry |
+| **Follow-up** | See NW-STAGE-6D-01B below |
+
 ---
 
 ## Completed (Session Action Concurrency Guard v1)
@@ -307,6 +318,18 @@ Practical backlog from confirmed repo gaps on the **`emergent`** branch. No spec
 | **Recommended action** | A dedicated documentation pass (similar to NW-DOC-01) per module: confirm exact wiring/ownership, add `feature-status.md` rows, and record design intent/limits — this backlog entry only confirms presence + offline test status, not full behavioural acceptance. Mark each as "present, needs doc verification" until that pass runs. |
 | **Files** | `docs/feature-status.md`, `docs/next-work.md`, `docs/current-state.md` |
 | **Dependencies** | None |
+| **Partial resolution (2026-07-09)** | `npc_settlement_traits.py` (Stage 6D-1A) documented in `feature-status.md`, `current-state.md`, and NW-STAGE-6D-01A — passive `replayability_state` seeding only, not a turn-path consumer |
+
+### NW-STAGE-6D-01B: Trait consumption & Historical Weight (not started)
+
+| Field | Detail |
+|-------|--------|
+| **Problem** | Stage 6D-1A seeds passive `npc_traits` and `settlement_traits` on `replayability_state` but no runtime subsystem reads them. Historical Weight is not implemented. Stress capacity remains a proxy unrelated to traits (`foundation-canon-deltas.md` `D_STRESS_CAPACITY`). |
+| **Evidence** | `test_npc_settlement_traits.py` proves fingerprint unchanged when trait keys stripped; grep confirms no reads from `prepare_action_turn`, `utility_ai`, `stress`, `memory_retrieval`, `foundation_snapshot`, or player API |
+| **Recommended action** | When scoped: wire trait reads into authorised consumers (utility scoring, stress capacity/input, memory retrieval weighting, settlement projection into `rolling_state` / `settlement_conditions`) and implement Historical Weight as a separate, reviewed increment — flag-gated if behaviour changes |
+| **Acceptance criteria** | Each consumer has deterministic tests; replay fingerprint unchanged when flags off; no prompt/player-API leakage without explicit design approval; gameplay change only behind flags |
+| **Files** | `backend/npc_settlement_traits.py` (read helpers), `backend/replayability.py`, `backend/utility_ai.py`, `backend/stress.py`, `backend/memory.py` / `memory_retrieval.py`, future Historical Weight module |
+| **Dependencies** | NW-STAGE-6D-01A ✅ |
 
 ---
 
