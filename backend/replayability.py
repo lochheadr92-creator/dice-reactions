@@ -646,6 +646,13 @@ def _summarize_turn_authority(diagnostics: Mapping[str, Any]) -> Dict[str, Any]:
             "diverged": bool(diagnostics.get("utility_ai_shadow_divergence")),
         },
         "memory": memory.get("memory_retrieval_blocker_code") or "shadow",
+        "scheduling": {
+            "enabled": bool(diagnostics.get("runtime_scheduling_enabled")),
+            "applied": bool(diagnostics.get("runtime_scheduling_applied")),
+            "actor_gated": bool(diagnostics.get("runtime_scheduling_actor_gated")),
+            "gravity_applied": bool(diagnostics.get("runtime_scheduling_gravity_applied")),
+            "deferred_count": int(diagnostics.get("runtime_scheduling_deferred_count") or 0),
+        },
         "flags": diagnostics.get("foundation_promotion_flags"),
     }
 
@@ -920,12 +927,59 @@ def prepare_action_turn(
     except Exception as exc:
         diagnostics["npc_action_utility_snapshot_error"] = str(exc)[:200]
 
+    scheduling_result: Optional[Dict[str, Any]] = None
+    try:
+        import runtime_scheduling
+
+        if runtime_scheduling.scheduling_enabled() and npc_action_utility_snapshot is not None:
+            prior_scheduling = state.get("runtime_scheduling_v1") or state.get("foundation_prepared_v1")
+            scheduling_result = runtime_scheduling.evaluate_runtime_scheduling(
+                npc_action_utility_snapshot,
+                state,
+                turn_number=turn_number,
+                prior=prior_scheduling if isinstance(prior_scheduling, Mapping) else None,
+            )
+            runtime_scheduling.apply_runtime_scheduling(
+                state,
+                scheduling_result,
+                turn_number=turn_number,
+            )
+            sched_diag = scheduling_result.get("diagnostics") or {}
+            diagnostics.update(
+                {
+                    key: value
+                    for key, value in sched_diag.items()
+                    if value not in (False, 0, None, [], {})
+                }
+            )
+            if foundation_promotion.gravity_enabled():
+                active_situations = situation_engine.project_active_situations_for_rolling(
+                    state,
+                    rolling_state=working_rolling,
+                    gravity_metadata=state.get("gravity_metadata"),
+                )
+                if active_situations:
+                    working_rolling["active_situations"] = active_situations
+                else:
+                    working_rolling.pop("active_situations", None)
+    except Exception as exc:
+        diagnostics["runtime_scheduling_error"] = str(exc)[:200]
+
     npc_action_result = npc_action_engine.evolve_npc_actions(
         state,
         working_rolling,
         turn_number,
         run_seed=run_seed,
         utility_snapshot=npc_action_utility_snapshot,
+        actor_resolution_prepared=(
+            (scheduling_result or {}).get("actor_resolution")
+            if isinstance(scheduling_result, Mapping)
+            else None
+        ),
+        scheduling_gate_active=bool(
+            scheduling_result
+            and (scheduling_result.get("diagnostics") or {}).get("runtime_scheduling_actor_gated")
+        ),
     )
     npc_action_diag = npc_action_result.get("diagnostics") or {}
     diagnostics.update(

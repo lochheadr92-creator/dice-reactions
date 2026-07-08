@@ -1629,6 +1629,7 @@ def project_promoted_situations_for_rolling(
     *,
     rolling_state: Optional[Mapping[str, Any]] = None,
     limit: int = MAX_PROJECTED_SITUATIONS,
+    gravity_metadata: Optional[Mapping[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Stage 6C-3 — player-facing situation collision layer (projection only)."""
     if not isinstance(replayability_state, Mapping):
@@ -1639,6 +1640,22 @@ def project_promoted_situations_for_rolling(
         for row in replayability_state.get("situations") or []
         if isinstance(row, Mapping) and row.get("status") not in TERMINAL_STATUSES
     ]
+    meta = gravity_metadata if isinstance(gravity_metadata, Mapping) else replayability_state.get("gravity_metadata")
+    if meta:
+        try:
+            import runtime_scheduling
+
+            if runtime_scheduling.scheduling_enabled():
+                situations = [
+                    row
+                    for row in situations
+                    if runtime_scheduling.situation_projection_eligible(
+                        str(row.get("situation_id") or ""),
+                        meta,
+                    )
+                ]
+        except Exception:
+            pass
     ordered = sorted(
         situations,
         key=lambda row: (
@@ -1658,12 +1675,14 @@ def project_active_situations_for_rolling(
     *,
     rolling_state: Optional[Mapping[str, Any]] = None,
     limit: int = MAX_PROJECTED_SITUATIONS,
+    gravity_metadata: Optional[Mapping[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Bounded prompt-safe projection for rolling_state.active_situations."""
     return project_promoted_situations_for_rolling(
         replayability_state,
         rolling_state=rolling_state,
         limit=limit,
+        gravity_metadata=gravity_metadata,
     )
 
 

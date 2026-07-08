@@ -55,6 +55,7 @@ ACTION_RECEIPT_TYPES = (
     "npc_action_selected",
     "npc_action_resolved",
     "npc_action_event_generated",
+    "npc_action_scheduling_deferred",
 )
 
 UTILITY_ACTION_KIND_BY_ACTION_TYPE = {
@@ -466,6 +467,7 @@ def _select_goal_with_utility(
     run_seed: str,
     turn_number: int,
     utility_snapshot: Optional[Any] = None,
+    actor_resolution_prepared: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], List[Dict[str, Any]], bool]:
     if not actor_goals:
         return None, None, [], False
@@ -504,13 +506,17 @@ def _select_goal_with_utility(
     try:
         import utility_ai
 
+        if isinstance(actor_resolution_prepared, Mapping):
+            actor_resolution = actor_resolution_prepared
+        else:
+            actor_resolution = {
+                "acting_actor_ids": [actor_id],
+                "tiers_by_actor_id": {actor_id: "goal_owned"},
+            }
         result = utility_ai.select_action(
             candidates,
             snapshot=snapshot,
-            actor_resolution={
-                "acting_actor_ids": [actor_id],
-                "tiers_by_actor_id": {actor_id: "goal_owned"},
-            },
+            actor_resolution=actor_resolution,
         )
     except Exception:
         return None, None, candidates, False
@@ -822,6 +828,8 @@ def evolve_npc_actions(
     *,
     run_seed: str = "",
     utility_snapshot: Optional[Any] = None,
+    actor_resolution_prepared: Optional[Mapping[str, Any]] = None,
+    scheduling_gate_active: bool = False,
 ) -> Dict[str, Any]:
     diagnostics = {
         "npc_action_engine_executed": False,
@@ -832,6 +840,7 @@ def evolve_npc_actions(
         "npc_actions_created": 0,
         "npc_action_events_generated": 0,
         "npc_action_duplicate_suppressed": 0,
+        "npc_action_scheduling_deferred": 0,
     }
     if not isinstance(replayability_state, dict):
         return {"actions": [], "events": [], "receipts": [], "diagnostics": diagnostics}
@@ -852,9 +861,76 @@ def evolve_npc_actions(
     actors = sorted({str(goal.get("owner_id") or "") for goal in goals if goal.get("owner_id")})
     existing_action_ids = {str(row.get("action_id") or "") for row in actions}
 
+    last_action_turn: Dict[str, int] = {}
+    if scheduling_gate_active:
+        for row in actions:
+            if not isinstance(row, Mapping):
+                continue
+            actor_key = str(row.get("actor_id") or "")
+            if not actor_key:
+                continue
+            resolved = int(row.get("resolved_turn") or row.get("created_turn") or 0)
+            last_action_turn[actor_key] = max(last_action_turn.get(actor_key, 0), resolved)
+
     for actor_id in actors:
         if len(local_actions) >= MAX_NPC_ACTIONS_PER_TICK or len(local_events) >= MAX_ACTION_EVENTS_PER_TICK:
             break
+        if scheduling_gate_active and isinstance(actor_resolution_prepared, Mapping):
+            import actor_resolution
+            import foundation_promotion
+
+            if foundation_promotion.actor_resolution_enabled():
+                acting_ids = set(actor_resolution_prepared.get("acting_actor_ids") or [])
+                tiers = actor_resolution_prepared.get("tiers_by_actor_id") or {}
+                tier = str(tiers.get(actor_id) or "unknown")
+                if actor_id not in acting_ids:
+                    diagnostics["npc_action_scheduling_deferred"] += 1
+                    _append_receipt(
+                        replayability_state,
+                        local_receipts,
+                        receipt_type="npc_action_scheduling_deferred",
+                        action={
+                            "action_id": _stable_id("sched-defer", seed, actor_id, turn_number),
+                            "actor_id": actor_id,
+                            "goal_id": "",
+                            "action_type": "wait",
+                            "status": "resolved",
+                            "outcome": "blocked",
+                            "resolved_turn": turn_number,
+                            "resulting_event_ids": [],
+                            "source_event_ids": [],
+                        },
+                        turn_number=turn_number,
+                        detail=f"non_acting_tier:{tier}",
+                    )
+                    continue
+                if not actor_resolution.is_actor_eligible_for_action(
+                    actor_id,
+                    actor_resolution_prepared,
+                    turn_sequence=turn_number,
+                    last_action_turn=int(last_action_turn.get(actor_id, 0)),
+                ):
+                    cadence = actor_resolution.TIER_CADENCE_TURNS.get(tier, 99)
+                    diagnostics["npc_action_scheduling_deferred"] += 1
+                    _append_receipt(
+                        replayability_state,
+                        local_receipts,
+                        receipt_type="npc_action_scheduling_deferred",
+                        action={
+                            "action_id": _stable_id("sched-defer", seed, actor_id, turn_number),
+                            "actor_id": actor_id,
+                            "goal_id": "",
+                            "action_type": "wait",
+                            "status": "resolved",
+                            "outcome": "blocked",
+                            "resolved_turn": turn_number,
+                            "resulting_event_ids": [],
+                            "source_event_ids": [],
+                        },
+                        turn_number=turn_number,
+                        detail=f"cadence_deferred:tier={tier}:cadence={cadence}",
+                    )
+                    continue
         actor_goals = [dict(row) for row in goals if str(row.get("owner_id") or "") == actor_id]
         goal, utility_selection, utility_candidates, utility_selected = _select_goal_with_utility(
             actor_goals,
@@ -864,6 +940,7 @@ def evolve_npc_actions(
             run_seed=seed,
             turn_number=turn_number,
             utility_snapshot=utility_snapshot,
+            actor_resolution_prepared=actor_resolution_prepared if scheduling_gate_active else None,
         )
         if utility_candidates:
             diagnostics["npc_action_utility_candidates_evaluated"] += len(utility_candidates)
