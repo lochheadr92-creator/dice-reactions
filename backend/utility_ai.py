@@ -749,6 +749,7 @@ def build_canonical_dimension_bundle(
     target_kind: str,
     aligned_goals: frozenset[str],
     relationship_deltas: Mapping[str, int],
+    actor_inputs: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     scores = compute_dimension_scores(
         snapshot,
@@ -757,6 +758,7 @@ def build_canonical_dimension_bundle(
         target_kind=target_kind,
         aligned_goals=aligned_goals,
         relationship_deltas=relationship_deltas,
+        actor_inputs=actor_inputs,
     )
     numeric, authorised, blockers = dimension_scores_to_aggregate_map(scores)
     return {

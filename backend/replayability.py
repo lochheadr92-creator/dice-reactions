@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 REPLAYABILITY_VERSION = 1
 TRANSITION_RECEIPTS_MAX = 32
 RELATIONSHIP_EFFECT_RECEIPTS_MAX = 32
+PRESSURE_SIGNAL_CONSUMED_IDS_MAX = 64
 MAX_ENGINE_WORLD_EVENTS = 24
 # Documented hard budget for full replayability_state at simultaneous caps.
 # Stage 5F adds bounded information/reputation state. The 500-turn harness peaks
@@ -260,6 +261,7 @@ def empty_replayability_state() -> Dict[str, Any]:
         "world_state_guard_receipts": [],
         "relationship_effect_receipts": [],
         "lc_relationship_applied_receipt_id": None,
+        "pressure_signal_consumed_ids": [],
     }
 
 
@@ -269,6 +271,7 @@ def _append_transition_receipt(
     source_event_id: str,
     receipt_type: str,
     turn_number: int,
+    details: Optional[Mapping[str, Any]] = None,
 ) -> bool:
     """Idempotent non-authoritative receipt — not event history."""
     receipts = state.setdefault("transition_receipts", [])
@@ -279,13 +282,23 @@ def _append_transition_receipt(
         for r in receipts
     ):
         return False
-    receipts.append(
-        {
-            "source_event_id": source_event_id,
-            "receipt_type": receipt_type,
-            "turn": turn_number,
-        }
-    )
+    receipt: Dict[str, Any] = {
+        "source_event_id": source_event_id,
+        "receipt_type": receipt_type,
+        "turn": turn_number,
+    }
+    if isinstance(details, Mapping):
+        for key in (
+            "source_kind",
+            "pressure_kind",
+            "reason",
+            "qualifier",
+            "selection_source",
+        ):
+            value = details.get(key)
+            if value not in (None, "", []):
+                receipt[key] = value
+    receipts.append(receipt)
     if len(receipts) > TRANSITION_RECEIPTS_MAX:
         state["transition_receipts"] = receipts[-TRANSITION_RECEIPTS_MAX:]
     return True
@@ -527,6 +540,7 @@ def init_new_story(
         "world_state_guard_receipts": [],
         "relationship_effect_receipts": [],
         "lc_relationship_applied_receipt_id": None,
+        "pressure_signal_consumed_ids": [],
     }
 
     effective_scenario_id = str(scenario_id or (scenario or {}).get("id") or "")
@@ -822,11 +836,86 @@ def prepare_action_turn(
                             turn_number=turn_number,
                         )
 
+    situation_result = situation_engine.evolve_situations(
+        state,
+        working_rolling,
+        turn_number,
+        run_seed=run_seed,
+    )
+    situation_diag = situation_result.get("diagnostics") or {}
+    diagnostics.update(
+        {
+            key: value
+            for key, value in situation_diag.items()
+            if value not in (False, 0, None, [], {})
+        }
+    )
+    for receipt in situation_result.get("receipts") or []:
+        if not isinstance(receipt, Mapping):
+            continue
+        receipt_id = str(receipt.get("receipt_id") or "")
+        if receipt_id:
+            _append_transition_receipt(
+                state,
+                source_event_id=receipt_id,
+                receipt_type=str(receipt.get("receipt_type") or "situation_evolved"),
+                turn_number=turn_number,
+            )
+    active_situations = situation_engine.project_active_situations_for_rolling(state)
+    if active_situations:
+        working_rolling["active_situations"] = active_situations
+    else:
+        working_rolling.pop("active_situations", None)
+
+    goal_result = goal_engine.evolve_goals(
+        state,
+        working_rolling,
+        turn_number,
+        run_seed=run_seed,
+        advance_existing=False,
+    )
+    goal_diag = goal_result.get("diagnostics") or {}
+    diagnostics.update(
+        {
+            key: value
+            for key, value in goal_diag.items()
+            if value not in (False, 0, None, [], {})
+        }
+    )
+    for receipt in goal_result.get("receipts") or []:
+        if not isinstance(receipt, Mapping):
+            continue
+        receipt_id = str(receipt.get("receipt_id") or "")
+        if receipt_id:
+            _append_transition_receipt(
+                state,
+                source_event_id=receipt_id,
+                receipt_type=str(receipt.get("receipt_type") or "goal_evolved"),
+                turn_number=turn_number,
+            )
+    active_goals = goal_engine.project_active_goals_for_rolling(state)
+    if active_goals:
+        working_rolling["active_goals"] = active_goals
+    else:
+        working_rolling.pop("active_goals", None)
+
+    npc_action_utility_snapshot = None
+    try:
+        npc_action_utility_snapshot = FoundationTurnSnapshot.build(
+            run_seed=run_seed,
+            turn_sequence=turn_number,
+            rolling_state=working_rolling,
+            replayability_state=state,
+        )
+    except Exception as exc:
+        diagnostics["npc_action_utility_snapshot_error"] = str(exc)[:200]
+
     npc_action_result = npc_action_engine.evolve_npc_actions(
         state,
         working_rolling,
         turn_number,
         run_seed=run_seed,
+        utility_snapshot=npc_action_utility_snapshot,
     )
     npc_action_diag = npc_action_result.get("diagnostics") or {}
     diagnostics.update(
@@ -1130,37 +1219,7 @@ def prepare_action_turn(
         working_rolling["active_reputation"] = active_reputation
     else:
         working_rolling.pop("active_reputation", None)
-
-    situation_result = situation_engine.evolve_situations(
-        state,
-        working_rolling,
-        turn_number,
-        run_seed=run_seed,
-    )
-    situation_diag = situation_result.get("diagnostics") or {}
-    diagnostics.update(
-        {
-            key: value
-            for key, value in situation_diag.items()
-            if value not in (False, 0, None, [], {})
-        }
-    )
-    for receipt in situation_result.get("receipts") or []:
-        if not isinstance(receipt, Mapping):
-            continue
-        receipt_id = str(receipt.get("receipt_id") or "")
-        if receipt_id:
-            _append_transition_receipt(
-                state,
-                source_event_id=receipt_id,
-                receipt_type=str(receipt.get("receipt_type") or "situation_evolved"),
-                turn_number=turn_number,
-            )
-    active_situations = situation_engine.project_active_situations_for_rolling(state)
-    if active_situations:
-        working_rolling["active_situations"] = active_situations
-    else:
-        working_rolling.pop("active_situations", None)
+    _apply_information_pressure_bridge(state, turn_number, diagnostics)
 
     goal_result = goal_engine.evolve_goals(
         state,
@@ -1379,6 +1438,9 @@ def collect_qualifying_echo_sources(
                     "source_event_id": f"evt-rel-{key}-turn-{turn_number}",
                     "echo_kind": "relationship_fracture",
                     "label": f"{vec.get('name')} — {after_state.replace('_', ' ')}",
+                    "npc_name": str(vec.get("name") or ""),
+                    "before_state": before_state or "neutral",
+                    "after_state": after_state,
                 }
             )
 
@@ -1439,6 +1501,108 @@ def _append_relationship_effect_receipt(
     if len(receipts) > RELATIONSHIP_EFFECT_RECEIPTS_MAX:
         state["relationship_effect_receipts"] = receipts[-RELATIONSHIP_EFFECT_RECEIPTS_MAX:]
     return True
+
+
+def _append_pressure_signal_consumed_ids(
+    state: Dict[str, Any],
+    signal_ids: List[str],
+) -> None:
+    consumed = state.setdefault("pressure_signal_consumed_ids", [])
+    seen = {
+        str(value or "")
+        for value in consumed
+        if str(value or "")
+    }
+    for signal_id in signal_ids:
+        text = str(signal_id or "")
+        if not text or text in seen:
+            continue
+        consumed.append(text)
+        seen.add(text)
+    if len(consumed) > PRESSURE_SIGNAL_CONSUMED_IDS_MAX:
+        state["pressure_signal_consumed_ids"] = consumed[-PRESSURE_SIGNAL_CONSUMED_IDS_MAX:]
+
+
+def _capture_relationship_threshold_receipts(
+    state: Dict[str, Any],
+    sources: List[Mapping[str, Any]],
+    turn_number: int,
+) -> int:
+    created = 0
+    for source in sources:
+        if not isinstance(source, Mapping):
+            continue
+        receipt = relationships.threshold_receipt_from_source(source, turn_number=turn_number)
+        if not receipt:
+            continue
+        if _append_relationship_effect_receipt(state, receipt):
+            created += 1
+            receipt_id = str(receipt.get("receipt_id") or "")
+            if receipt_id:
+                _append_transition_receipt(
+                    state,
+                    source_event_id=receipt_id,
+                    receipt_type=str(receipt.get("receipt_type") or "relationship_threshold_crossed"),
+                    turn_number=turn_number,
+                )
+    return created
+
+
+def _apply_information_pressure_bridge(
+    state: Dict[str, Any],
+    turn_number: int,
+    diagnostics: Dict[str, Any],
+) -> None:
+    signal_candidates = information_engine.pressure_signal_candidates(state)
+    if not signal_candidates:
+        return
+    pressure_result = pressure_graph.apply_information_pressure_signals(
+        state.setdefault("pressure_graph", pressure_graph.copy_pressure_graph(None)),
+        signal_candidates,
+        turn_number,
+        run_seed=str(state.get("run_seed") or ""),
+        consumed_signal_ids=state.get("pressure_signal_consumed_ids") or [],
+    )
+    bridge_diag = pressure_result.get("diagnostics") or {}
+    diagnostics.update(
+        {
+            key: value
+            for key, value in bridge_diag.items()
+            if value not in (False, 0, None, [], {})
+        }
+    )
+    applied_signal_ids = pressure_result.get("applied_signal_ids") or []
+    if applied_signal_ids:
+        _append_pressure_signal_consumed_ids(state, applied_signal_ids)
+    for receipt in pressure_result.get("receipts") or []:
+        if not isinstance(receipt, Mapping):
+            continue
+        source_id = str(
+            (receipt.get("source_event_ids") or [None])[0]
+            or receipt.get("receipt_id")
+            or ""
+        )
+        if source_id:
+            _append_transition_receipt(
+                state,
+                source_event_id=source_id,
+                receipt_type=str(receipt.get("receipt_type") or "pressure_evolved"),
+                turn_number=turn_number,
+                details=receipt,
+            )
+    for skipped in pressure_result.get("skipped") or []:
+        if not isinstance(skipped, Mapping):
+            continue
+        source_id = str(skipped.get("source_signal_id") or "")
+        receipt_type = str(skipped.get("receipt_type") or "")
+        if source_id and receipt_type:
+            _append_transition_receipt(
+                state,
+                source_event_id=source_id,
+                receipt_type=receipt_type,
+                turn_number=turn_number,
+                details=skipped,
+            )
 
 
 def finalize_living_cast_relationships(
@@ -1528,6 +1692,7 @@ def living_cast_state_metrics(
     information_items = replayability_state.get("information_items") or []
     information_receipts = replayability_state.get("information_receipts") or []
     reputation_signals = replayability_state.get("reputation_signals") or []
+    pressure_signal_consumed_ids = replayability_state.get("pressure_signal_consumed_ids") or []
     arc_state = replayability_state.get("arc_diversity") or {}
     arc_beats = arc_state.get("recent_beats") or []
     echo_state = replayability_state.get("consequence_echoes") or {}
@@ -1552,6 +1717,10 @@ def living_cast_state_metrics(
         "information_items": (information_items, len(information_items)),
         "information_receipts": (information_receipts, len(information_receipts)),
         "reputation_signals": (reputation_signals, len(reputation_signals)),
+        "pressure_signal_consumed_ids": (
+            pressure_signal_consumed_ids,
+            len(pressure_signal_consumed_ids),
+        ),
         "arc_diversity_beats": (arc_beats, len(arc_beats)),
         "pressure_graph": (pressure, len(pressure.get("nodes") or [])),
         "consequence_echoes": (
@@ -1599,6 +1768,7 @@ def finalize_action_turn(
                 turn_number=turn_number,
             )
     evolve_agendas_from_sources(state, qualifying_sources, turn_number)
+    _capture_relationship_threshold_receipts(state, validated, turn_number)
     information_result = information_engine.evolve_information(
         state,
         {},
@@ -1617,6 +1787,7 @@ def finalize_action_turn(
                 receipt_type=str(receipt.get("receipt_type") or "information_evolved"),
                 turn_number=turn_number,
             )
+    _apply_information_pressure_bridge(state, turn_number, {})
     return state
 
 

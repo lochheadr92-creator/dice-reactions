@@ -67,6 +67,14 @@ INFORMATION_RECEIPT_TYPES = (
 )
 
 HIGH_GRAVITY_WORLD_EVENT_SEVERITY = 7
+PRESSURE_SIGNAL_MAX = 8
+PRESSURE_INFORMATION_MIN_GRAVITY = 6
+PRESSURE_RUMOUR_MIN_GRAVITY = 7
+PRESSURE_INFORMATION_MIN_RELIABILITY = 72
+PRESSURE_RUMOUR_MIN_RELIABILITY = 68
+PRESSURE_REPUTATION_MIN_CONFIDENCE = 70
+PRESSURE_REPUTATION_MIN_RELIABILITY = 70
+PRESSURE_REPUTATION_MIN_SCORE = 22
 
 EVENT_REPUTATION_MAP: Dict[str, Tuple[str, int]] = {
     "attack": ("dangerous", 25),
@@ -1233,6 +1241,348 @@ def _reputation_from_relationship_receipt(row: Mapping[str, Any], *, turn_number
         },
         run_seed=run_seed,
     )
+
+
+def _pressure_scope_from_visibility(scope: str) -> str:
+    normalised = _normalise_visibility(scope)
+    if normalised == "faction":
+        return "faction"
+    if normalised == "actor":
+        return "personal"
+    return "local"
+
+
+def _pressure_targets_from_subjects(
+    subject_refs: Sequence[Mapping[str, Any]],
+) -> Dict[str, List[str]]:
+    actor_ids: List[str] = []
+    faction_ids: List[str] = []
+    location_ids: List[str] = []
+    for ref in subject_refs or []:
+        if not isinstance(ref, Mapping):
+            continue
+        subject_type = _bounded_str(ref.get("subject_type"), 80).lower()
+        subject_id = _bounded_str(ref.get("subject_id"), 160)
+        if not subject_id:
+            continue
+        if subject_type in {"actor", "npc", "player"} and subject_id not in actor_ids:
+            actor_ids.append(subject_id)
+        elif subject_type == "faction" and subject_id not in faction_ids:
+            faction_ids.append(subject_id)
+        elif subject_type in {"location", "settlement"} and subject_id not in location_ids:
+            location_ids.append(subject_id)
+    return {
+        "actor_ids": actor_ids[:MAX_INFORMATION_REFS],
+        "faction_ids": faction_ids[:MAX_INFORMATION_REFS],
+        "location_ids": location_ids[:MAX_INFORMATION_REFS],
+    }
+
+
+def _pressure_known_scope_count(row: Mapping[str, Any]) -> int:
+    seen = set()
+    for access in row.get("observer_access") or []:
+        if not isinstance(access, Mapping):
+            continue
+        scope_type = _bounded_str(access.get("scope_type"), 80)
+        scope_id = _bounded_str(access.get("scope_id"), 160)
+        if scope_type and scope_id:
+            seen.add((scope_type, scope_id))
+    for scope in row.get("known_by") or []:
+        if not isinstance(scope, Mapping):
+            continue
+        scope_type = _bounded_str(scope.get("scope_type"), 80)
+        scope_id = _bounded_str(scope.get("scope_id"), 160)
+        if scope_type and scope_id:
+            seen.add((scope_type, scope_id))
+    return len(seen)
+
+
+def _pressure_anchor_id(
+    *,
+    scope: str,
+    actor_ids: Sequence[str],
+    faction_ids: Sequence[str],
+    location_ids: Sequence[str],
+) -> str:
+    if scope == "personal" and actor_ids:
+        return f"actor:{actor_ids[0]}"
+    if scope == "faction" and faction_ids:
+        return f"faction:{faction_ids[0]}"
+    if location_ids:
+        return f"location:{location_ids[0]}"
+    if faction_ids:
+        return f"faction:{faction_ids[0]}"
+    if actor_ids:
+        return f"actor:{actor_ids[0]}"
+    return "public"
+
+
+def _pressure_candidate_sort_key(row: Mapping[str, Any]) -> Tuple[int, int, int, str]:
+    return (
+        -_clamp_int(row.get("magnitude"), 0, 100),
+        -_clamp_int(row.get("priority"), 0, 100),
+        -_stamp_turn(row, "updated_at", _coerce_int(row.get("turn"), 0)),
+        str(row.get("source_signal_id") or ""),
+    )
+
+
+def _information_pressure_candidate(row: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    info_id = _bounded_str(row.get("information_id"), 160)
+    if not info_id or bool(row.get("stale")):
+        return None
+    info_type = _normalise_information_type(row.get("information_type"))
+    visibility = _normalise_visibility(row.get("visibility_scope"))
+    reliability = _clamp_int(row.get("reliability"), 0, 100, default=50)
+    gravity = _clamp_int(row.get("gravity"), 0, 10, default=1)
+    reach = _pressure_known_scope_count(row)
+    subject_targets = _pressure_targets_from_subjects(row.get("subject_refs") or [])
+    actor_ids = subject_targets["actor_ids"]
+    faction_ids = subject_targets["faction_ids"]
+    location_ids = subject_targets["location_ids"]
+    scope = "personal" if actor_ids else _pressure_scope_from_visibility(visibility)
+    pressure_kind = ""
+    reason = ""
+    priority = 0
+
+    if info_type == "rumour":
+        if (
+            gravity < PRESSURE_RUMOUR_MIN_GRAVITY
+            or reliability < PRESSURE_RUMOUR_MIN_RELIABILITY
+            or visibility not in {"settlement", "faction", "public"}
+            or reach < 2
+        ):
+            return None
+        pressure_kind = "social_tension"
+        priority = 24 + gravity + reach
+        reason = (
+            f"spreading rumour reached {reach} scopes with gravity {gravity} "
+            f"and reliability {reliability}"
+        )
+    elif info_type == "evidence_summary":
+        if (
+            gravity < PRESSURE_INFORMATION_MIN_GRAVITY
+            or reliability < PRESSURE_INFORMATION_MIN_RELIABILITY
+            or visibility in {"private", "case", "unknown", "archived"}
+        ):
+            return None
+        pressure_kind = "suspicion"
+        priority = 26 + gravity
+        reason = f"evidence exposure is public enough to travel with gravity {gravity}"
+    else:
+        if (
+            gravity < PRESSURE_INFORMATION_MIN_GRAVITY
+            or reliability < PRESSURE_INFORMATION_MIN_RELIABILITY
+            or visibility not in {"settlement", "faction", "public", "witnessed", "actor"}
+        ):
+            return None
+        pressure_kind = "suspicion" if actor_ids else "social_tension"
+        priority = 22 + gravity
+        reason = f"high-confidence claim became visible at {visibility} scope"
+
+    magnitude = min(
+        82,
+        18
+        + gravity * 5
+        + max(0, reliability - 60) // 3
+        + min(10, reach * 2),
+    )
+    anchor_id = _pressure_anchor_id(
+        scope=scope,
+        actor_ids=actor_ids,
+        faction_ids=faction_ids,
+        location_ids=location_ids,
+    )
+    return {
+        "source_signal_id": info_id,
+        "source_kind": "information_item",
+        "pressure_kind": pressure_kind,
+        "scope": scope,
+        "priority": priority,
+        "magnitude": magnitude,
+        "actor_ids": actor_ids,
+        "faction_ids": faction_ids,
+        "location_ids": location_ids,
+        "anchor_id": anchor_id,
+        "origin_id": f"{pressure_kind}:{scope}:{anchor_id}",
+        "label": _bounded_str(row.get("summary") or info_type.replace("_", " "), 80),
+        "reason": reason,
+        "qualifier": info_type,
+        "source_event_ids": _bounded_str_list(
+            [info_id] + list(row.get("source_event_ids") or []),
+            MAX_INFORMATION_REFS,
+        ),
+        "evidence_refs": _bounded_str_list(
+            [f"information:{info_id}"] + list(row.get("source_event_ids") or []),
+            MAX_INFORMATION_REFS,
+        ),
+        "updated_at": row.get("updated_at"),
+        "turn": _stamp_turn(row, "updated_at", 0),
+    }
+
+
+def _reputation_pressure_candidate(row: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    signal_id = _bounded_str(row.get("signal_id"), 160)
+    if not signal_id:
+        return None
+    dimension = _normalise_dimension(row.get("dimension"))
+    score = _clamp_int(row.get("score"), -100, 100, default=0)
+    confidence = _clamp_int(row.get("confidence"), 0, 100, default=50)
+    reliability = _clamp_int(row.get("reliability"), 0, 100, default=confidence)
+    if (
+        confidence < PRESSURE_REPUTATION_MIN_CONFIDENCE
+        or reliability < PRESSURE_REPUTATION_MIN_RELIABILITY
+        or abs(score) < PRESSURE_REPUTATION_MIN_SCORE
+    ):
+        return None
+
+    pressure_kind = ""
+    reason = ""
+    priority = 0
+    if dimension == "dangerous" and score >= PRESSURE_REPUTATION_MIN_SCORE:
+        pressure_kind = "danger"
+        reason = f"dangerous reputation crossed severity threshold at score {score}"
+        priority = 34 + score // 4
+    elif dimension == "suspicious" and score >= PRESSURE_REPUTATION_MIN_SCORE:
+        pressure_kind = "suspicion"
+        reason = f"suspicious reputation crossed threshold at score {score}"
+        priority = 30 + score // 4
+    elif dimension == "trustworthy" and score <= -PRESSURE_REPUTATION_MIN_SCORE:
+        pressure_kind = "social_tension"
+        reason = f"reputation damage pushed trustworthiness to {score}"
+        priority = 28 + abs(score) // 4
+    elif dimension == "cruel" and score >= PRESSURE_REPUTATION_MIN_SCORE:
+        pressure_kind = "social_tension"
+        reason = f"cruel reputation crossed threshold at score {score}"
+        priority = 28 + score // 4
+    else:
+        return None
+
+    observer_scope = _normalise_ref(
+        row.get("observer_scope") or {},
+        type_key="scope_type",
+        id_key="scope_id",
+    )
+    scope_type = _bounded_str(observer_scope.get("scope_type"), 80)
+    scope_id = _bounded_str(observer_scope.get("scope_id"), 160)
+    scope = "personal" if scope_type == "actor" else "faction" if scope_type == "faction" else "local"
+    subject_type = _bounded_str(row.get("subject_type"), 80).lower()
+    subject_id = _bounded_str(row.get("subject_id"), 160)
+    actor_ids = [subject_id] if subject_type in {"actor", "npc", "player"} and subject_id else []
+    faction_ids = [subject_id] if subject_type == "faction" and subject_id else []
+    location_ids = [scope_id] if scope_type == "settlement" and scope_id else []
+    if scope == "faction" and scope_id and scope_id not in faction_ids:
+        faction_ids = [scope_id] + faction_ids
+    anchor_id = _pressure_anchor_id(
+        scope=scope,
+        actor_ids=actor_ids,
+        faction_ids=faction_ids,
+        location_ids=location_ids,
+    )
+    magnitude = min(
+        86,
+        22 + abs(score) // 2 + max(0, confidence - 60) // 4 + max(0, reliability - 60) // 4,
+    )
+    return {
+        "source_signal_id": signal_id,
+        "source_kind": "reputation_signal",
+        "pressure_kind": pressure_kind,
+        "scope": scope,
+        "priority": priority,
+        "magnitude": magnitude,
+        "actor_ids": actor_ids,
+        "faction_ids": faction_ids,
+        "location_ids": location_ids,
+        "anchor_id": anchor_id,
+        "origin_id": f"{pressure_kind}:{scope}:{anchor_id}",
+        "label": _bounded_str(f"{subject_id or subject_type} {dimension}", 80),
+        "reason": reason,
+        "qualifier": dimension,
+        "source_event_ids": _bounded_str_list(
+            [signal_id] + list(row.get("source_event_ids") or []),
+            MAX_INFORMATION_REFS,
+        ),
+        "evidence_refs": _bounded_str_list(
+            [f"reputation:{signal_id}"] + list(row.get("source_event_ids") or []),
+            MAX_INFORMATION_REFS,
+        ),
+        "updated_at": row.get("updated_at"),
+        "turn": _stamp_turn(row, "updated_at", 0),
+    }
+
+
+def _relationship_pressure_candidate(row: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    receipt_id = _bounded_str(row.get("receipt_id"), 160)
+    npc_name = _bounded_str(row.get("npc_name"), 160)
+    after_state = _bounded_str(row.get("after_state"), 80)
+    before_state = _bounded_str(row.get("before_state"), 80)
+    if not receipt_id or not npc_name or after_state not in {"collapsed", "betrayal_risk"}:
+        return None
+    pressure_kind = "social_tension" if after_state == "collapsed" else "suspicion"
+    magnitude = 54 if after_state == "collapsed" else 42
+    reason = (
+        f"relationship threshold moved from {before_state or 'neutral'} "
+        f"to {after_state}"
+    )
+    return {
+        "source_signal_id": receipt_id,
+        "source_kind": "relationship_receipt",
+        "pressure_kind": pressure_kind,
+        "scope": "personal",
+        "priority": 40 if after_state == "collapsed" else 32,
+        "magnitude": magnitude,
+        "actor_ids": ["player", npc_name],
+        "faction_ids": [],
+        "location_ids": [],
+        "anchor_id": f"actor:{npc_name}",
+        "origin_id": f"{pressure_kind}:personal:actor:{npc_name}",
+        "label": _bounded_str(f"{npc_name} {after_state.replace('_', ' ')}", 80),
+        "reason": reason,
+        "qualifier": after_state,
+        "source_event_ids": _bounded_str_list(
+            [receipt_id, row.get("source_event_id")] + list(row.get("source_event_ids") or []),
+            MAX_INFORMATION_REFS,
+        ),
+        "evidence_refs": _bounded_str_list([f"relationship:{receipt_id}"], MAX_INFORMATION_REFS),
+        "updated_at": {"turn": _coerce_int(row.get("turn"), 0)},
+        "turn": _coerce_int(row.get("turn"), 0),
+    }
+
+
+def pressure_signal_candidates(
+    replayability_state: Mapping[str, Any],
+    *,
+    limit: int = PRESSURE_SIGNAL_MAX,
+) -> List[Dict[str, Any]]:
+    if not isinstance(replayability_state, Mapping):
+        return []
+    candidates: List[Dict[str, Any]] = []
+    for item in replayability_state.get("information_items") or []:
+        if isinstance(item, Mapping):
+            candidate = _information_pressure_candidate(item)
+            if candidate:
+                candidates.append(candidate)
+    for signal in replayability_state.get("reputation_signals") or []:
+        if isinstance(signal, Mapping):
+            candidate = _reputation_pressure_candidate(signal)
+            if candidate:
+                candidates.append(candidate)
+    for receipt in replayability_state.get("relationship_effect_receipts") or []:
+        if isinstance(receipt, Mapping):
+            candidate = _relationship_pressure_candidate(receipt)
+            if candidate:
+                candidates.append(candidate)
+    ordered = sorted(candidates, key=_pressure_candidate_sort_key)
+    deduped: List[Dict[str, Any]] = []
+    seen = set()
+    for row in ordered:
+        source_signal_id = str(row.get("source_signal_id") or "")
+        if not source_signal_id or source_signal_id in seen:
+            continue
+        seen.add(source_signal_id)
+        deduped.append(row)
+        if len(deduped) >= max(0, min(PRESSURE_SIGNAL_MAX, int(limit or 0))):
+            break
+    return deduped
 
 
 def _actor_context_from_rolling(rolling_state: Mapping[str, Any]) -> Dict[str, Dict[str, List[str]]]:

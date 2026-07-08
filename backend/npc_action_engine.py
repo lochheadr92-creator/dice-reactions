@@ -57,6 +57,23 @@ ACTION_RECEIPT_TYPES = (
     "npc_action_event_generated",
 )
 
+UTILITY_ACTION_KIND_BY_ACTION_TYPE = {
+    "defend": "protect",
+    "warn": "pressure",
+    "hide": "conceal",
+    "retreat": "withdraw",
+    "repair": "fortify",
+    "patrol": "protect",
+    "escort": "protect",
+    "support": "protect",
+    "attack": "pressure",
+    "wait": "idle",
+}
+
+UTILITY_ACTION_KINDS = tuple(
+    sorted(set(UTILITY_ACTION_KIND_BY_ACTION_TYPE.values()) | set(ACTION_TYPES))
+)
+
 PROMPT_ACTION_FIELDS = (
     "current_action",
     "destination",
@@ -234,6 +251,297 @@ def _select_goal_for_actor(goals: Sequence[Mapping[str, Any]], actor_id: str) ->
     return actor_goals[0]
 
 
+def _utility_action_kind(action_type: str) -> str:
+    action_type = _bounded_str(action_type, 40)
+    return UTILITY_ACTION_KIND_BY_ACTION_TYPE.get(action_type, action_type)
+
+
+def _utility_inputs_for_actor(snapshot: Any, actor_id: str) -> Dict[str, Any]:
+    for ref in getattr(snapshot, "utility_input_refs", ()) or ():
+        if isinstance(ref, Mapping) and str(ref.get("actor_id") or "") == actor_id:
+            return dict(ref)
+    return {}
+
+
+def _utility_personality_order(preferred: str) -> List[str]:
+    preferred = _bounded_str(preferred, 40)
+    ordered = [preferred] if preferred else []
+    for action in UTILITY_ACTION_KINDS:
+        if action and action not in ordered:
+            ordered.append(action)
+    return ordered
+
+
+def _float4(value: Any) -> Optional[float]:
+    try:
+        return round(float(value), 4)
+    except (TypeError, ValueError):
+        return None
+
+
+def _utility_score_row_summary(
+    row: Mapping[str, Any],
+    candidate_by_key: Mapping[Tuple[str, str, str, str], Mapping[str, Any]],
+) -> Dict[str, Any]:
+    key = (
+        str(row.get("actor_id") or ""),
+        str(row.get("action_kind") or ""),
+        str(row.get("target_kind") or ""),
+        str(row.get("target_id") or ""),
+    )
+    candidate = candidate_by_key.get(key) or {}
+    out: Dict[str, Any] = {
+        "goal_id": candidate.get("goal_id") or row.get("target_id"),
+        "action_kind": row.get("action_kind"),
+        "npc_action_type": candidate.get("npc_action_type") or row.get("action_kind"),
+        "target_kind": row.get("target_kind"),
+        "target_id": row.get("target_id"),
+    }
+    for key_name in ("base_utility", "noisy_utility", "pressure_modifier", "situation_modifier", "goal_modifier"):
+        number = _float4(row.get(key_name))
+        if number is not None:
+            out[key_name] = number
+    for key_name in ("pressure_node_ids", "situation_ids", "goal_ids"):
+        if row.get(key_name):
+            out[key_name] = _bounded_str_list(row.get(key_name), MAX_ACTION_REFS)
+    return out
+
+
+def _utility_selection_summary(
+    result: Mapping[str, Any],
+    candidates: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    candidate_by_key = {
+        (
+            str(row.get("actor_id") or ""),
+            str(row.get("action_kind") or ""),
+            str(row.get("target_kind") or ""),
+            str(row.get("target_id") or ""),
+        ): row
+        for row in candidates
+        if isinstance(row, Mapping)
+    }
+    selected = result.get("selected") if isinstance(result.get("selected"), Mapping) else {}
+    selected_key = (
+        str(selected.get("actor_id") or ""),
+        str(selected.get("action_kind") or ""),
+        str(selected.get("target_kind") or ""),
+        str(selected.get("target_id") or ""),
+    )
+    selected_candidate = candidate_by_key.get(selected_key) or {}
+    score_table = [
+        _utility_score_row_summary(row, candidate_by_key)
+        for row in (result.get("score_table") or [])[:4]
+        if isinstance(row, Mapping)
+    ]
+    summary: Dict[str, Any] = {
+        "schema_version": result.get("schema_version"),
+        "selected_goal_id": selected_candidate.get("goal_id") or selected.get("target_id"),
+        "selected_action_kind": selected.get("action_kind"),
+        "selected_npc_action_type": selected_candidate.get("npc_action_type") or selected.get("action_kind"),
+        "selected_target_kind": selected.get("target_kind"),
+        "selected_target_id": selected.get("target_id"),
+        "candidate_set_hash": result.get("candidate_set_hash"),
+        "candidates_evaluated": result.get("candidates_evaluated"),
+        "score_table": score_table,
+    }
+    for key_name in ("base_utility", "noisy_utility", "pressure_modifier", "situation_modifier", "goal_modifier"):
+        number = _float4(selected.get(key_name))
+        if number is not None:
+            summary[key_name] = number
+    return summary
+
+
+def _normalise_utility_selection(value: Any) -> Dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    out: Dict[str, Any] = {
+        "schema_version": value.get("schema_version"),
+        "selected_goal_id": _bounded_str(value.get("selected_goal_id"), 160),
+        "selected_action_kind": _bounded_str(value.get("selected_action_kind"), 80),
+        "selected_npc_action_type": _bounded_str(value.get("selected_npc_action_type"), 80),
+        "selected_target_kind": _bounded_str(value.get("selected_target_kind"), 80),
+        "selected_target_id": _bounded_str(value.get("selected_target_id"), 160),
+        "candidate_set_hash": _bounded_str(value.get("candidate_set_hash"), 160),
+        "candidates_evaluated": _clamp_int(value.get("candidates_evaluated"), 0, 99),
+    }
+    for key_name in ("base_utility", "noisy_utility", "pressure_modifier", "situation_modifier", "goal_modifier"):
+        number = _float4(value.get(key_name))
+        if number is not None:
+            out[key_name] = number
+    rows: List[Dict[str, Any]] = []
+    for row in value.get("score_table") or []:
+        if not isinstance(row, Mapping):
+            continue
+        clean = {
+            "goal_id": _bounded_str(row.get("goal_id"), 160),
+            "action_kind": _bounded_str(row.get("action_kind"), 80),
+            "npc_action_type": _bounded_str(row.get("npc_action_type"), 80),
+            "target_kind": _bounded_str(row.get("target_kind"), 80),
+            "target_id": _bounded_str(row.get("target_id"), 160),
+        }
+        for key_name in ("base_utility", "noisy_utility", "pressure_modifier", "situation_modifier", "goal_modifier"):
+            number = _float4(row.get(key_name))
+            if number is not None:
+                clean[key_name] = number
+        for key_name in ("pressure_node_ids", "situation_ids", "goal_ids"):
+            if row.get(key_name):
+                clean[key_name] = _bounded_str_list(row.get(key_name), MAX_ACTION_REFS)
+        rows.append(clean)
+        if len(rows) >= 4:
+            break
+    if rows:
+        out["score_table"] = rows
+    return {key: value for key, value in out.items() if value not in ("", None, [], {})}
+
+
+def _goal_utility_candidate(
+    goal: Mapping[str, Any],
+    *,
+    snapshot: Any,
+    rolling_state: Mapping[str, Any],
+    replayability_state: Mapping[str, Any],
+    run_seed: str,
+) -> Optional[Dict[str, Any]]:
+    actor_id = _bounded_str(goal.get("owner_id"), 160)
+    goal_id = _bounded_str(goal.get("goal_id"), 160)
+    if not actor_id or not goal_id:
+        return None
+    action_type = _action_type_for_goal(goal)
+    utility_action = _utility_action_kind(action_type)
+    inputs = _utility_inputs_for_actor(snapshot, actor_id)
+    actor_inputs = {
+        **inputs,
+        "goal_kind": str(goal.get("goal_type") or inputs.get("goal_kind") or ""),
+        "goal_priority": _clamp_int(goal.get("priority"), 0, 10) / 10.0,
+        "goal_urgency": _clamp_int(goal.get("urgency"), 0, 10) / 10.0,
+    }
+    try:
+        import utility_ai
+
+        bundle = utility_ai.build_canonical_dimension_bundle(
+            snapshot,
+            actor_id=actor_id,
+            action_kind=utility_action,
+            target_kind="goal",
+            aligned_goals=frozenset({str(goal.get("goal_type") or "")}),
+            relationship_deltas={},
+            actor_inputs=actor_inputs,
+        )
+    except Exception:
+        return None
+    return {
+        "actor_id": actor_id,
+        "action_kind": utility_action,
+        "target_kind": "goal",
+        "target_id": goal_id,
+        "goal_id": goal_id,
+        "goal_type": goal.get("goal_type"),
+        "npc_action_type": action_type,
+        "dimension_scores": bundle["dimension_scores"],
+        "dimension_score_records": bundle["dimension_score_records"],
+        "replacement_authorised": bundle["replacement_authorised"],
+        "blocker_codes": bundle["blocker_codes"],
+        "goal_priority": float(actor_inputs["goal_priority"] or 0.0),
+        "pressure_intensity": float(actor_inputs.get("highest_pressure_intensity") or 0.0),
+        "stress": float(actor_inputs.get("stress_level") or 0.0),
+        "relationship_importance": float(actor_inputs.get("relationship_importance") or 5.0),
+        "resource_scarcity": float(actor_inputs.get("resource_scarcity") or 0.0),
+        "trauma_intensity": 0.0,
+        "starving": bool(actor_inputs.get("starving")),
+        "personality_order": _utility_personality_order(utility_action),
+        "run_seed": run_seed,
+        "target_location": _target_location(goal, rolling_state, actor_id),
+        "target_actor": _target_actor(goal),
+        "replayability_state_seen": bool(replayability_state),
+    }
+
+
+def _select_goal_with_utility(
+    actor_goals: Sequence[Mapping[str, Any]],
+    *,
+    actor_id: str,
+    replayability_state: Mapping[str, Any],
+    rolling_state: Mapping[str, Any],
+    run_seed: str,
+    turn_number: int,
+    utility_snapshot: Optional[Any] = None,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], List[Dict[str, Any]], bool]:
+    if not actor_goals:
+        return None, None, [], False
+    snapshot = utility_snapshot
+    if snapshot is None:
+        try:
+            from foundation_snapshot import FoundationTurnSnapshot
+
+            snapshot = FoundationTurnSnapshot.build(
+                run_seed=run_seed,
+                turn_sequence=turn_number,
+                rolling_state=rolling_state if isinstance(rolling_state, Mapping) else {},
+                replayability_state=replayability_state if isinstance(replayability_state, Mapping) else {},
+            )
+        except Exception:
+            snapshot = None
+    if snapshot is None:
+        return None, None, [], False
+
+    candidates = [
+        candidate
+        for goal in actor_goals
+        for candidate in [
+            _goal_utility_candidate(
+                goal,
+                snapshot=snapshot,
+                rolling_state=rolling_state if isinstance(rolling_state, Mapping) else {},
+                replayability_state=replayability_state,
+                run_seed=run_seed,
+            )
+        ]
+        if candidate
+    ]
+    if not candidates:
+        return None, None, [], False
+    try:
+        import utility_ai
+
+        result = utility_ai.select_action(
+            candidates,
+            snapshot=snapshot,
+            actor_resolution={
+                "acting_actor_ids": [actor_id],
+                "tiers_by_actor_id": {actor_id: "goal_owned"},
+            },
+        )
+    except Exception:
+        return None, None, candidates, False
+    selected = result.get("selected") if isinstance(result.get("selected"), Mapping) else None
+    if not selected:
+        return None, _utility_selection_summary(result, candidates), candidates, False
+    selected_key = (
+        str(selected.get("actor_id") or ""),
+        str(selected.get("action_kind") or ""),
+        str(selected.get("target_kind") or ""),
+        str(selected.get("target_id") or ""),
+    )
+    by_key = {
+        (
+            str(row.get("actor_id") or ""),
+            str(row.get("action_kind") or ""),
+            str(row.get("target_kind") or ""),
+            str(row.get("target_id") or ""),
+        ): row
+        for row in candidates
+    }
+    candidate = by_key.get(selected_key)
+    if not candidate:
+        return None, _utility_selection_summary(result, candidates), candidates, False
+    goal_id = str(candidate.get("goal_id") or "")
+    for goal in actor_goals:
+        if str(goal.get("goal_id") or "") == goal_id:
+            return dict(goal), _utility_selection_summary(result, candidates), candidates, True
+    return None, _utility_selection_summary(result, candidates), candidates, False
+
+
 def _outcome_for(goal: Mapping[str, Any], action_type: str) -> str:
     step = _current_step(goal)
     if goal.get("status") == "blocked" or step.get("status") == "blocked":
@@ -338,6 +646,8 @@ def _normalise_action(row: Mapping[str, Any]) -> Dict[str, Any]:
         "goal_title": _bounded_str(row.get("goal_title"), 120),
         "goal_progress": _clamp_int(row.get("goal_progress"), 0, 100),
         "destination": _bounded_str(row.get("destination") or row.get("target_location"), 160),
+        "selection_source": _bounded_str(row.get("selection_source") or "priority", 40),
+        "utility_selection": _normalise_utility_selection(row.get("utility_selection")),
     }
 
 
@@ -351,6 +661,7 @@ def _action_summary(action: Mapping[str, Any]) -> Dict[str, Any]:
         "outcome": action.get("outcome"),
         "resolved_turn": action.get("resolved_turn"),
         "resulting_event_ids": list(action.get("resulting_event_ids") or [])[:MAX_ACTION_REFS],
+        "selection_source": action.get("selection_source"),
     }
 
 
@@ -388,6 +699,9 @@ def _append_receipt(
         "after": _action_summary(action),
         "source_event_ids": list(action.get("source_event_ids") or [])[:MAX_ACTION_REFS],
     }
+    utility_selection = _normalise_utility_selection(action.get("utility_selection"))
+    if receipt_type == "npc_action_selected" and utility_selection:
+        receipt["utility_selection"] = utility_selection
     receipts.append(receipt)
     if len(receipts) > MAX_NPC_ACTION_RECEIPTS:
         replayability_state["npc_action_receipts"] = receipts[-MAX_NPC_ACTION_RECEIPTS:]
@@ -402,10 +716,14 @@ def _build_action_and_event(
     rolling_state: Mapping[str, Any],
     run_seed: str,
     turn_number: int,
+    action_type_override: str = "",
+    utility_selection: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     actor_id = _bounded_str(goal.get("owner_id"), 160)
     goal_id = _bounded_str(goal.get("goal_id"), 160)
-    action_type = _action_type_for_goal(goal)
+    action_type = _bounded_str(action_type_override, 40) or _action_type_for_goal(goal)
+    if action_type not in ACTION_TYPES:
+        action_type = _action_type_for_goal(goal)
     outcome = _outcome_for(goal, action_type)
     if outcome == "blocked":
         action_type = "wait"
@@ -446,6 +764,8 @@ def _build_action_and_event(
             "goal_title": goal.get("title"),
             "goal_progress": goal.get("progress"),
             "destination": target_location,
+            "selection_source": "utility_ai" if utility_selection else "priority",
+            "utility_selection": utility_selection or {},
         }
     )
     effects: List[Dict[str, Any]] = []
@@ -501,10 +821,14 @@ def evolve_npc_actions(
     turn_number: int,
     *,
     run_seed: str = "",
+    utility_snapshot: Optional[Any] = None,
 ) -> Dict[str, Any]:
     diagnostics = {
         "npc_action_engine_executed": False,
         "npc_action_candidates_evaluated": 0,
+        "npc_action_utility_candidates_evaluated": 0,
+        "npc_action_utility_selections": 0,
+        "npc_action_utility_fallbacks": 0,
         "npc_actions_created": 0,
         "npc_action_events_generated": 0,
         "npc_action_duplicate_suppressed": 0,
@@ -531,16 +855,39 @@ def evolve_npc_actions(
     for actor_id in actors:
         if len(local_actions) >= MAX_NPC_ACTIONS_PER_TICK or len(local_events) >= MAX_ACTION_EVENTS_PER_TICK:
             break
-        goal = _select_goal_for_actor(goals, actor_id)
+        actor_goals = [dict(row) for row in goals if str(row.get("owner_id") or "") == actor_id]
+        goal, utility_selection, utility_candidates, utility_selected = _select_goal_with_utility(
+            actor_goals,
+            actor_id=actor_id,
+            replayability_state=replayability_state,
+            rolling_state=rolling_state if isinstance(rolling_state, Mapping) else {},
+            run_seed=seed,
+            turn_number=turn_number,
+            utility_snapshot=utility_snapshot,
+        )
+        if utility_candidates:
+            diagnostics["npc_action_utility_candidates_evaluated"] += len(utility_candidates)
+            diagnostics["npc_action_candidates_evaluated"] += len(utility_candidates)
+        if utility_selected:
+            diagnostics["npc_action_utility_selections"] += 1
+        else:
+            diagnostics["npc_action_utility_fallbacks"] += 1
+            goal = _select_goal_for_actor(goals, actor_id)
+            if not utility_candidates:
+                diagnostics["npc_action_candidates_evaluated"] += 1
         if not goal:
             continue
-        diagnostics["npc_action_candidates_evaluated"] += 1
+        action_type_override = ""
+        if utility_selected and utility_selection:
+            action_type_override = _bounded_str(utility_selection.get("selected_npc_action_type"), 40)
         action, event = _build_action_and_event(
             goal,
             replayability_state=replayability_state,
             rolling_state=rolling_state if isinstance(rolling_state, Mapping) else {},
             run_seed=seed,
             turn_number=turn_number,
+            action_type_override=action_type_override,
+            utility_selection=utility_selection if utility_selected else None,
         )
         action_id = str(action.get("action_id") or "")
         if not action_id or action_id in existing_action_ids:
@@ -556,7 +903,11 @@ def evolve_npc_actions(
             receipt_type="npc_action_selected",
             action=action,
             turn_number=turn_number,
-            detail="selected_from_goal",
+            detail=(
+                f"utility_selected:{action.get('action_type')}"
+                if utility_selected
+                else "selected_from_goal"
+            ),
         ):
             diagnostics["npc_actions_created"] += 1
         _append_receipt(

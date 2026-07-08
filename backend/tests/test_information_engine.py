@@ -361,6 +361,136 @@ def test_evidence_summary_forms_information_and_scoped_reputation_signal():
     assert signal["observer_scope"] == {"scope_type": "settlement", "scope_id": "market"}
 
 
+def test_pressure_signal_candidates_ignore_low_severity_noise():
+    state = _state()
+    state["information_items"] = [
+        {
+            "information_id": "info-noise",
+            "information_type": "rumour",
+            "summary": "someone maybe saw trouble",
+            "source_event_ids": ["evt-noise"],
+            "subject_refs": [{"subject_type": "location", "subject_id": "dock"}],
+            "known_by": [{"scope_type": "settlement", "scope_id": "dock"}],
+            "observer_access": [
+                {
+                    "access_type": "local_community",
+                    "scope_type": "settlement",
+                    "scope_id": "dock",
+                    "source_event_ids": ["evt-noise"],
+                    "reliability": 48,
+                    "distortion_level": 30,
+                    "acquired_at": {"turn": 2},
+                }
+            ],
+            "reliability": 48,
+            "distortion_level": 30,
+            "visibility_scope": "settlement",
+            "created_at": {"turn": 2},
+            "updated_at": {"turn": 2},
+            "gravity": 3,
+        }
+    ]
+    state["reputation_signals"] = [
+        {
+            "signal_id": "rep-noise",
+            "subject_type": "npc",
+            "subject_id": "npc-bandit",
+            "observer_scope": {"scope_type": "settlement", "scope_id": "dock"},
+            "dimension": "suspicious",
+            "score": 10,
+            "value_delta": 10,
+            "source_event_ids": ["evt-noise"],
+            "confidence": 55,
+            "reliability": 55,
+            "created_at": {"turn": 2},
+            "updated_at": {"turn": 2},
+        }
+    ]
+
+    assert information_engine.pressure_signal_candidates(state) == []
+
+
+def test_pressure_signal_candidates_nominate_threshold_information_reputation_and_relationships():
+    state = _state()
+    state["information_items"] = [
+        {
+            "information_id": "info-rumour",
+            "information_type": "rumour",
+            "summary": "the raid is spreading through the docks",
+            "source_event_ids": ["evt-rumour"],
+            "subject_refs": [{"subject_type": "location", "subject_id": "dock"}],
+            "known_by": [
+                {"scope_type": "settlement", "scope_id": "dock"},
+                {"scope_type": "faction", "scope_id": "watch"},
+            ],
+            "observer_access": [
+                {
+                    "access_type": "local_community",
+                    "scope_type": "settlement",
+                    "scope_id": "dock",
+                    "source_event_ids": ["evt-rumour"],
+                    "reliability": 74,
+                    "distortion_level": 10,
+                    "acquired_at": {"turn": 3},
+                },
+                {
+                    "access_type": "secondary_source",
+                    "scope_type": "faction",
+                    "scope_id": "watch",
+                    "source_event_ids": ["evt-rumour"],
+                    "reliability": 74,
+                    "distortion_level": 12,
+                    "acquired_at": {"turn": 3},
+                },
+            ],
+            "reliability": 74,
+            "distortion_level": 10,
+            "visibility_scope": "settlement",
+            "created_at": {"turn": 3},
+            "updated_at": {"turn": 3},
+            "gravity": 7,
+        }
+    ]
+    state["reputation_signals"] = [
+        {
+            "signal_id": "rep-danger",
+            "subject_type": "npc",
+            "subject_id": "npc-bandit",
+            "observer_scope": {"scope_type": "settlement", "scope_id": "dock"},
+            "dimension": "dangerous",
+            "score": 42,
+            "value_delta": 42,
+            "source_event_ids": ["evt-danger"],
+            "confidence": 80,
+            "reliability": 80,
+            "created_at": {"turn": 3},
+            "updated_at": {"turn": 3},
+        }
+    ]
+    state["relationship_effect_receipts"] = [
+        {
+            "receipt_id": "rel-collapse",
+            "receipt_type": "relationship_threshold_crossed",
+            "turn": 3,
+            "npc_name": "Guard",
+            "before_state": "neutral",
+            "after_state": "collapsed",
+            "source_event_id": "evt-rel-guard-turn-3",
+        }
+    ]
+
+    candidates = information_engine.pressure_signal_candidates(state, limit=8)
+
+    assert {row["source_kind"] for row in candidates} == {
+        "information_item",
+        "reputation_signal",
+        "relationship_receipt",
+    }
+    assert any(row["pressure_kind"] == "social_tension" for row in candidates)
+    assert any(row["pressure_kind"] == "danger" for row in candidates)
+    assert any(row["pressure_kind"] == "social_tension" and row["source_kind"] == "relationship_receipt" for row in candidates)
+
+
 def test_information_caps_and_projection_order_are_bounded_and_deterministic():
     state = _state()
     state["information_items"] = [
@@ -496,6 +626,22 @@ def test_replayability_integration_projects_foundation_and_retrieval_cues():
             }
         ],
     }
+    state["reputation_signals"] = [
+        {
+            "signal_id": "rep-dock-bandit",
+            "subject_type": "npc",
+            "subject_id": "npc-bandit",
+            "observer_scope": {"scope_type": "settlement", "scope_id": "dock"},
+            "dimension": "dangerous",
+            "score": 40,
+            "value_delta": 40,
+            "source_event_ids": ["seed-reputation"],
+            "confidence": 80,
+            "reliability": 80,
+            "created_at": {"turn": 2},
+            "updated_at": {"turn": 2},
+        }
+    ]
     rolling = {
         "scene": "dock",
         "npcs": [{"name": "Bandit", "npc_id": "npc-bandit", "location_id": "dock", "faction_id": "watch"}],

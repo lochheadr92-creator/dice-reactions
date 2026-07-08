@@ -240,6 +240,62 @@ def test_genuine_structured_event_creates_exactly_one_echo():
     assert len([e for e in scheduled if e.get("source_event_id") == "evt-delayed-0-turn-2"]) == 1
 
 
+def test_finalize_action_turn_relationship_threshold_closes_pressure_loop_idempotently():
+    state = replayability.empty_replayability_state()
+    state["run_seed"] = FIXED_SEED
+    prior = {
+        "relationship_vectors": [
+            {
+                "name": "Guard",
+                "trust": 0,
+                "loyalty": 0,
+                "fear": 0,
+                "resentment": 0,
+                "state": "neutral",
+            }
+        ]
+    }
+    merged = {
+        "relationship_vectors": [
+            {
+                "name": "Guard",
+                "trust": -70,
+                "loyalty": 10,
+                "fear": 15,
+                "resentment": 80,
+                "state": "collapsed",
+            }
+        ]
+    }
+    sources = replayability.collect_qualifying_echo_sources(
+        prior_rolling=prior,
+        merged_rolling=merged,
+        turn_number=3,
+        guard_adjustments=[],
+    )
+
+    once = replayability.finalize_action_turn(copy.deepcopy(state), sources, 3)
+    twice = replayability.finalize_action_turn(copy.deepcopy(once), sources, 3)
+
+    assert once["relationship_effect_receipts"]
+    assert any(
+        row["receipt_type"] == "relationship_threshold_crossed"
+        for row in once["relationship_effect_receipts"]
+    )
+    assert once["information_items"]
+    assert once["reputation_signals"]
+    assert any(
+        row.get("source_kind") in {"relationship_receipt", "reputation_signal"}
+        for row in once["pressure_graph"]["evolution_receipts"]
+    )
+    assert any(
+        row.get("receipt_type") == "relationship_threshold_crossed"
+        for row in once["transition_receipts"]
+    )
+    assert twice["pressure_graph"] == once["pressure_graph"]
+    assert twice["relationship_effect_receipts"] == once["relationship_effect_receipts"]
+
+
 def test_pressure_threshold_references_canonical_event_id():
     state, _ = replayability.init_new_story(
         genre="noir", role="d", tone="t", difficulty="standard",
@@ -313,9 +369,14 @@ def test_prepare_action_turn_records_pressure_world_event_and_receipts():
     assert pressure_events[0]["pressure_node_id"] == "p-danger-world"
     assert "engine_world_events" not in working_rolling
     assert working_rolling["locations"][0]["id"] == "dock"
-    assert working_rolling["locations"][0]["status"] == "unstable"
     assert diag["pressure_spawned_events"] == 1
     assert diag["world_state_events_consumed"] == 1
+    pressure_location_receipt = next(
+        row for row in updated["world_state_receipts"]
+        if row.get("event_id") == pressure_events[0]["event_id"]
+        and row.get("receipt_type") == "location_updated"
+    )
+    assert pressure_location_receipt["after"]["status"] == "unstable"
     receipt_types = {r["receipt_type"] for r in updated["pressure_graph"]["evolution_receipts"]}
     assert {"pressure_escalated", "pressure_spawned_event"} <= receipt_types
     assert any(r["receipt_type"] == "location_updated" for r in updated["world_state_receipts"])
@@ -334,6 +395,131 @@ def test_pressure_world_event_replay_is_deterministic():
     assert a["engine_world_events"] == b["engine_world_events"]
     assert a["pressure_graph"] == b["pressure_graph"]
     assert a["transition_receipts"] == b["transition_receipts"]
+
+
+def test_prepare_action_turn_information_pressure_bridge_applies_and_dedupes():
+    state = replayability.empty_replayability_state()
+    state["run_seed"] = FIXED_SEED
+    state["information_items"] = [
+        {
+            "information_id": "info-public-raid",
+            "information_type": "rumour",
+            "summary": "dock raid rumour is spreading",
+            "source_event_ids": ["evt-public-raid"],
+            "subject_refs": [{"subject_type": "location", "subject_id": "dock"}],
+            "known_by": [
+                {"scope_type": "settlement", "scope_id": "dock"},
+                {"scope_type": "faction", "scope_id": "watch"},
+            ],
+            "observer_access": [
+                {
+                    "access_type": "local_community",
+                    "scope_type": "settlement",
+                    "scope_id": "dock",
+                    "source_event_ids": ["evt-public-raid"],
+                    "reliability": 76,
+                    "distortion_level": 10,
+                    "acquired_at": {"turn": 2},
+                },
+                {
+                    "access_type": "secondary_source",
+                    "scope_type": "faction",
+                    "scope_id": "watch",
+                    "source_event_ids": ["evt-public-raid"],
+                    "reliability": 76,
+                    "distortion_level": 10,
+                    "acquired_at": {"turn": 2},
+                },
+            ],
+            "reliability": 76,
+            "distortion_level": 10,
+            "visibility_scope": "settlement",
+            "created_at": {"turn": 2},
+            "updated_at": {"turn": 2},
+            "gravity": 7,
+        }
+    ]
+    state["reputation_signals"] = [
+        {
+            "signal_id": "rep-bandit-danger",
+            "subject_type": "npc",
+            "subject_id": "npc-bandit",
+            "observer_scope": {"scope_type": "settlement", "scope_id": "dock"},
+            "dimension": "dangerous",
+            "score": 40,
+            "value_delta": 40,
+            "source_event_ids": ["evt-public-raid"],
+            "confidence": 82,
+            "reliability": 82,
+            "created_at": {"turn": 2},
+            "updated_at": {"turn": 2},
+        }
+    ]
+
+    updated, _, diag, _, _ = replayability.prepare_action_turn(
+        copy.deepcopy(state),
+        3,
+        rolling_state={"scene": "dock"},
+    )
+    repeated, _, repeated_diag, _, _ = replayability.prepare_action_turn(
+        copy.deepcopy(updated),
+        4,
+        rolling_state={"scene": "dock"},
+    )
+
+    bridge_nodes = [
+        row for row in updated["pressure_graph"]["nodes"]
+        if row.get("origin_type") == "information_signal"
+    ]
+    assert diag["pressure_signal_applied"] >= 1
+    assert bridge_nodes
+    assert updated["pressure_signal_consumed_ids"]
+    assert any(
+        row.get("source_kind") in {"information_item", "reputation_signal"}
+        for row in updated["pressure_graph"]["evolution_receipts"]
+    )
+    assert repeated_diag["pressure_signal_deduped"] >= 1
+    assert repeated["pressure_graph"] == updated["pressure_graph"]
+
+
+def test_prepare_action_turn_information_pressure_bridge_caps_per_turn():
+    state = replayability.empty_replayability_state()
+    state["run_seed"] = FIXED_SEED
+    state["reputation_signals"] = [
+        {
+            "signal_id": f"rep-cap-{idx}",
+            "subject_type": "npc",
+            "subject_id": f"npc-{idx}",
+            "observer_scope": {"scope_type": "settlement", "scope_id": "dock"},
+            "dimension": "dangerous",
+            "score": 40 + idx,
+            "value_delta": 40 + idx,
+            "source_event_ids": [f"evt-cap-{idx}"],
+            "confidence": 85,
+            "reliability": 85,
+            "created_at": {"turn": 2},
+            "updated_at": {"turn": 2},
+        }
+        for idx in range(pressure_graph.MAX_INFORMATION_PRESSURE_SIGNALS_PER_TICK + 2)
+    ]
+
+    updated, _, diag, _, _ = replayability.prepare_action_turn(
+        state,
+        3,
+        rolling_state={"scene": "dock"},
+    )
+
+    bridge_nodes = [
+        row for row in updated["pressure_graph"]["nodes"]
+        if row.get("origin_type") == "information_signal"
+    ]
+    assert diag["pressure_signal_applied"] == pressure_graph.MAX_INFORMATION_PRESSURE_SIGNALS_PER_TICK
+    assert diag["pressure_signal_capped"] == 2
+    assert len(bridge_nodes) == pressure_graph.MAX_INFORMATION_PRESSURE_SIGNALS_PER_TICK
+    assert any(
+        row.get("receipt_type") == "pressure_signal_capped"
+        for row in updated["transition_receipts"]
+    )
 
 
 def _pressure_world_event(event_id, kind, *, location_ids=None, faction_ids=None, actor_ids=None, turn=3):

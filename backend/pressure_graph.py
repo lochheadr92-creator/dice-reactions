@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from run_identity import select_from_namespace
 
@@ -25,6 +25,7 @@ MAX_PROMPT_THRESHOLD_RECEIPTS = 3
 MAX_PRESSURE_EVOLUTIONS_PER_TICK = 4
 MAX_SPAWNED_EVENTS_PER_NODE = 2
 MAX_PRESSURE_EVENTS_PER_TICK = 2
+MAX_INFORMATION_PRESSURE_SIGNALS_PER_TICK = 3
 MAX_PRESSURE_EVOLUTION_RECEIPTS = 32
 DEFAULT_THRESHOLD = 70
 EVOLUTION_EVENT_THRESHOLD = 72
@@ -528,6 +529,7 @@ def _record_evolution_receipt(
     event_id: str = "",
     linked_node_id: str = "",
     source_event_ids: Optional[List[str]] = None,
+    details: Optional[Mapping[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     if receipt_type not in EVOLUTION_RECEIPT_TYPES:
         return None
@@ -550,6 +552,30 @@ def _record_evolution_receipt(
         receipt["linked_node_id"] = linked_node_id
     if source_event_ids:
         receipt["source_event_ids"] = list(source_event_ids)
+    if isinstance(details, Mapping):
+        if details.get("source_kind"):
+            receipt["source_kind"] = str(details.get("source_kind"))[:80]
+        if details.get("pressure_kind"):
+            receipt["pressure_kind"] = str(details.get("pressure_kind"))[:80]
+        if details.get("reason"):
+            receipt["reason"] = str(details.get("reason"))[:200]
+        if details.get("qualifier"):
+            receipt["qualifier"] = str(details.get("qualifier"))[:80]
+        if details.get("affected_actor_ids"):
+            receipt["affected_actor_ids"] = _bounded_str_list(
+                list(details.get("affected_actor_ids") or []),
+                MAX_REF_IDS,
+            )
+        if details.get("affected_faction_ids"):
+            receipt["affected_faction_ids"] = _bounded_str_list(
+                list(details.get("affected_faction_ids") or []),
+                MAX_REF_IDS,
+            )
+        if details.get("affected_location_ids"):
+            receipt["affected_location_ids"] = _bounded_str_list(
+                list(details.get("affected_location_ids") or []),
+                MAX_REF_IDS,
+            )
     all_receipts.append(receipt)
     if len(all_receipts) > MAX_PRESSURE_EVOLUTION_RECEIPTS:
         graph["evolution_receipts"] = all_receipts[-MAX_PRESSURE_EVOLUTION_RECEIPTS:]
@@ -1178,6 +1204,167 @@ def _world_event_pressure_node_id(
         world_event_id,
         scope,
     )
+
+
+def _information_signal_pressure_node_id(
+    *,
+    run_seed: str,
+    pressure_kind: str,
+    origin_id: str,
+    scope: str,
+) -> str:
+    return stable_pressure_id(
+        run_seed or "pressure-graph",
+        pressure_kind,
+        "information_signal",
+        origin_id,
+        scope,
+    )
+
+
+def apply_information_pressure_signals(
+    graph: Dict[str, Any],
+    signals: List[Mapping[str, Any]],
+    turn_number: int,
+    *,
+    run_seed: str = "",
+    consumed_signal_ids: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    if not isinstance(graph, dict):
+        return {
+            "receipts": [],
+            "applied_signal_ids": [],
+            "skipped": [],
+            "diagnostics": {"pressure_signal_candidates": 0},
+        }
+
+    consumed = {str(value or "") for value in (consumed_signal_ids or []) if str(value or "")}
+    local_receipts: List[Dict[str, Any]] = []
+    applied_signal_ids: List[str] = []
+    skipped: List[Dict[str, Any]] = []
+    applied_this_turn = 0
+    diagnostics = {
+        "pressure_signal_candidates": 0,
+        "pressure_signal_applied": 0,
+        "pressure_signal_deduped": 0,
+        "pressure_signal_capped": 0,
+    }
+
+    for signal in signals or []:
+        if not isinstance(signal, Mapping):
+            continue
+        diagnostics["pressure_signal_candidates"] += 1
+        signal_id = str(signal.get("source_signal_id") or "")
+        if not signal_id:
+            continue
+        if signal_id in consumed or signal_id in applied_signal_ids:
+            diagnostics["pressure_signal_deduped"] += 1
+            skipped.append(
+                {
+                    "source_signal_id": signal_id,
+                    "receipt_type": "pressure_signal_deduped",
+                    "source_kind": str(signal.get("source_kind") or ""),
+                    "pressure_kind": str(signal.get("pressure_kind") or ""),
+                    "reason": f"already consumed source signal {signal_id}",
+                }
+            )
+            continue
+        if applied_this_turn >= MAX_INFORMATION_PRESSURE_SIGNALS_PER_TICK:
+            diagnostics["pressure_signal_capped"] += 1
+            skipped.append(
+                {
+                    "source_signal_id": signal_id,
+                    "receipt_type": "pressure_signal_capped",
+                    "source_kind": str(signal.get("source_kind") or ""),
+                    "pressure_kind": str(signal.get("pressure_kind") or ""),
+                    "reason": f"per-turn cap {MAX_INFORMATION_PRESSURE_SIGNALS_PER_TICK} reached",
+                }
+            )
+            continue
+
+        pressure_kind = str(signal.get("pressure_kind") or "").strip().lower()
+        if pressure_kind not in PRESSURE_KIND_GROUPS:
+            continue
+        scope = str(signal.get("scope") or "local").strip().lower()
+        if scope not in SCOPES:
+            scope = "local"
+        origin_id = str(signal.get("origin_id") or "").strip() or f"{pressure_kind}:{scope}:{signal_id}"
+        node_id = _information_signal_pressure_node_id(
+            run_seed=run_seed,
+            pressure_kind=pressure_kind,
+            origin_id=origin_id,
+            scope=scope,
+        )
+        before_node = None
+        for row in graph.get("nodes") or []:
+            if isinstance(row, dict) and str(row.get("id") or "") == node_id:
+                before_node = row
+                break
+        before = _node_snapshot(before_node) if isinstance(before_node, Mapping) else {}
+        actor_ids = _bounded_str_list(list(signal.get("actor_ids") or []), MAX_REF_IDS)
+        location_ids = _bounded_str_list(list(signal.get("location_ids") or []), MAX_REF_IDS)
+        faction_ids = _bounded_str_list(list(signal.get("faction_ids") or []), MAX_REF_IDS)
+        node = upsert_pressure_node(
+            graph,
+            node_id=node_id,
+            run_seed=run_seed,
+            kind=pressure_kind,
+            origin_type="information_signal",
+            origin_id=origin_id,
+            scope=scope,
+            magnitude=max(20, _clamp_magnitude(signal.get("magnitude", 0))),
+            trend=1,
+            turn_number=turn_number,
+            actor_ids=actor_ids,
+            location_ids=location_ids,
+            faction_ids=faction_ids,
+            tags=_bounded_str_list(
+                [
+                    "information_signal",
+                    str(signal.get("source_kind") or ""),
+                    pressure_kind,
+                    str(signal.get("qualifier") or ""),
+                ],
+                MAX_TAGS,
+            ),
+            evidence_refs=list(signal.get("evidence_refs") or []),
+            label=str(signal.get("label") or pressure_kind).replace("_", " ")[:80],
+        )
+        _record_evolution_receipt(
+            graph,
+            local_receipts,
+            receipt_type="pressure_escalated",
+            turn_number=turn_number,
+            node_id=str(node.get("id") or node_id),
+            before=before,
+            after=_node_snapshot(node),
+            source_event_ids=_bounded_str_list(
+                [signal_id] + list(signal.get("source_event_ids") or []),
+                MAX_REF_IDS,
+            ),
+            details={
+                "source_kind": str(signal.get("source_kind") or ""),
+                "pressure_kind": pressure_kind,
+                "reason": str(signal.get("reason") or ""),
+                "qualifier": str(signal.get("qualifier") or ""),
+                "affected_actor_ids": actor_ids,
+                "affected_faction_ids": faction_ids,
+                "affected_location_ids": location_ids,
+            },
+        )
+        applied_signal_ids.append(signal_id)
+        applied_this_turn += 1
+        diagnostics["pressure_signal_applied"] += 1
+
+    if applied_signal_ids:
+        select_foreground(graph, turn_number=turn_number)
+    cap_pressure_graph(graph)
+    return {
+        "receipts": local_receipts,
+        "applied_signal_ids": applied_signal_ids,
+        "skipped": skipped,
+        "diagnostics": diagnostics,
+    }
 
 
 def apply_world_event_engine_events(

@@ -896,6 +896,7 @@ def evolve_goals(
     *,
     run_seed: str = "",
     recent_action: Optional[Mapping[str, Any]] = None,
+    advance_existing: bool = True,
 ) -> Dict[str, Any]:
     diagnostics = {
         "goal_engine_executed": False,
@@ -1043,44 +1044,45 @@ def evolve_goals(
     diagnostics["goal_merged"] += sum(1 for receipt in local_receipts[before_merge_receipts:] if receipt.get("receipt_type") == "goal_merged")
     diagnostics["goal_abandoned"] += sum(1 for receipt in local_receipts[before_merge_receipts:] if receipt.get("receipt_type") == "goal_abandoned")
 
-    for goal in sorted(goals, key=lambda row: (-_clamp_int(row.get("priority"), 0, 10), str(row.get("goal_id") or ""))):
-        if remaining_changes <= 0:
-            break
-        if str(goal.get("goal_id") or "") in created_goal_ids:
-            goal["last_evolved_turn"] = turn_number
-            continue
-        advanced = _advance_goal(
-            goal,
-            replayability_state=replayability_state,
-            rolling_state=rolling_state if isinstance(rolling_state, Mapping) else {},
-            turn_number=turn_number,
-            recent_action=recent_action,
-        )
-        if not advanced:
-            continue
-        receipt_type, detail, before, after, sources = advanced
-        if _append_receipt(
-            replayability_state,
-            local_receipts,
-            receipt_type=receipt_type,
-            turn_number=turn_number,
-            goal=goal,
-            before=before,
-            after=after,
-            detail=detail,
-            source_event_ids=sources,
-        ):
-            if receipt_type == "goal_progressed":
-                diagnostics["goal_progressed"] += 1
-            elif receipt_type == "goal_blocked":
-                diagnostics["goal_blocked"] += 1
-            elif receipt_type == "goal_completed":
-                diagnostics["goal_completed"] += 1
-            elif receipt_type == "goal_failed":
-                diagnostics["goal_failed"] += 1
-            elif receipt_type == "goal_abandoned":
-                diagnostics["goal_abandoned"] += 1
-            remaining_changes -= 1
+    if advance_existing:
+        for goal in sorted(goals, key=lambda row: (-_clamp_int(row.get("priority"), 0, 10), str(row.get("goal_id") or ""))):
+            if remaining_changes <= 0:
+                break
+            if str(goal.get("goal_id") or "") in created_goal_ids:
+                goal["last_evolved_turn"] = turn_number
+                continue
+            advanced = _advance_goal(
+                goal,
+                replayability_state=replayability_state,
+                rolling_state=rolling_state if isinstance(rolling_state, Mapping) else {},
+                turn_number=turn_number,
+                recent_action=recent_action,
+            )
+            if not advanced:
+                continue
+            receipt_type, detail, before, after, sources = advanced
+            if _append_receipt(
+                replayability_state,
+                local_receipts,
+                receipt_type=receipt_type,
+                turn_number=turn_number,
+                goal=goal,
+                before=before,
+                after=after,
+                detail=detail,
+                source_event_ids=sources,
+            ):
+                if receipt_type == "goal_progressed":
+                    diagnostics["goal_progressed"] += 1
+                elif receipt_type == "goal_blocked":
+                    diagnostics["goal_blocked"] += 1
+                elif receipt_type == "goal_completed":
+                    diagnostics["goal_completed"] += 1
+                elif receipt_type == "goal_failed":
+                    diagnostics["goal_failed"] += 1
+                elif receipt_type == "goal_abandoned":
+                    diagnostics["goal_abandoned"] += 1
+                remaining_changes -= 1
 
     replayability_state["goals"] = _cap_goals(goals)
     diagnostics["goal_engine_executed"] = bool(local_receipts or candidates or replayability_state["goals"])

@@ -316,6 +316,35 @@ def _applied_delta(effect: Mapping[str, Any]) -> Dict[str, int]:
     return {}
 
 
+def threshold_receipt_from_source(
+    source: Mapping[str, Any],
+    *,
+    turn_number: int,
+) -> Optional[Dict[str, Any]]:
+    source_kind = str(source.get("source_kind") or "").strip().lower()
+    npc_name = str(source.get("npc_name") or source.get("target_name") or "").strip()
+    after_state = str(source.get("after_state") or "").strip().lower()
+    before_state = str(source.get("before_state") or "neutral").strip().lower()
+    source_event_id = str(source.get("source_event_id") or "").strip()
+    if source_kind != "relationship_threshold_crossed":
+        return None
+    if not npc_name or not source_event_id or after_state not in RELATIONSHIP_THRESHOLD_STATES:
+        return None
+    digest = hashlib.sha256(
+        f"{source_event_id}:{npc_name}:{after_state}:{turn_number}".encode("utf-8")
+    ).hexdigest()
+    return {
+        "receipt_id": f"rel-src-{digest[:12]}",
+        "receipt_type": "relationship_threshold_crossed",
+        "turn": turn_number,
+        "npc_name": npc_name,
+        "before_state": before_state,
+        "after_state": after_state,
+        "source_event_id": source_event_id,
+        "source_kind": source_kind,
+    }
+
+
 def apply_living_cast_relationship_effects(
     merged_rolling: Dict[str, Any],
     effects: List[Mapping[str, Any]],

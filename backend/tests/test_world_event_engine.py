@@ -150,15 +150,17 @@ def test_world_events_integrate_with_pressure_consumers_situations_goals_and_npc
     assert updated["world_state_consumed_event_ids"]
     assert updated["situations"]
     assert updated["goals"]
-    assert rolling["active_world_events"][0]["title"] == "Resource Shortage"
-    assert "world_event_id" not in rolling["active_world_events"][0]
+    assert any(row["title"] == "Resource Shortage" for row in rolling["active_world_events"])
+    assert all("world_event_id" not in row for row in rolling["active_world_events"])
+    assert diagnostics["npc_actions_created"] >= 1
+    assert updated["npc_actions"]
+    assert rolling["active_npc_actions"]
 
     updated2, _, diagnostics2, _, rolling2 = replayability.prepare_action_turn(
         updated,
         4,
         rolling_state=rolling,
     )
-    assert diagnostics2["npc_actions_created"] >= 1
     assert updated2["npc_actions"]
     assert rolling2["active_npc_actions"]
 
