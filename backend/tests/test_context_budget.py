@@ -5,6 +5,9 @@ import json
 import re
 from typing import Any, Dict, List
 
+import ai_config
+import gravity_governance
+
 from memory import (
     PROMPT_REGISTRY_CAPS,
     enforce_context_budget,
@@ -228,3 +231,181 @@ def test_over_budget_prior_state_projection_caps_prompt_only_registries():
     )
     assert trimmed_again[-1]["content"] == trimmed[-1]["content"]
     assert diag_again == diag
+
+
+def _trait_projection_state() -> Dict[str, Any]:
+    return {
+        "scene": "loc-town",
+        "npc_memory": [
+            {
+                "name": f"NPC {idx:02d}",
+                "remembers": [
+                    {
+                        "severity": "minor",
+                        "event": f"routine market note {idx:02d}",
+                        "since_turn": idx,
+                    }
+                ],
+            }
+            for idx in range(19)
+        ]
+        + [
+            {
+                "name": "Mara",
+                "remembers": [
+                    {
+                        "severity": "minor",
+                        "event": "quiet supply concern at the water cache",
+                        "since_turn": 19,
+                    }
+                ],
+            }
+        ],
+        "recent_beats": [f"beat {idx}" for idx in range(40)],
+        "recent_choice_signatures": [f"choice {idx}" for idx in range(40)],
+        "archived": [{"old": idx, "text": "x" * 120} for idx in range(80)],
+    }
+
+
+def _matching_trait_refs() -> Dict[str, Any]:
+    return {
+        "npc_refs": {
+            "version": 1,
+            "by_npc_id": {
+                "npc-mara": {
+                    "ambition": "high",
+                    "fear": "scarcity",
+                    "loyalty_anchor": "player",
+                    "personal_stakes": "survival",
+                    "risk_tolerance": "high",
+                    "pressure_sensitivity": "high",
+                    "social_role": "leader",
+                    "display_name": "Mara",
+                }
+            },
+        },
+        "settlement_refs": {
+            "version": 1,
+            "by_location_id": {
+                "loc-town": {
+                    "dominant_pressure": "resource",
+                    "local_stakes": "supply",
+                    "prosperity": "low",
+                    "stability": "low",
+                    "crime": "high",
+                }
+            },
+        },
+    }
+
+
+def test_trait_projection_refs_absent_or_empty_preserve_projection(monkeypatch):
+    monkeypatch.setattr(ai_config, "ENABLE_CANONICAL_GRAVITY", True)
+    messages = _messages_for_state(_trait_projection_state())
+    base_trimmed, base_diag = enforce_context_budget(
+        messages,
+        budget_tokens=1200,
+        protected_recent_msgs=0,
+    )
+    empty_trimmed, empty_diag = enforce_context_budget(
+        _messages_for_state(_trait_projection_state()),
+        budget_tokens=1200,
+        protected_recent_msgs=0,
+        npc_trait_refs={"version": 1, "by_npc_id": {}},
+        settlement_trait_refs={"version": 1, "by_location_id": {}},
+        location_ref="loc-town",
+    )
+
+    assert empty_trimmed == base_trimmed
+    assert empty_diag == base_diag
+
+
+def test_passive_default_trait_refs_preserve_projection(monkeypatch):
+    monkeypatch.setattr(ai_config, "ENABLE_CANONICAL_GRAVITY", True)
+    passive_npc_refs = {
+        "version": 1,
+        "by_npc_id": {
+            "npc-mara": {
+                "ambition": "medium",
+                "fear": "injury",
+                "loyalty_anchor": "unknown",
+                "personal_stakes": "unknown",
+                "risk_tolerance": "medium",
+                "pressure_sensitivity": "medium",
+                "social_role": "unknown",
+                "display_name": "Mara",
+            }
+        },
+    }
+    passive_settlement_refs = {
+        "version": 1,
+        "by_location_id": {
+            "loc-town": {
+                "dominant_pressure": "unknown",
+                "local_stakes": "unknown",
+                "prosperity": "medium",
+                "stability": "medium",
+                "crime": "medium",
+            }
+        },
+    }
+
+    base_trimmed, base_diag = enforce_context_budget(
+        _messages_for_state(_trait_projection_state()),
+        budget_tokens=1200,
+        protected_recent_msgs=0,
+    )
+    passive_trimmed, passive_diag = enforce_context_budget(
+        _messages_for_state(_trait_projection_state()),
+        budget_tokens=1200,
+        protected_recent_msgs=0,
+        npc_trait_refs=passive_npc_refs,
+        settlement_trait_refs=passive_settlement_refs,
+        location_ref="loc-town",
+    )
+
+    assert passive_trimmed == base_trimmed
+    assert passive_diag == base_diag
+
+
+def test_matching_traits_can_change_prompt_projection_priority_with_same_shape(monkeypatch):
+    monkeypatch.setattr(ai_config, "ENABLE_CANONICAL_GRAVITY", True)
+    refs = _matching_trait_refs()
+
+    base_trimmed, base_diag = enforce_context_budget(
+        _messages_for_state(_trait_projection_state()),
+        budget_tokens=1200,
+        protected_recent_msgs=0,
+    )
+    trait_trimmed, trait_diag = enforce_context_budget(
+        _messages_for_state(_trait_projection_state()),
+        budget_tokens=1200,
+        protected_recent_msgs=0,
+        npc_trait_refs=refs["npc_refs"],
+        settlement_trait_refs=refs["settlement_refs"],
+        location_ref="loc-town",
+    )
+    base_projected = _prior_state_from_final_user(base_trimmed)
+    trait_projected = _prior_state_from_final_user(trait_trimmed)
+
+    assert "Mara" not in {row["name"] for row in base_projected["npc_memory"]}
+    assert "Mara" in {row["name"] for row in trait_projected["npc_memory"]}
+    assert len(base_projected["npc_memory"]) == len(trait_projected["npc_memory"])
+    assert set(base_projected.keys()) == set(trait_projected.keys())
+    assert [set(row.keys()) for row in base_projected["npc_memory"]] == [
+        set(row.keys()) for row in trait_projected["npc_memory"]
+    ]
+    assert set(base_diag["projected_registry_caps"]["npc_memory"]) == set(
+        trait_diag["projected_registry_caps"]["npc_memory"]
+    )
+    assert "npc_traits" not in trait_trimmed[-1]["content"]
+    assert "settlement_traits" not in trait_trimmed[-1]["content"]
+
+    modifier = gravity_governance.trait_significance_modifier(
+        _trait_projection_state()["npc_memory"][-1],
+        npc_trait_refs=refs["npc_refs"],
+        settlement_trait_refs=refs["settlement_refs"],
+        location_ref="loc-town",
+    )
+    assert 0 < modifier["gravity"] <= gravity_governance.MAX_TRAIT_GRAVITY_MODIFIER
+    assert 0 <= modifier["connectivity"] <= gravity_governance.MAX_TRAIT_CONNECTIVITY_MODIFIER

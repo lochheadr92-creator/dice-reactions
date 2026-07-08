@@ -17,7 +17,7 @@ import situation_engine
 import world_event_engine
 import world_state_consumers
 
-FOUNDATION_SNAPSHOT_SCHEMA_VERSION = 8
+FOUNDATION_SNAPSHOT_SCHEMA_VERSION = 9
 
 
 @dataclasses.dataclass(frozen=True)
@@ -37,6 +37,8 @@ class FoundationTurnSnapshot:
     gravity_metadata: Dict[str, Any]
     utility_input_refs: Tuple[Dict[str, Any], ...]
     source_state_hash: str
+    npc_trait_refs: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    settlement_trait_refs: Dict[str, Any] = dataclasses.field(default_factory=dict)
     situation_state_ref: Dict[str, Any] = dataclasses.field(default_factory=lambda: {"situations": []})
     goal_state_ref: Dict[str, Any] = dataclasses.field(default_factory=lambda: {"goals": []})
     action_state_ref: Dict[str, Any] = dataclasses.field(default_factory=lambda: {"npc_actions": []})
@@ -85,6 +87,9 @@ class FoundationTurnSnapshot:
         ambition_state = npc_agendas.copy_ambition_state(replay.get("npc_agendas"))
         if ambition_state.get("active"):
             hash_material["ambitions"] = ambition_state
+        npc_trait_refs, settlement_trait_refs = trait_refs_from_replayability_state(
+            replay
+        )
         world_state = world_state_consumers.copy_world_state(rolling)
         if world_state:
             hash_material["world_state"] = world_state
@@ -124,6 +129,8 @@ class FoundationTurnSnapshot:
             gravity_metadata=dict(replay.get("gravity_metadata") or {}),
             utility_input_refs=tuple(_utility_input_refs(rolling, replay, registry, situation_state, goal_state, action_state, world_event_state, investigation_state, information_state)),
             source_state_hash=source_hash,
+            npc_trait_refs=npc_trait_refs,
+            settlement_trait_refs=settlement_trait_refs,
         )
 
 
@@ -230,6 +237,71 @@ def _build_actor_registry(rolling: Mapping[str, Any]) -> list:
         if row.get("health_status"):
             entry["health_status"] = str(row.get("health_status") or "")
     return sorted(registry.values(), key=lambda row: row["actor_id"])
+
+
+def trait_refs_from_replayability_state(
+    replayability_state: Any,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    replay = replayability_state if isinstance(replayability_state, Mapping) else {}
+    return (
+        _trait_ref_state(
+            replay.get("npc_traits"),
+            index_key="by_npc_id",
+            allowed_fields=(
+                "ambition",
+                "fear",
+                "loyalty_anchor",
+                "personal_stakes",
+                "risk_tolerance",
+                "pressure_sensitivity",
+                "social_role",
+                "display_name",
+            ),
+        ),
+        _trait_ref_state(
+            replay.get("settlement_traits"),
+            index_key="by_location_id",
+            allowed_fields=(
+                "dominant_pressure",
+                "local_stakes",
+                "prosperity",
+                "stability",
+                "crime",
+            ),
+        ),
+    )
+
+
+def _trait_ref_state(
+    raw: Any,
+    *,
+    index_key: str,
+    allowed_fields: Sequence[str],
+) -> Dict[str, Any]:
+    """Minimal deterministic trait refs for significance consumers."""
+    if not isinstance(raw, Mapping):
+        return {}
+    rows = raw.get(index_key) or {}
+    if not isinstance(rows, Mapping):
+        return {}
+    out: Dict[str, Dict[str, str]] = {}
+    allowed = set(allowed_fields)
+    for entity_id, row in rows.items():
+        if not isinstance(row, Mapping):
+            continue
+        cleaned = {
+            str(key): str(value)[:120]
+            for key, value in row.items()
+            if key in allowed and value is not None
+        }
+        if cleaned:
+            out[str(entity_id)] = cleaned
+    if not out:
+        return {}
+    return {
+        "version": int(raw.get("version") or 0),
+        index_key: out,
+    }
 
 
 def _actor_stress_commitment(rolling: Mapping[str, Any]) -> Optional[Dict[str, Dict[str, Any]]]:

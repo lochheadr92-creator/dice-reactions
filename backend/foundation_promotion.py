@@ -117,7 +117,10 @@ def compute_actor_resolution_prepared(snapshot: Any) -> Dict[str, Any]:
     import gravity_governance
     import actor_resolution
 
-    gravity_prepared = gravity_governance.evaluate_gravity_governance(snapshot)
+    gravity_prepared = gravity_governance.evaluate_gravity_governance(
+        snapshot,
+        trait_significance_enabled=gravity_enabled(),
+    )
     retention = gravity_governance.retention_scores_by_actor(gravity_prepared)
     return actor_resolution.evaluate_actor_resolution(
         snapshot, retention_scores=retention
@@ -225,14 +228,26 @@ def _npc_memory_row_gravity_inputs(row: Mapping[str, Any]) -> Tuple[float, float
     return gravity, connectivity
 
 
-def gravity_retention_score_for_npc_memory(row: Mapping[str, Any]) -> float:
+def gravity_retention_score_for_npc_memory(
+    row: Mapping[str, Any],
+    *,
+    npc_trait_refs: Optional[Mapping[str, Any]] = None,
+    settlement_trait_refs: Optional[Mapping[str, Any]] = None,
+    location_ref: str = "",
+) -> float:
     """Retention score for one npc_memory row via canonical Gravity Governance."""
     import gravity_governance
 
     gravity, connectivity = _npc_memory_row_gravity_inputs(row)
+    modifier = gravity_governance.trait_significance_modifier(
+        row,
+        npc_trait_refs=npc_trait_refs,
+        settlement_trait_refs=settlement_trait_refs,
+        location_ref=location_ref,
+    )
     return gravity_governance.compute_retention_score(
-        gravity=gravity,
-        connectivity=connectivity,
+        gravity=max(0.0, min(1.0, gravity + modifier["gravity"])),
+        connectivity=max(0.0, min(1.0, connectivity + modifier["connectivity"])),
         player_relevance=0.0,
         age_years=0.0,
     )
@@ -242,6 +257,9 @@ def order_npc_memory_by_gravity(
     rows: Sequence[Mapping[str, Any]],
     *,
     enabled: Optional[bool] = None,
+    npc_trait_refs: Optional[Mapping[str, Any]] = None,
+    settlement_trait_refs: Optional[Mapping[str, Any]] = None,
+    location_ref: str = "",
 ) -> Tuple[Optional[List[int]], Dict[str, Any]]:
     """
     Canonical retention ranking (original indices, best first) for the npc_memory
@@ -260,7 +278,17 @@ def order_npc_memory_by_gravity(
     try:
         scored: List[Tuple[int, float]] = []
         for idx, row in enumerate(rows or []):
-            scored.append((idx, gravity_retention_score_for_npc_memory(row)))
+            scored.append(
+                (
+                    idx,
+                    gravity_retention_score_for_npc_memory(
+                        row,
+                        npc_trait_refs=npc_trait_refs,
+                        settlement_trait_refs=settlement_trait_refs,
+                        location_ref=location_ref,
+                    ),
+                )
+            )
         # Descending retention score; stable by original index for ties.
         order = [idx for idx, _ in sorted(scored, key=lambda pair: (-pair[1], pair[0]))]
         diag["gravity_applied"] = True

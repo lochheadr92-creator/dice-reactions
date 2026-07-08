@@ -86,6 +86,7 @@ from player_api import (  # noqa: E402
 )
 
 import json as _json  # noqa: E402
+import foundation_snapshot  # noqa: E402
 import goal_engine  # noqa: E402
 import information_engine  # noqa: E402
 import investigation_engine  # noqa: E402
@@ -949,6 +950,22 @@ def _prompt_safe_rolling(rolling: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             )
         )
     )
+
+
+def _prompt_projection_trait_kwargs(session: Dict[str, Any]) -> Dict[str, Any]:
+    replay = session.get("replayability_state")
+    npc_refs, settlement_refs = foundation_snapshot.trait_refs_from_replayability_state(
+        replay
+    )
+    if not npc_refs and not settlement_refs:
+        return {}
+    rolling = session.get("rolling_state") if isinstance(session, dict) else {}
+    rolling = rolling if isinstance(rolling, dict) else {}
+    return {
+        "npc_trait_refs": npc_refs,
+        "settlement_trait_refs": settlement_refs,
+        "location_ref": str(rolling.get("scene") or rolling.get("location") or ""),
+    }
 
 
 def _clean_setup(value: Any) -> Any:
@@ -2359,6 +2376,7 @@ async def _generate_turn(
         messages,
         budget_tokens=budget_tokens,
         protected_recent_msgs=protected_recent_msgs,
+        **_prompt_projection_trait_kwargs(session),
     )
 
     result = await gateway.invoke_llm(
@@ -2788,6 +2806,7 @@ async def _generate_validated_turn(
             messages,
             budget_tokens=budget_tokens_retry,
             protected_recent_msgs=protected_recent_msgs,
+            **_prompt_projection_trait_kwargs(session),
         )
 
         # Retry stays on the model that just answered; provider-level fallback

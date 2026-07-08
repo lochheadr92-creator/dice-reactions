@@ -19,7 +19,7 @@ from __future__ import annotations
 import json as _json
 import re as _re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import ai_config
 
@@ -474,6 +474,10 @@ def _cap_prompt_registry(
     key: str,
     items: List[Any],
     cap: int,
+    *,
+    npc_trait_refs: Optional[Mapping[str, Any]] = None,
+    settlement_trait_refs: Optional[Mapping[str, Any]] = None,
+    location_ref: str = "",
 ) -> Tuple[List[Any], Dict[str, Any]]:
     if len(items) <= cap:
         return list(items), {}
@@ -485,7 +489,12 @@ def _cap_prompt_registry(
     if key == "npc_memory" and ai_config.ENABLE_CANONICAL_GRAVITY:
         import foundation_promotion
 
-        order, _gravity_diag = foundation_promotion.order_npc_memory_by_gravity(items)
+        order, _gravity_diag = foundation_promotion.order_npc_memory_by_gravity(
+            items,
+            npc_trait_refs=npc_trait_refs,
+            settlement_trait_refs=settlement_trait_refs,
+            location_ref=location_ref,
+        )
         if order is not None:
             selected_indices = sorted(order[:cap])
             capped = [items[index] for index in selected_indices]
@@ -547,6 +556,10 @@ def _cap_prompt_registry(
 
 def _compress_prior_state_json_with_meta(
     state: Dict[str, Any],
+    *,
+    npc_trait_refs: Optional[Mapping[str, Any]] = None,
+    settlement_trait_refs: Optional[Mapping[str, Any]] = None,
+    location_ref: str = "",
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Drop low-value content from a rolling_state copy without losing causality.
 
@@ -599,7 +612,12 @@ def _compress_prior_state_json_with_meta(
             ]
             if k in PROMPT_REGISTRY_CAPS:
                 prompt_items, meta = _cap_prompt_registry(
-                    k, prompt_items, PROMPT_REGISTRY_CAPS[k]
+                    k,
+                    prompt_items,
+                    PROMPT_REGISTRY_CAPS[k],
+                    npc_trait_refs=npc_trait_refs,
+                    settlement_trait_refs=settlement_trait_refs,
+                    location_ref=location_ref,
                 )
                 if meta:
                     cap_meta[k] = meta
@@ -609,13 +627,30 @@ def _compress_prior_state_json_with_meta(
     return out, {"projected_registry_caps": cap_meta} if cap_meta else {}
 
 
-def _compress_prior_state_json(state: Dict[str, Any]) -> Dict[str, Any]:
+def _compress_prior_state_json(
+    state: Dict[str, Any],
+    *,
+    npc_trait_refs: Optional[Mapping[str, Any]] = None,
+    settlement_trait_refs: Optional[Mapping[str, Any]] = None,
+    location_ref: str = "",
+) -> Dict[str, Any]:
     """Compatibility wrapper for prompt-only prior_state compression."""
-    compressed, _meta = _compress_prior_state_json_with_meta(state)
+    compressed, _meta = _compress_prior_state_json_with_meta(
+        state,
+        npc_trait_refs=npc_trait_refs,
+        settlement_trait_refs=settlement_trait_refs,
+        location_ref=location_ref,
+    )
     return compressed
 
 
-def _shrink_user_with_prior_state(user_text: str) -> Tuple[str, bool, Dict[str, Any]]:
+def _shrink_user_with_prior_state(
+    user_text: str,
+    *,
+    npc_trait_refs: Optional[Mapping[str, Any]] = None,
+    settlement_trait_refs: Optional[Mapping[str, Any]] = None,
+    location_ref: str = "",
+) -> Tuple[str, bool, Dict[str, Any]]:
     """Try compressing the embedded <prior_state> JSON inside the final user
     message. Returns (new_text, did_change)."""
     m = _PRIOR_STATE_BLOCK_RE.search(user_text)
@@ -625,7 +660,12 @@ def _shrink_user_with_prior_state(user_text: str) -> Tuple[str, bool, Dict[str, 
         prior = _json.loads(m.group(1))
     except Exception:
         return user_text, False, {}
-    slim, meta = _compress_prior_state_json_with_meta(prior)
+    slim, meta = _compress_prior_state_json_with_meta(
+        prior,
+        npc_trait_refs=npc_trait_refs,
+        settlement_trait_refs=settlement_trait_refs,
+        location_ref=location_ref,
+    )
     if slim == prior:
         return user_text, False, {}
     new_block = (
@@ -649,6 +689,9 @@ def enforce_context_budget(
     budget_tokens: int,
     *,
     protected_recent_msgs: int,
+    npc_trait_refs: Optional[Mapping[str, Any]] = None,
+    settlement_trait_refs: Optional[Mapping[str, Any]] = None,
+    location_ref: str = "",
 ) -> Tuple[List[Dict[str, str]], Dict[str, Any]]:
     """Trim the message list until under budget. Never touches:
       • the contiguous leading system-message prefix (primary prompt + any
@@ -699,7 +742,10 @@ def enforce_context_budget(
     # Step 1 — try compressing prior_state in the final user message
     if estimate_messages_tokens(msgs) > budget_tokens:
         new_text, changed, shrink_meta = _shrink_user_with_prior_state(
-            _last_user().get("content", "")
+            _last_user().get("content", ""),
+            npc_trait_refs=npc_trait_refs,
+            settlement_trait_refs=settlement_trait_refs,
+            location_ref=location_ref,
         )
         if changed:
             msgs[-1]["content"] = new_text

@@ -46,6 +46,7 @@ def evaluate_foundation_turn(
         snapshot,
         prior_state=(prior.get("gravity") or {}).get("prepared_state"),
         context_budget_items=context_budget_items,
+        trait_significance_enabled=foundation_promotion.gravity_enabled(),
     )
     retention_by_actor = gravity_governance.retention_scores_by_actor(gravity_prepared)
 

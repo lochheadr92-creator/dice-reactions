@@ -276,6 +276,7 @@ def _evaluate_gravity(
         snapshot,
         prior_state=prior_gravity or None,
         items=_scheduling_items_from_snapshot(snapshot),
+        trait_significance_enabled=True,
     )
     bands = {
         str(row.get("item_id") or ""): str(row.get("band") or "")
