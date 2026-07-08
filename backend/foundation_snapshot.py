@@ -446,6 +446,12 @@ def _utility_input_refs(
             location_ids=actor_locations,
             faction_ids=actor_factions,
         )
+        evidence_exposure_signals = investigation_engine.evidence_exposure_signals_for_context(
+            investigation_state,
+            information_state=information_state,
+            actor_ids=[actor_id, actor.get("display_name") or ""],
+            location_ids=actor_locations,
+        )
         active_goals = goal_engine.active_goals_for_context(
             goal_state,
             actor_ids=[actor_id, actor.get("display_name") or ""],
@@ -523,6 +529,12 @@ def _utility_input_refs(
                 "destination": latest_action.get("destination") or latest_action.get("target_location"),
                 "world_state_signal_kinds": [row.get("signal_kind") for row in world_state_signals],
                 "world_state_signal_ids": [row.get("signal_id") for row in world_state_signals],
+                "evidence_exposure_kinds": [row.get("exposure_kind") for row in evidence_exposure_signals],
+                "evidence_exposure_behaviours": [
+                    behaviour
+                    for row in evidence_exposure_signals
+                    for behaviour in (row.get("behaviours") or [])
+                ][:4],
             }
         )
     return sorted(refs, key=lambda row: row["actor_id"])

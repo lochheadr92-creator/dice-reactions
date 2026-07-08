@@ -27,6 +27,25 @@ MAX_PROJECTED_INVESTIGATIONS = 4
 MAX_PROMPT_INVESTIGATIONS = 3
 MAX_CONTEXT_INVESTIGATIONS = 3
 MAX_CONTEXT_EVIDENCE = 4
+MAX_EVIDENCE_EXPOSURE_SIGNALS = 6
+MIN_EVIDENCE_EXPOSURE_CONFIDENCE = 40
+PUBLIC_EVIDENCE_VISIBILITY_SCOPES = frozenset({"settlement", "faction", "public", "witnessed"})
+
+EVIDENCE_EXPOSURE_BRIDGE_VERSION = 1
+
+EVIDENCE_EXPOSURE_KINDS = (
+    "implicated_private",
+    "implicated_public",
+    "investigating",
+    "accused_pressure",
+)
+
+EVIDENCE_EXPOSURE_BEHAVIOURS = {
+    "implicated_private": ("hide", "flee", "bribe"),
+    "implicated_public": ("flee", "retaliate", "bribe", "confess"),
+    "investigating": ("investigate", "accuse", "warn", "cooperate"),
+    "accused_pressure": ("retaliate", "accuse", "bribe", "hide"),
+}
 
 STALL_AFTER_INACTIVE_TURNS = 6
 FAIL_AFTER_INACTIVE_TURNS = 14
@@ -1172,3 +1191,203 @@ def known_evidence_for_context(
         )
     )
     return matched[: max(0, min(MAX_CONTEXT_EVIDENCE, int(limit or 0)))]
+
+
+def _investigations_by_id(investigation_state: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    for raw in investigation_state.get("investigations") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        row = _normalise_investigation(raw)
+        investigation_id = _bounded_str(row.get("investigation_id"), 160)
+        if investigation_id:
+            out[investigation_id] = row
+    return out
+
+
+def _evidence_publicly_exposed(
+    evidence_id: str,
+    information_state: Optional[Mapping[str, Any]],
+) -> bool:
+    if not evidence_id or not isinstance(information_state, Mapping):
+        return False
+    for raw in information_state.get("information_items") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        if str(raw.get("information_type") or "") != "evidence_summary":
+            continue
+        if evidence_id not in _bounded_str_list(raw.get("source_event_ids"), MAX_EVIDENCE_REFS):
+            continue
+        if str(raw.get("visibility_scope") or "").lower() in PUBLIC_EVIDENCE_VISIBILITY_SCOPES:
+            return True
+    return False
+
+
+def _append_exposure_signal(
+    signals: List[Dict[str, Any]],
+    *,
+    exposure_kind: str,
+    signal_id: str,
+    evidence_id: str = "",
+    investigation_id: str = "",
+    actor_id: str = "",
+    actor_role: str = "",
+    confidence: int = 0,
+    severity: int = 5,
+    public: bool = False,
+) -> None:
+    if exposure_kind not in EVIDENCE_EXPOSURE_KINDS:
+        return
+    bounded_signal_id = _bounded_str(signal_id, 160)
+    if any(
+        row.get("exposure_kind") == exposure_kind and row.get("signal_id") == bounded_signal_id
+        for row in signals
+    ):
+        return
+    behaviours = EVIDENCE_EXPOSURE_BEHAVIOURS.get(exposure_kind, ())
+    signals.append(
+        {
+            "exposure_kind": exposure_kind,
+            "signal_id": bounded_signal_id,
+            "evidence_id": _bounded_str(evidence_id, 160),
+            "investigation_id": _bounded_str(investigation_id, 160),
+            "actor_id": _bounded_str(actor_id, 120),
+            "actor_role": _bounded_str(actor_role, 40),
+            "behaviours": list(behaviours),
+            "severity": max(1, min(10, int(severity))),
+            "confidence": max(0, min(100, int(confidence))),
+            "public": bool(public),
+        }
+    )
+
+
+def evidence_exposure_signals_for_context(
+    investigation_state: Mapping[str, Any],
+    *,
+    information_state: Optional[Mapping[str, Any]] = None,
+    actor_ids: Sequence[str] = (),
+    location_ids: Sequence[str] = (),
+    limit: int = MAX_EVIDENCE_EXPOSURE_SIGNALS,
+) -> List[Dict[str, Any]]:
+    """Deterministic read-side projection of evidence exposure pressures for engine bridges."""
+    if not isinstance(investigation_state, Mapping):
+        return []
+    context_actors = _token_set(actor_ids)
+    context_locations = _token_set(location_ids)
+    investigations = _investigations_by_id(investigation_state)
+    signals: List[Dict[str, Any]] = []
+
+    for raw in investigation_state.get("evidence") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        evidence = _normalise_evidence(raw)
+        if evidence.get("archived"):
+            continue
+        evidence_id = _bounded_str(evidence.get("evidence_id"), 160)
+        confidence = _clamp_int(evidence.get("confidence"), 0, 100, default=0)
+        if not evidence_id or confidence < MIN_EVIDENCE_EXPOSURE_CONFIDENCE:
+            continue
+        location_id = _bounded_str(evidence.get("location_id"), 120)
+        if context_locations and location_id and location_id.lower() not in context_locations:
+            continue
+        is_public = _evidence_publicly_exposed(evidence_id, information_state)
+        related_cases = _bounded_str_list(evidence.get("related_case_ids"), MAX_INVESTIGATION_REFS)
+        investigation_id = related_cases[0] if related_cases else ""
+        severity = max(4, min(10, confidence // 10 + (2 if is_public else 0)))
+
+        implicated = _token_set(evidence.get("actor_ids"))
+        investigators = _token_set(evidence.get("discovered_by"))
+        for actor in sorted(implicated):
+            if context_actors and actor not in context_actors:
+                continue
+            exposure_kind = "implicated_public" if is_public else "implicated_private"
+            _append_exposure_signal(
+                signals,
+                exposure_kind=exposure_kind,
+                signal_id=f"{exposure_kind}:{evidence_id}:{actor}",
+                evidence_id=evidence_id,
+                investigation_id=investigation_id,
+                actor_id=actor,
+                actor_role="suspect",
+                confidence=confidence,
+                severity=severity,
+                public=is_public,
+            )
+        for actor in sorted(investigators):
+            if context_actors and actor not in context_actors:
+                continue
+            _append_exposure_signal(
+                signals,
+                exposure_kind="investigating",
+                signal_id=f"investigating:{evidence_id}:{actor}",
+                evidence_id=evidence_id,
+                investigation_id=investigation_id,
+                actor_id=actor,
+                actor_role="investigator",
+                confidence=confidence,
+                severity=severity,
+                public=is_public,
+            )
+
+    for investigation in investigations.values():
+        if investigation.get("status") in TERMINAL_STATUSES or investigation.get("archived"):
+            continue
+        investigation_id = _bounded_str(investigation.get("investigation_id"), 160)
+        confidence = _clamp_int(investigation.get("confidence"), 0, 100, default=0)
+        if not investigation_id or confidence < MIN_EVIDENCE_EXPOSURE_CONFIDENCE:
+            continue
+        if not investigation.get("evidence_ids"):
+            continue
+        suspects = _token_set(investigation.get("suspect_ids"))
+        for actor in sorted(suspects):
+            if context_actors and actor not in context_actors:
+                continue
+            public = any(
+                _evidence_publicly_exposed(str(eid), information_state)
+                for eid in investigation.get("evidence_ids") or []
+            )
+            _append_exposure_signal(
+                signals,
+                exposure_kind="accused_pressure",
+                signal_id=f"accused_pressure:{investigation_id}:{actor}",
+                evidence_id=_bounded_str((investigation.get("evidence_ids") or [""])[0], 160),
+                investigation_id=investigation_id,
+                actor_id=actor,
+                actor_role="suspect",
+                confidence=confidence,
+                severity=max(5, min(10, confidence // 10 + (1 if public else 0))),
+                public=public,
+            )
+
+    ordered = sorted(
+        signals,
+        key=lambda row: (
+            -_coerce_int(row.get("severity"), 0),
+            str(row.get("exposure_kind") or ""),
+            str(row.get("signal_id") or ""),
+        ),
+    )
+    return ordered[: max(0, min(MAX_EVIDENCE_EXPOSURE_SIGNALS, int(limit or 0)))]
+
+
+def evidence_exposure_opportunity_labels(signals: Sequence[Mapping[str, Any]]) -> List[str]:
+    mapping = {
+        "hide": "conceal compromising evidence",
+        "flee": "withdraw before exposure spreads",
+        "bribe": "buy silence or cooperation",
+        "retaliate": "push back against accusation",
+        "confess": "come clean under pressure",
+        "accuse": "name a suspect publicly",
+        "warn": "alert others to the danger",
+        "cooperate": "share what you know",
+        "investigate": "pursue leads before they vanish",
+    }
+    labels: List[str] = []
+    for row in signals:
+        for behaviour in row.get("behaviours") or []:
+            label = mapping.get(str(behaviour or ""))
+            if label and label not in labels:
+                labels.append(label)
+        if len(labels) >= 4:
+            break
+    return labels[:4]

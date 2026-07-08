@@ -12,6 +12,7 @@ import copy
 import hashlib
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+import investigation_engine
 import world_state_consumers
 
 SITUATION_ENGINE_VERSION = 1
@@ -89,6 +90,8 @@ PROMOTED_SITUATION_FIELDS = (
     "relationship_shifts",
     "world_state_signals",
     "world_state_opportunities",
+    "evidence_exposure_signals",
+    "evidence_exposure_behaviours",
 )
 
 CREATION_PRESSURE_THRESHOLD = 50
@@ -1412,13 +1415,65 @@ def _world_state_signals_for_situation(
     ]
 
 
+def _evidence_exposure_signals_for_situation(
+    row: Mapping[str, Any],
+    replayability_state: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    investigation_state = {
+        "investigations": replayability_state.get("investigations") or [],
+        "evidence": replayability_state.get("evidence") or [],
+    }
+    information_state = {
+        "information_items": replayability_state.get("information_items") or [],
+        "reputation_signals": replayability_state.get("reputation_signals") or [],
+    }
+    situation_id = _bounded_str(row.get("situation_id"), 160)
+    locations = list(row.get("involved_locations") or [])
+    actors = list(row.get("involved_actor_ids") or [])
+    matched = investigation_engine.evidence_exposure_signals_for_context(
+        investigation_state,
+        information_state=information_state,
+        actor_ids=actors,
+        location_ids=locations,
+    )
+    if situation_id:
+        case_ids = {
+            _bounded_str(inv.get("investigation_id"), 160)
+            for inv in investigation_state.get("investigations") or []
+            if isinstance(inv, Mapping) and inv.get("situation_id") == situation_id
+        }
+        if case_ids:
+            matched = [
+                signal
+                for signal in matched
+                if str(signal.get("investigation_id") or "") in case_ids
+                or not signal.get("investigation_id")
+            ]
+    return [
+        {
+            "exposure_kind": signal.get("exposure_kind"),
+            "signal_id": signal.get("signal_id"),
+            "actor_id": signal.get("actor_id"),
+            "behaviours": list(signal.get("behaviours") or [])[:4],
+            "severity": signal.get("severity"),
+        }
+        for signal in matched
+    ]
+
+
 def _player_opportunities_for_situation(
     row: Mapping[str, Any],
     related_goals: Sequence[Mapping[str, Any]],
     *,
     world_state_signals: Sequence[Mapping[str, Any]] = (),
+    evidence_exposure_signals: Sequence[Mapping[str, Any]] = (),
 ) -> List[str]:
     opportunities: List[str] = []
+    for label in investigation_engine.evidence_exposure_opportunity_labels(evidence_exposure_signals):
+        if label not in opportunities:
+            opportunities.append(label)
+        if len(opportunities) >= MAX_PROMOTED_OPPORTUNITIES:
+            return opportunities[:MAX_PROMOTED_OPPORTUNITIES]
     for label in world_state_consumers.world_state_opportunity_labels(world_state_signals):
         if label not in opportunities:
             opportunities.append(label)
@@ -1492,6 +1547,7 @@ def project_promoted_situation(
         rolling_state=rolling_state,
     )
     world_state_signals = _world_state_signals_for_situation(row, rolling_state)
+    evidence_exposure_signals = _evidence_exposure_signals_for_situation(row, replayability_state)
     return {
         "situation_id": row.get("situation_id"),
         "type": row.get("type"),
@@ -1511,6 +1567,7 @@ def project_promoted_situation(
             row,
             related_goals,
             world_state_signals=world_state_signals,
+            evidence_exposure_signals=evidence_exposure_signals,
         ),
         "related_goals": related_goals,
         "related_information": related_information,
@@ -1519,6 +1576,10 @@ def project_promoted_situation(
         "relationship_shifts": relationship_shifts,
         "world_state_signals": world_state_signals,
         "world_state_opportunities": world_state_consumers.world_state_opportunity_labels(world_state_signals),
+        "evidence_exposure_signals": evidence_exposure_signals,
+        "evidence_exposure_behaviours": investigation_engine.evidence_exposure_opportunity_labels(
+            evidence_exposure_signals
+        ),
     }
 
 

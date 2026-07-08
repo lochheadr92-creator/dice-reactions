@@ -629,6 +629,13 @@ WORLD_STATE_SIGNAL_TO_GOAL_TYPE = {
     "actor_missing": "rescue_missing_person",
 }
 
+EVIDENCE_EXPOSURE_TO_GOAL_TYPE = {
+    "implicated_private": "hide_evidence",
+    "implicated_public": "hide_evidence",
+    "investigating": "find_murderer",
+    "accused_pressure": "hide_evidence",
+}
+
 
 def _candidate_from_world_state_signal(
     signal: Mapping[str, Any],
@@ -669,6 +676,57 @@ def _candidate_from_world_state_signal(
             "blockers": list(signal.get("conditions") or [])[:MAX_GOAL_BLOCKERS],
             "prerequisites": GOAL_PREREQUISITES.get(goal_type, ()),
             "evidence_refs": [f"world_state:{signal_id}"],
+            "expiry": turn_number + DEFAULT_EXPIRY_TURNS,
+            "source_event_ids": [signal_id],
+            "plan_steps": _generate_plan(goal_type),
+            "dedupe_key": dedupe,
+            "last_reinforced_turn": turn_number,
+        },
+        run_seed=run_seed,
+    )
+
+
+def _candidate_from_evidence_exposure(
+    signal: Mapping[str, Any],
+    *,
+    turn_number: int,
+    run_seed: str,
+) -> Optional[Dict[str, Any]]:
+    exposure_kind = str(signal.get("exposure_kind") or "")
+    goal_type = EVIDENCE_EXPOSURE_TO_GOAL_TYPE.get(exposure_kind)
+    signal_id = _bounded_str(signal.get("signal_id"), 160)
+    actor_id = _bounded_str(signal.get("actor_id"), 120)
+    if not goal_type or not signal_id or not actor_id:
+        return None
+    evidence_id = _bounded_str(signal.get("evidence_id"), 160)
+    investigation_id = _bounded_str(signal.get("investigation_id"), 160)
+    target = evidence_id or investigation_id or signal_id
+    dedupe = _dedupe_key("npc", actor_id, goal_type, target)
+    severity = _clamp_int(signal.get("severity"), 0, 10, default=5)
+    confidence = _clamp_int(signal.get("confidence"), 0, 100, default=50)
+    parent_situation_ids = [investigation_id] if investigation_id else []
+    return _normalise_goal(
+        {
+            "goal_id": _goal_id(run_seed, dedupe),
+            "owner_type": "npc",
+            "owner_id": actor_id,
+            "goal_type": goal_type,
+            "title": _goal_title(goal_type),
+            "status": "active" if severity >= 4 else "forming",
+            "priority": severity,
+            "urgency": severity,
+            "progress": 0,
+            "confidence": confidence,
+            "created_turn": turn_number,
+            "updated_turn": turn_number,
+            "parent_situation_ids": parent_situation_ids,
+            "supporting_pressure_ids": [],
+            "target_actor_ids": [actor_id] if exposure_kind != "investigating" else [],
+            "target_location_ids": [],
+            "required_resources": GOAL_REQUIRED_RESOURCES.get(goal_type, ()),
+            "blockers": list(signal.get("behaviours") or [])[:MAX_GOAL_BLOCKERS],
+            "prerequisites": () if evidence_id else GOAL_PREREQUISITES.get(goal_type, ()),
+            "evidence_refs": [f"evidence_exposure:{signal_id}"] + ([evidence_id] if evidence_id else []),
             "expiry": turn_number + DEFAULT_EXPIRY_TURNS,
             "source_event_ids": [signal_id],
             "plan_steps": _generate_plan(goal_type),
@@ -1059,6 +1117,24 @@ def evolve_goals(
         if len(candidates) >= MAX_GOAL_INPUTS_PER_TICK:
             break
         candidate = _candidate_from_world_state_signal(signal, turn_number=turn_number, run_seed=seed)
+        if candidate:
+            candidates.append(candidate)
+
+    investigation_state = {
+        "investigations": replayability_state.get("investigations") or [],
+        "evidence": replayability_state.get("evidence") or [],
+    }
+    information_state = {
+        "information_items": replayability_state.get("information_items") or [],
+        "reputation_signals": replayability_state.get("reputation_signals") or [],
+    }
+    for signal in investigation_engine.evidence_exposure_signals_for_context(
+        investigation_state,
+        information_state=information_state,
+    ):
+        if len(candidates) >= MAX_GOAL_INPUTS_PER_TICK:
+            break
+        candidate = _candidate_from_evidence_exposure(signal, turn_number=turn_number, run_seed=seed)
         if candidate:
             candidates.append(candidate)
 

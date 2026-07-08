@@ -251,6 +251,39 @@ INFORMATION_RELIABILITY_FACTORS = {
     "unknown": 0.35,
 }
 
+MAX_EVIDENCE_EXPOSURE_SIGNALS_PER_UTILITY_ACTOR = 4
+MAX_EVIDENCE_EXPOSURE_NODE_SCORE_MODIFIER = 3.0
+MAX_EVIDENCE_EXPOSURE_TOTAL_SCORE_MODIFIER = 6.0
+EVIDENCE_EXPOSURE_SCORING_BRIDGE_VERSION = 1
+
+EVIDENCE_EXPOSURE_ACTION_MODIFIERS: Dict[str, Dict[str, float]] = {
+    "implicated_private": {
+        "conceal": 3.0,
+        "withdraw": 2.5,
+        "negotiate": 1.5,
+        "investigate": -1.5,
+    },
+    "implicated_public": {
+        "withdraw": 3.0,
+        "conceal": 2.5,
+        "pressure": 2.0,
+        "negotiate": 2.0,
+        "investigate": -2.0,
+    },
+    "investigating": {
+        "investigate": 3.0,
+        "pressure": 2.5,
+        "negotiate": 2.0,
+        "gather": 1.5,
+    },
+    "accused_pressure": {
+        "pressure": 2.5,
+        "negotiate": 2.0,
+        "withdraw": 2.0,
+        "conceal": 2.0,
+    },
+}
+
 EVIDENCE_ACTION_MODIFIERS: Dict[str, Dict[str, float]] = {
     "physical_clue": {
         "investigate": 2.5,
@@ -512,12 +545,19 @@ _WORLD_STATE_SCORE_KEYS = (
     "world_state_bridge_version",
 )
 
+_EVIDENCE_EXPOSURE_SCORE_KEYS = (
+    "evidence_exposure_modifier",
+    "evidence_exposure_signal_ids",
+    "evidence_exposure_bridge_version",
+)
+
 _SOCIAL_SCORE_KEY_GROUPS = (
     _RELATIONSHIP_SCORE_KEYS,
     _REPUTATION_SCORE_KEYS,
     _INFORMATION_SCORE_KEYS,
     _INVESTIGATION_SCORE_KEYS,
     _WORLD_STATE_SCORE_KEYS,
+    _EVIDENCE_EXPOSURE_SCORE_KEYS,
 )
 
 
@@ -1337,6 +1377,61 @@ def _apply_social_score_adjustments(
     return utility, evaluated
 
 
+def evidence_exposure_score_modifier(
+    snapshot: FoundationTurnSnapshot,
+    *,
+    actor_id: str,
+    action_kind: str,
+    target_kind: str = "",
+    target_id: str = "",
+) -> Dict[str, Any]:
+    """Bounded Utility AI adjustment from evidence exposure pressures."""
+    actor_ids, location_ids, _faction_ids = _social_context_ids(
+        snapshot,
+        actor_id=actor_id,
+        target_kind=target_kind,
+        target_id=target_id,
+    )
+    matched = investigation_engine.evidence_exposure_signals_for_context(
+        snapshot.investigation_state_ref,
+        information_state=snapshot.information_state_ref,
+        actor_ids=actor_ids,
+        location_ids=location_ids,
+        limit=MAX_EVIDENCE_EXPOSURE_SIGNALS_PER_UTILITY_ACTOR,
+    )
+    action = str(action_kind or "").strip().lower()
+    total = 0.0
+    contributing_ids: List[str] = []
+    for row in matched:
+        exposure_kind = str(row.get("exposure_kind") or "")
+        raw_map = EVIDENCE_EXPOSURE_ACTION_MODIFIERS.get(exposure_kind, {})
+        raw_modifier = float(raw_map.get(action) or 0.0)
+        if raw_modifier == 0.0:
+            continue
+        severity_factor = _clamp(float(row.get("severity") or 0.0) / 10.0, 0.25, 1.0)
+        contribution = _clamp(
+            raw_modifier * severity_factor,
+            -MAX_EVIDENCE_EXPOSURE_NODE_SCORE_MODIFIER,
+            MAX_EVIDENCE_EXPOSURE_NODE_SCORE_MODIFIER,
+        )
+        if contribution == 0.0:
+            continue
+        total += contribution
+        signal_id = str(row.get("signal_id") or "")
+        if signal_id and signal_id not in contributing_ids:
+            contributing_ids.append(signal_id)
+    total = _clamp(
+        total,
+        -MAX_EVIDENCE_EXPOSURE_TOTAL_SCORE_MODIFIER,
+        MAX_EVIDENCE_EXPOSURE_TOTAL_SCORE_MODIFIER,
+    )
+    return {
+        "bridge_version": EVIDENCE_EXPOSURE_SCORING_BRIDGE_VERSION,
+        "modifier": round(total, 4),
+        "signal_ids": contributing_ids,
+    }
+
+
 def world_state_score_modifier(
     snapshot: FoundationTurnSnapshot,
     *,
@@ -1665,6 +1760,16 @@ def select_action(
         world_state_modifier = float(world_state_adjustment.get("modifier") or 0.0)
         if world_state_modifier != 0.0:
             base_utility = _clamp(base_utility + world_state_modifier, 0.0, 100.0)
+        evidence_exposure_adjustment = evidence_exposure_score_modifier(
+            snapshot,
+            actor_id=actor_id,
+            action_kind=action_kind,
+            target_kind=target_kind,
+            target_id=target_id,
+        )
+        evidence_exposure_modifier = float(evidence_exposure_adjustment.get("modifier") or 0.0)
+        if evidence_exposure_modifier != 0.0:
+            base_utility = _clamp(base_utility + evidence_exposure_modifier, 0.0, 100.0)
         c_hash = candidate_set_hash(
             actor_id=actor_id,
             action_kind=action_kind,
@@ -1725,6 +1830,12 @@ def select_action(
                 world_state_modifier=world_state_modifier,
                 world_state_signal_ids=list(world_state_adjustment.get("signal_ids") or []),
                 world_state_bridge_version=world_state_adjustment.get("bridge_version"),
+            )
+        if evidence_exposure_modifier != 0.0:
+            evaluated.update(
+                evidence_exposure_modifier=evidence_exposure_modifier,
+                evidence_exposure_signal_ids=list(evidence_exposure_adjustment.get("signal_ids") or []),
+                evidence_exposure_bridge_version=evidence_exposure_adjustment.get("bridge_version"),
             )
         feasible.append(evaluated)
 
