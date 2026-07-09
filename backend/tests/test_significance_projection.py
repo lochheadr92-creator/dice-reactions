@@ -150,6 +150,55 @@ def test_projection_is_bounded_and_sanitized():
     assert "debug" not in payload
 
 
+def test_narrative_marker_strings_are_rejected_from_source_ids_and_metadata_lists():
+    projection = significance.project_significance(
+        [
+            {
+                "entry_id": "causal-source-safety",
+                "turn": 6,
+                "source_system": "pressure_graph",
+                "source_ids": [
+                    "player said to open the hatch",
+                    "evt-structured-1",
+                    "story text invented this",
+                ],
+                "affected_entity_type": "pressure_node",
+                "affected_entity_id": "pressure-dock",
+                "effect_category": "pressure",
+                "effect_type": "pressure_escalated",
+                "metadata": {
+                    "affected_actor_ids": [
+                        "model output named Greg",
+                        "Greg Stahl",
+                    ],
+                    "affected_location_ids": [
+                        "the narrative says dock",
+                        "dock",
+                    ],
+                    "source_ids": [
+                        "you chose a dramatic option",
+                        "info-structured-1",
+                    ],
+                },
+            }
+        ],
+        {"turn_sequence": 6, "actor_id": "Greg Stahl", "location_id": "dock"},
+    )
+
+    entry = projection["entries"][0]
+    payload = json.dumps(projection).lower()
+
+    assert entry["source_ids"] == ["evt-structured-1"]
+    assert entry["metadata"]["affected_actor_ids"] == ["Greg Stahl"]
+    assert entry["metadata"]["affected_location_ids"] == ["dock"]
+    assert entry["metadata"]["source_ids"] == ["info-structured-1"]
+    assert "player said" not in payload
+    assert "story text" not in payload
+    assert "model output" not in payload
+    assert "the narrative" not in payload
+    assert "you chose" not in payload
+
+
 def test_malformed_entries_fail_closed():
     projection = significance.project_significance(
         [
@@ -174,12 +223,31 @@ def test_malformed_entries_fail_closed():
 def test_passive_evaluator_is_not_wired_into_runtime_modules():
     root = Path(__file__).resolve().parents[1]
     runtime_files = [
-        root / "replayability.py",
         root / "foundation_integration.py",
+        root / "foundation_snapshot.py",
+        root / "goal_engine.py",
+        root / "hud.py",
+        root / "information_engine.py",
+        root / "investigation_engine.py",
+        root / "memory_retrieval.py",
+        root / "npc_action_engine.py",
+        root / "pacing.py",
+        root / "player_api.py",
         root / "pressure_graph.py",
         root / "relationships.py",
-        root / "memory_retrieval.py",
+        root / "replayability.py",
+        root / "server.py",
+        root / "situation_engine.py",
+        root / "stress.py",
+        root / "world_event_engine.py",
     ]
+    forbidden = (
+        "significance_projection",
+        "project_significance",
+        "significance_projection_v1",
+    )
 
     for path in runtime_files:
-        assert "significance_projection" not in path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8")
+        for token in forbidden:
+            assert token not in text
