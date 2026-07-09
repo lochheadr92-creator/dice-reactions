@@ -1,0 +1,17 @@
+{
+  "anomalies": [
+    {
+      "code": "state_budget_exceeded",
+      "detail": "serialized replayability_state 74917 bytes exceeds production budget 73728",
+      "first_turn": 23,
+      "last_turn": 24,
+      "occurrences": 2,
+      "subject": "replayability_state"
+    }
+  ],
+  "counts_by_code": {
+    "state_budget_exceeded": 1
+  },
+  "schema": "sim_anomalies_v1",
+  "total": 1
+}

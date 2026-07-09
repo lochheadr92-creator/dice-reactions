@@ -1,0 +1,3 @@
+approval_policy = "on-failure"
+[sandbox_workspace_write]
+network_access = true

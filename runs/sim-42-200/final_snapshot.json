@@ -1,0 +1,4361 @@
+{
+  "end_turn": 201,
+  "replayability_state": {
+    "arc_diversity": {
+      "last_primary_kind": "pressure",
+      "recent_beats": [
+        {
+          "kind": "pressure",
+          "subkind": "trust",
+          "turn": 2,
+          "urgency": 38
+        },
+        {
+          "kind": "echo",
+          "subkind": "pressure_escalation",
+          "turn": 3,
+          "urgency": 85
+        },
+        {
+          "kind": "pressure",
+          "subkind": "social",
+          "turn": 4,
+          "urgency": 54
+        },
+        {
+          "kind": "pressure",
+          "subkind": "social",
+          "turn": 5,
+          "urgency": 56
+        },
+        {
+          "kind": "pressure",
+          "subkind": "social",
+          "turn": 6,
+          "urgency": 50
+        },
+        {
+          "kind": "pressure",
+          "subkind": "social",
+          "turn": 7,
+          "urgency": 44
+        },
+        {
+          "kind": "pressure",
+          "subkind": "social",
+          "turn": 8,
+          "urgency": 38
+        },
+        {
+          "kind": "pressure",
+          "subkind": "social",
+          "turn": 9,
+          "urgency": 32
+        },
+        {
+          "kind": "pressure",
+          "subkind": "social",
+          "turn": 10,
+          "urgency": 26
+        },
+        {
+          "kind": "pressure",
+          "subkind": "social",
+          "turn": 11,
+          "urgency": 20
+        },
+        {
+          "kind": "pressure",
+          "subkind": "social",
+          "turn": 12,
+          "urgency": 14
+        },
+        {
+          "kind": "pressure",
+          "subkind": "social",
+          "turn": 13,
+          "urgency": 8
+        }
+      ],
+      "repeat_count": 10,
+      "version": 1
+    },
+    "consequence_echoes": {
+      "fired": [
+        {
+          "fired_turn": 3,
+          "id": "echo-ff347bcfe5a2",
+          "kind": "pressure_escalation",
+          "label": "authority \u2014 others compete for the same refuge",
+          "mature_turn": 3,
+          "scheduled_turn": 1,
+          "source_event_id": "evt-opening-fact-e974e95fbbfa",
+          "source_kind": "opening_unresolved_tension"
+        }
+      ],
+      "last_fired_turn": 3,
+      "pending": [],
+      "scheduled": []
+    },
+    "engine_world_events": [
+      {
+        "actor_ids": [],
+        "event_id": "evt-world-a1a237a46c87",
+        "event_kind": "strange_evidence",
+        "event_type": "world_event",
+        "faction_ids": [],
+        "location_ids": [],
+        "magnitude": 40,
+        "originating_action_ids": [],
+        "originating_goal_ids": [],
+        "originating_pressure_ids": [
+          "pressure-5f2c983a8df2"
+        ],
+        "originating_situation_ids": [],
+        "pressure_event_kind": "strange_evidence",
+        "region_ids": [],
+        "source_event_ids": [
+          "pressure-5f2c983a8df2"
+        ],
+        "tags": [
+          "world_event",
+          "investigation",
+          "world_event_created"
+        ],
+        "turn": 2,
+        "world_event_id": "world-event-d94fe7ffae43",
+        "world_event_status": "active",
+        "world_event_type": "investigation"
+      },
+      {
+        "actor_ids": [],
+        "event_id": "evt-world-a1984e74d0b7",
+        "event_kind": "protest",
+        "event_type": "world_event",
+        "faction_ids": [],
+        "location_ids": [],
+        "magnitude": 40,
+        "originating_action_ids": [],
+        "originating_goal_ids": [],
+        "originating_pressure_ids": [
+          "pressure-2e8052f9763c"
+        ],
+        "originating_situation_ids": [],
+        "pressure_event_kind": "protest",
+        "region_ids": [],
+        "source_event_ids": [
+          "pressure-2e8052f9763c"
+        ],
+        "tags": [
+          "world_event",
+          "political_unrest",
+          "world_event_created"
+        ],
+        "turn": 2,
+        "world_event_id": "world-event-a3e1d700b5a2",
+        "world_event_status": "active",
+        "world_event_type": "political_unrest"
+      },
+      {
+        "actor_ids": [],
+        "event_id": "evt-pressure-07a5e91775e7",
+        "event_type": "pressure_world_event",
+        "faction_ids": [],
+        "location_ids": [],
+        "magnitude": 49,
+        "pressure_event_kind": "strange_evidence",
+        "pressure_kind": "bodily",
+        "pressure_node_id": "pressure-5f2c983a8df2",
+        "tags": [
+          "world_event",
+          "investigation",
+          "suspicion",
+          "pressure_world_event"
+        ],
+        "turn": 3
+      },
+      {
+        "actor_ids": [],
+        "event_id": "evt-pressure-a85e7487aeb4",
+        "event_type": "pressure_world_event",
+        "faction_ids": [],
+        "location_ids": [],
+        "magnitude": 48,
+        "pressure_event_kind": "argument",
+        "pressure_kind": "social",
+        "pressure_node_id": "pressure-2e8052f9763c",
+        "tags": [
+          "world_event",
+          "political_unrest",
+          "social",
+          "pressure_world_event"
+        ],
+        "turn": 3
+      },
+      {
+        "actor_ids": [],
+        "event_id": "evt-pressure-f9f2a2f0fbcb",
+        "event_type": "pressure_world_event",
+        "faction_ids": [],
+        "location_ids": [],
+        "magnitude": 55,
+        "pressure_event_kind": "unexplained_disappearance",
+        "pressure_kind": "bodily",
+        "pressure_node_id": "pressure-5f2c983a8df2",
+        "tags": [
+          "world_event",
+          "investigation",
+          "suspicion",
+          "pressure_world_event"
+        ],
+        "turn": 4
+      },
+      {
+        "actor_ids": [],
+        "event_id": "evt-pressure-b7fed99ce9fb",
+        "event_type": "pressure_world_event",
+        "faction_ids": [],
+        "location_ids": [],
+        "magnitude": 54,
+        "pressure_event_kind": "protest",
+        "pressure_kind": "social",
+        "pressure_node_id": "pressure-2e8052f9763c",
+        "tags": [
+          "world_event",
+          "political_unrest",
+          "social",
+          "pressure_world_event"
+        ],
+        "turn": 4
+      }
+    ],
+    "evidence": [],
+    "foundation_prepared_v1": {
+      "actor_resolution_state": {
+        "actors": {},
+        "schema_version": 1
+      },
+      "gravity_state": {
+        "items": {},
+        "schema_version": 1
+      },
+      "retrieval_memory_ids": [],
+      "schema_version": 1,
+      "snapshot_schema_version": 9,
+      "source_state_hash": "272b93785ad46aba4b332bc06b03a891a9aefdfe419736b583526f99f0499d9b",
+      "utility_selection": null
+    },
+    "frozen_npc_move": null,
+    "goal_receipts": [
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_source",
+        "goal_id": "goal-4f3f4199bc26",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-b89154c85aba",
+        "receipt_type": "goal_created",
+        "source_event_ids": [
+          "situation-41246fd00230"
+        ],
+        "turn": 2,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_source",
+        "goal_id": "goal-a9a3e234108b",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-b3cd032a2262",
+        "receipt_type": "goal_created",
+        "source_event_ids": [
+          "situation-a3e1d700b5a2"
+        ],
+        "turn": 2,
+        "version": 1
+      },
+      {
+        "detail": "reinforced_from_engine_source",
+        "goal_id": "goal-4f3f4199bc26",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-3965db218a1c",
+        "receipt_type": "goal_reinforced",
+        "source_event_ids": [
+          "situation-41246fd00230"
+        ],
+        "turn": 3,
+        "version": 1
+      },
+      {
+        "detail": "reinforced_from_engine_source",
+        "goal_id": "goal-a9a3e234108b",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-de1e4fe44990",
+        "receipt_type": "goal_reinforced",
+        "source_event_ids": [
+          "situation-a3e1d700b5a2"
+        ],
+        "turn": 3,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_source",
+        "goal_id": "goal-4c32a15a6f23",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-e8aa293e4362",
+        "receipt_type": "goal_created",
+        "source_event_ids": [
+          "situation-46cf2e1f343d"
+        ],
+        "turn": 3,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_source",
+        "goal_id": "goal-16005d927042",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-eb95435b326a",
+        "receipt_type": "goal_created",
+        "source_event_ids": [
+          "situation-ab47fd6f5077"
+        ],
+        "turn": 3,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_source",
+        "goal_id": "goal-fbfcd009a0d6",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-09f802806e92",
+        "receipt_type": "goal_created",
+        "source_event_ids": [
+          "situation-6a724bfad694"
+        ],
+        "turn": 4,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_source",
+        "goal_id": "goal-67d230cf996a",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-813dbee9fbbc",
+        "receipt_type": "goal_created",
+        "source_event_ids": [
+          "situation-e6d59c70d5a1"
+        ],
+        "turn": 4,
+        "version": 1
+      },
+      {
+        "detail": "reinforced_from_engine_source",
+        "goal_id": "goal-4f3f4199bc26",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-ca895816c8aa",
+        "receipt_type": "goal_reinforced",
+        "source_event_ids": [
+          "situation-41246fd00230"
+        ],
+        "turn": 5,
+        "version": 1
+      },
+      {
+        "detail": "reinforced_from_engine_source",
+        "goal_id": "goal-a9a3e234108b",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-7ef4b2d080ba",
+        "receipt_type": "goal_reinforced",
+        "source_event_ids": [
+          "situation-a3e1d700b5a2"
+        ],
+        "turn": 5,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_source",
+        "goal_id": "goal-f88bc542119b",
+        "goal_type": "rescue_missing_person",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-a0283c6780b1",
+        "receipt_type": "goal_created",
+        "source_event_ids": [
+          "situation-3401b4664193"
+        ],
+        "turn": 5,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_source",
+        "goal_id": "goal-4e213c489f4e",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-ec52a02f78f7",
+        "receipt_type": "goal_created",
+        "source_event_ids": [
+          "situation-3cb759376b71"
+        ],
+        "turn": 5,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "active",
+            "failed"
+          ]
+        },
+        "detail": "parent_situation_failed",
+        "goal_id": "goal-4f3f4199bc26",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-9bb2e15b670f",
+        "receipt_type": "goal_failed",
+        "source_event_ids": [
+          "situation-41246fd00230"
+        ],
+        "turn": 14,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "active",
+            "failed"
+          ]
+        },
+        "detail": "parent_situation_failed",
+        "goal_id": "goal-a9a3e234108b",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-2fc5770bacf9",
+        "receipt_type": "goal_failed",
+        "source_event_ids": [
+          "situation-a3e1d700b5a2"
+        ],
+        "turn": 14,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "active",
+            "failed"
+          ]
+        },
+        "detail": "parent_situation_failed",
+        "goal_id": "goal-16005d927042",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-25fec2a7732e",
+        "receipt_type": "goal_failed",
+        "source_event_ids": [
+          "situation-ab47fd6f5077"
+        ],
+        "turn": 16,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "active",
+            "failed"
+          ]
+        },
+        "detail": "parent_situation_failed",
+        "goal_id": "goal-4c32a15a6f23",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-5101db9881cc",
+        "receipt_type": "goal_failed",
+        "source_event_ids": [
+          "situation-46cf2e1f343d"
+        ],
+        "turn": 16,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_source",
+        "goal_id": "goal-1df25c7a81be",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-d321559f8f0c",
+        "receipt_type": "goal_created",
+        "source_event_ids": [
+          "situation-39103d68d8e2"
+        ],
+        "turn": 17,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_source",
+        "goal_id": "goal-e0011ef42e93",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-04144529dc4d",
+        "receipt_type": "goal_created",
+        "source_event_ids": [
+          "situation-d4ca877fa5d4"
+        ],
+        "turn": 17,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "active",
+            "abandoned"
+          ]
+        },
+        "detail": "parent_situation_resolved_without_progress",
+        "goal_id": "goal-f88bc542119b",
+        "goal_type": "rescue_missing_person",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-77d154b7277b",
+        "receipt_type": "goal_abandoned",
+        "source_event_ids": [
+          "situation-3401b4664193"
+        ],
+        "turn": 19,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "active",
+            "abandoned"
+          ]
+        },
+        "detail": "parent_situation_resolved_without_progress",
+        "goal_id": "goal-4e213c489f4e",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-bba3c8759ce0",
+        "receipt_type": "goal_abandoned",
+        "source_event_ids": [
+          "situation-3cb759376b71"
+        ],
+        "turn": 19,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "active",
+            "abandoned"
+          ]
+        },
+        "detail": "parent_situation_resolved_without_progress",
+        "goal_id": "goal-67d230cf996a",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-dfbee044bd09",
+        "receipt_type": "goal_abandoned",
+        "source_event_ids": [
+          "situation-e6d59c70d5a1"
+        ],
+        "turn": 19,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "active",
+            "abandoned"
+          ]
+        },
+        "detail": "parent_situation_resolved_without_progress",
+        "goal_id": "goal-fbfcd009a0d6",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-975efe0d8c61",
+        "receipt_type": "goal_abandoned",
+        "source_event_ids": [
+          "situation-6a724bfad694"
+        ],
+        "turn": 19,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_source",
+        "goal_id": "goal-fbc33715d01c",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-611c5db06181",
+        "receipt_type": "goal_created",
+        "source_event_ids": [
+          "situation-2987f277b4c8"
+        ],
+        "turn": 20,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_source",
+        "goal_id": "goal-1d7f272a0c52",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-8a4d1bf37980",
+        "receipt_type": "goal_created",
+        "source_event_ids": [
+          "situation-908e0b4570a8"
+        ],
+        "turn": 20,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_source",
+        "goal_id": "goal-0533faf2f481",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-09021367d839",
+        "receipt_type": "goal_created",
+        "source_event_ids": [
+          "situation-41246fd00230"
+        ],
+        "turn": 22,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_source",
+        "goal_id": "goal-2e3e36084285",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-e75df2a945ea",
+        "receipt_type": "goal_created",
+        "source_event_ids": [
+          "situation-a3e1d700b5a2"
+        ],
+        "turn": 22,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "active",
+            "abandoned"
+          ]
+        },
+        "detail": "parent_situation_resolved_without_progress",
+        "goal_id": "goal-0533faf2f481",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-e13c9f9d6a5c",
+        "receipt_type": "goal_abandoned",
+        "source_event_ids": [
+          "situation-41246fd00230"
+        ],
+        "turn": 22,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "active",
+            "abandoned"
+          ]
+        },
+        "detail": "parent_situation_resolved_without_progress",
+        "goal_id": "goal-2e3e36084285",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-d68441839961",
+        "receipt_type": "goal_abandoned",
+        "source_event_ids": [
+          "situation-a3e1d700b5a2"
+        ],
+        "turn": 22,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_source",
+        "goal_id": "goal-d5f0c52a06af",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-b13f2c2eadb3",
+        "receipt_type": "goal_created",
+        "source_event_ids": [
+          "situation-41246fd00230"
+        ],
+        "turn": 23,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_source",
+        "goal_id": "goal-dbcae64c5733",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-2880402041d9",
+        "receipt_type": "goal_created",
+        "source_event_ids": [
+          "situation-a3e1d700b5a2"
+        ],
+        "turn": 23,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "active",
+            "abandoned"
+          ]
+        },
+        "detail": "parent_situation_resolved_without_progress",
+        "goal_id": "goal-d5f0c52a06af",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-1eb93d837063",
+        "receipt_type": "goal_abandoned",
+        "source_event_ids": [
+          "situation-41246fd00230"
+        ],
+        "turn": 23,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "active",
+            "abandoned"
+          ]
+        },
+        "detail": "parent_situation_resolved_without_progress",
+        "goal_id": "goal-dbcae64c5733",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-80e75515066b",
+        "receipt_type": "goal_abandoned",
+        "source_event_ids": [
+          "situation-a3e1d700b5a2"
+        ],
+        "turn": 23,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "active",
+            "abandoned"
+          ]
+        },
+        "detail": "parent_situation_resolved_without_progress",
+        "goal_id": "goal-1d7f272a0c52",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-f65e388dd289",
+        "receipt_type": "goal_abandoned",
+        "source_event_ids": [
+          "situation-908e0b4570a8"
+        ],
+        "turn": 25,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "active",
+            "abandoned"
+          ]
+        },
+        "detail": "parent_situation_resolved_without_progress",
+        "goal_id": "goal-fbc33715d01c",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-f626e32192ab",
+        "receipt_type": "goal_abandoned",
+        "source_event_ids": [
+          "situation-2987f277b4c8"
+        ],
+        "turn": 25,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "active",
+            "failed"
+          ]
+        },
+        "detail": "parent_situation_failed",
+        "goal_id": "goal-1df25c7a81be",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-e9fde18a2e4b",
+        "receipt_type": "goal_failed",
+        "source_event_ids": [
+          "situation-39103d68d8e2"
+        ],
+        "turn": 30,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "active",
+            "failed"
+          ]
+        },
+        "detail": "parent_situation_failed",
+        "goal_id": "goal-e0011ef42e93",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "receipt_id": "goal-receipt-a738fdbac9e8",
+        "receipt_type": "goal_failed",
+        "source_event_ids": [
+          "situation-d4ca877fa5d4"
+        ],
+        "turn": 30,
+        "version": 1
+      }
+    ],
+    "goals": [
+      {
+        "created_turn": 2,
+        "dedupe_key": "world:world:find_murderer:situation-41246fd00230",
+        "goal_id": "goal-4f3f4199bc26",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "parent_situation_ids": [
+          "situation-41246fd00230"
+        ],
+        "priority": 7,
+        "progress": 0,
+        "source_event_ids": [
+          "situation-41246fd00230"
+        ],
+        "status": "failed",
+        "supporting_pressure_ids": [
+          "pressure-5f2c983a8df2"
+        ],
+        "title": "Find Murderer",
+        "updated_turn": 14,
+        "urgency": 6
+      },
+      {
+        "created_turn": 2,
+        "dedupe_key": "world:world:defend_settlement:situation-a3e1d700b5a2",
+        "goal_id": "goal-a9a3e234108b",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "parent_situation_ids": [
+          "situation-a3e1d700b5a2"
+        ],
+        "priority": 7,
+        "progress": 0,
+        "source_event_ids": [
+          "situation-a3e1d700b5a2"
+        ],
+        "status": "failed",
+        "supporting_pressure_ids": [
+          "pressure-2e8052f9763c"
+        ],
+        "title": "Defend Settlement",
+        "updated_turn": 14,
+        "urgency": 6
+      },
+      {
+        "created_turn": 3,
+        "dedupe_key": "world:world:find_murderer:situation-ab47fd6f5077",
+        "goal_id": "goal-16005d927042",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "parent_situation_ids": [
+          "situation-ab47fd6f5077"
+        ],
+        "priority": 4,
+        "progress": 0,
+        "source_event_ids": [
+          "situation-ab47fd6f5077"
+        ],
+        "status": "failed",
+        "title": "Find Murderer",
+        "updated_turn": 16,
+        "urgency": 4
+      },
+      {
+        "created_turn": 3,
+        "dedupe_key": "world:world:defend_settlement:situation-46cf2e1f343d",
+        "goal_id": "goal-4c32a15a6f23",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "parent_situation_ids": [
+          "situation-46cf2e1f343d"
+        ],
+        "priority": 4,
+        "progress": 0,
+        "source_event_ids": [
+          "situation-46cf2e1f343d"
+        ],
+        "status": "failed",
+        "title": "Defend Settlement",
+        "updated_turn": 16,
+        "urgency": 4
+      },
+      {
+        "created_turn": 4,
+        "dedupe_key": "world:world:defend_settlement:situation-e6d59c70d5a1",
+        "goal_id": "goal-67d230cf996a",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "parent_situation_ids": [
+          "situation-e6d59c70d5a1"
+        ],
+        "priority": 5,
+        "progress": 0,
+        "source_event_ids": [
+          "situation-e6d59c70d5a1"
+        ],
+        "status": "abandoned",
+        "supporting_pressure_ids": [
+          "pressure-2e8052f9763c"
+        ],
+        "title": "Defend Settlement",
+        "updated_turn": 19,
+        "urgency": 5
+      },
+      {
+        "created_turn": 4,
+        "dedupe_key": "world:world:find_murderer:situation-6a724bfad694",
+        "goal_id": "goal-fbfcd009a0d6",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "parent_situation_ids": [
+          "situation-6a724bfad694"
+        ],
+        "priority": 5,
+        "progress": 0,
+        "source_event_ids": [
+          "situation-6a724bfad694"
+        ],
+        "status": "abandoned",
+        "supporting_pressure_ids": [
+          "pressure-5f2c983a8df2"
+        ],
+        "title": "Find Murderer",
+        "updated_turn": 19,
+        "urgency": 5
+      },
+      {
+        "created_turn": 5,
+        "dedupe_key": "world:world:defend_settlement:situation-3cb759376b71",
+        "goal_id": "goal-4e213c489f4e",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "parent_situation_ids": [
+          "situation-3cb759376b71"
+        ],
+        "priority": 5,
+        "progress": 0,
+        "source_event_ids": [
+          "situation-3cb759376b71"
+        ],
+        "status": "abandoned",
+        "supporting_pressure_ids": [
+          "pressure-2e8052f9763c"
+        ],
+        "title": "Defend Settlement",
+        "updated_turn": 19,
+        "urgency": 5
+      },
+      {
+        "created_turn": 5,
+        "dedupe_key": "world:world:rescue_missing_person:situation-3401b4664193",
+        "goal_id": "goal-f88bc542119b",
+        "goal_type": "rescue_missing_person",
+        "owner_id": "world",
+        "owner_type": "world",
+        "parent_situation_ids": [
+          "situation-3401b4664193"
+        ],
+        "priority": 6,
+        "progress": 0,
+        "source_event_ids": [
+          "situation-3401b4664193"
+        ],
+        "status": "abandoned",
+        "supporting_pressure_ids": [
+          "pressure-5f2c983a8df2"
+        ],
+        "title": "Rescue Missing Person",
+        "updated_turn": 19,
+        "urgency": 6
+      },
+      {
+        "created_turn": 17,
+        "dedupe_key": "world:world:defend_settlement:situation-39103d68d8e2",
+        "goal_id": "goal-1df25c7a81be",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "parent_situation_ids": [
+          "situation-39103d68d8e2"
+        ],
+        "priority": 4,
+        "progress": 0,
+        "source_event_ids": [
+          "situation-39103d68d8e2"
+        ],
+        "status": "failed",
+        "title": "Defend Settlement",
+        "updated_turn": 30,
+        "urgency": 4
+      },
+      {
+        "created_turn": 17,
+        "dedupe_key": "world:world:find_murderer:situation-d4ca877fa5d4",
+        "goal_id": "goal-e0011ef42e93",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "parent_situation_ids": [
+          "situation-d4ca877fa5d4"
+        ],
+        "priority": 4,
+        "progress": 0,
+        "source_event_ids": [
+          "situation-d4ca877fa5d4"
+        ],
+        "status": "failed",
+        "title": "Find Murderer",
+        "updated_turn": 30,
+        "urgency": 4
+      },
+      {
+        "created_turn": 20,
+        "dedupe_key": "world:world:find_murderer:situation-908e0b4570a8",
+        "goal_id": "goal-1d7f272a0c52",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "parent_situation_ids": [
+          "situation-908e0b4570a8"
+        ],
+        "priority": 5,
+        "progress": 0,
+        "source_event_ids": [
+          "situation-908e0b4570a8"
+        ],
+        "status": "abandoned",
+        "supporting_pressure_ids": [
+          "pressure-5f2c983a8df2"
+        ],
+        "title": "Find Murderer",
+        "updated_turn": 25,
+        "urgency": 5
+      },
+      {
+        "created_turn": 20,
+        "dedupe_key": "world:world:defend_settlement:situation-2987f277b4c8",
+        "goal_id": "goal-fbc33715d01c",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "parent_situation_ids": [
+          "situation-2987f277b4c8"
+        ],
+        "priority": 5,
+        "progress": 0,
+        "source_event_ids": [
+          "situation-2987f277b4c8"
+        ],
+        "status": "abandoned",
+        "supporting_pressure_ids": [
+          "pressure-2e8052f9763c"
+        ],
+        "title": "Defend Settlement",
+        "updated_turn": 25,
+        "urgency": 5
+      },
+      {
+        "created_turn": 22,
+        "dedupe_key": "world:world:find_murderer:situation-41246fd00230",
+        "goal_id": "goal-0533faf2f481",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "parent_situation_ids": [
+          "situation-41246fd00230"
+        ],
+        "priority": 6,
+        "progress": 0,
+        "source_event_ids": [
+          "situation-41246fd00230"
+        ],
+        "status": "abandoned",
+        "supporting_pressure_ids": [
+          "pressure-5f2c983a8df2"
+        ],
+        "title": "Find Murderer",
+        "updated_turn": 22,
+        "urgency": 6
+      },
+      {
+        "created_turn": 22,
+        "dedupe_key": "world:world:defend_settlement:situation-a3e1d700b5a2",
+        "goal_id": "goal-2e3e36084285",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "parent_situation_ids": [
+          "situation-a3e1d700b5a2"
+        ],
+        "priority": 6,
+        "progress": 0,
+        "source_event_ids": [
+          "situation-a3e1d700b5a2"
+        ],
+        "status": "abandoned",
+        "supporting_pressure_ids": [
+          "pressure-2e8052f9763c"
+        ],
+        "title": "Defend Settlement",
+        "updated_turn": 22,
+        "urgency": 6
+      },
+      {
+        "created_turn": 23,
+        "dedupe_key": "world:world:find_murderer:situation-41246fd00230",
+        "goal_id": "goal-d5f0c52a06af",
+        "goal_type": "find_murderer",
+        "owner_id": "world",
+        "owner_type": "world",
+        "parent_situation_ids": [
+          "situation-41246fd00230"
+        ],
+        "priority": 6,
+        "progress": 0,
+        "source_event_ids": [
+          "situation-41246fd00230"
+        ],
+        "status": "abandoned",
+        "supporting_pressure_ids": [
+          "pressure-5f2c983a8df2"
+        ],
+        "title": "Find Murderer",
+        "updated_turn": 23,
+        "urgency": 6
+      },
+      {
+        "created_turn": 23,
+        "dedupe_key": "world:world:defend_settlement:situation-a3e1d700b5a2",
+        "goal_id": "goal-dbcae64c5733",
+        "goal_type": "defend_settlement",
+        "owner_id": "world",
+        "owner_type": "world",
+        "parent_situation_ids": [
+          "situation-a3e1d700b5a2"
+        ],
+        "priority": 6,
+        "progress": 0,
+        "source_event_ids": [
+          "situation-a3e1d700b5a2"
+        ],
+        "status": "abandoned",
+        "supporting_pressure_ids": [
+          "pressure-2e8052f9763c"
+        ],
+        "title": "Defend Settlement",
+        "updated_turn": 23,
+        "urgency": 6
+      }
+    ],
+    "identity": {
+      "complication_style": "social",
+      "echo_bias": "debts",
+      "has_secret": false,
+      "moral_tension": "mercy_vs_justice",
+      "npc_temperature": "predatory",
+      "opportunity_style": "risky_alliance",
+      "pacing_bias": "urgent",
+      "primary_pressure_kind": "social",
+      "relationship_fault_line": "authority",
+      "revelation_pace": "delayed",
+      "scarcity_axis": "trust",
+      "secondary_pressure_kind": "bodily",
+      "setup_fingerprint": "dark fantasy|wandering sellsword|grounded|standard||",
+      "severity_multiplier": 1.0,
+      "stake_shape": "personal",
+      "tension_profile": "acute"
+    },
+    "information_items": [
+      {
+        "created_at": {
+          "turn": 4
+        },
+        "decay_ready": true,
+        "distortion_level": 28,
+        "gravity": 4,
+        "information_id": "information-1f3c0fef968d",
+        "information_type": "rumour",
+        "known_by": [
+          {
+            "scope_id": "unobserved",
+            "scope_type": "unknown"
+          }
+        ],
+        "last_decay_turn": 12,
+        "observer_access": [
+          {
+            "access_type": "unknown_unobserved",
+            "acquired_at": {
+              "turn": 4
+            },
+            "distortion_level": 18,
+            "reliability": 60,
+            "scope_id": "unobserved",
+            "scope_type": "unknown",
+            "source_event_ids": [
+              "evt-pressure-b7fed99ce9fb"
+            ]
+          }
+        ],
+        "reliability": 60,
+        "reliability_band": "medium",
+        "source_event_ids": [
+          "evt-pressure-b7fed99ce9fb"
+        ],
+        "stale": false,
+        "subject_refs": [
+          {
+            "subject_id": "evt-pressure-b7fed99ce9fb",
+            "subject_type": "event"
+          }
+        ],
+        "summary": "protest reported",
+        "truth_status": "belief",
+        "updated_at": {
+          "turn": 12
+        },
+        "version": 1,
+        "visibility_scope": "unknown"
+      },
+      {
+        "created_at": {
+          "turn": 4
+        },
+        "decay_ready": true,
+        "distortion_level": 28,
+        "gravity": 4,
+        "information_id": "information-8d2f18edee67",
+        "information_type": "rumour",
+        "known_by": [
+          {
+            "scope_id": "unobserved",
+            "scope_type": "unknown"
+          }
+        ],
+        "last_decay_turn": 12,
+        "observer_access": [
+          {
+            "access_type": "unknown_unobserved",
+            "acquired_at": {
+              "turn": 4
+            },
+            "distortion_level": 18,
+            "reliability": 60,
+            "scope_id": "unobserved",
+            "scope_type": "unknown",
+            "source_event_ids": [
+              "evt-pressure-f9f2a2f0fbcb"
+            ]
+          }
+        ],
+        "reliability": 60,
+        "reliability_band": "medium",
+        "source_event_ids": [
+          "evt-pressure-f9f2a2f0fbcb"
+        ],
+        "stale": false,
+        "subject_refs": [
+          {
+            "subject_id": "evt-pressure-f9f2a2f0fbcb",
+            "subject_type": "event"
+          }
+        ],
+        "summary": "unexplained disappearance reported",
+        "truth_status": "belief",
+        "updated_at": {
+          "turn": 12
+        },
+        "version": 1,
+        "visibility_scope": "unknown"
+      },
+      {
+        "created_at": {
+          "turn": 3
+        },
+        "decay_ready": true,
+        "distortion_level": 28,
+        "gravity": 4,
+        "information_id": "information-d36392ca846d",
+        "information_type": "rumour",
+        "known_by": [
+          {
+            "scope_id": "unobserved",
+            "scope_type": "unknown"
+          }
+        ],
+        "last_decay_turn": 11,
+        "observer_access": [
+          {
+            "access_type": "unknown_unobserved",
+            "acquired_at": {
+              "turn": 3
+            },
+            "distortion_level": 18,
+            "reliability": 58,
+            "scope_id": "unobserved",
+            "scope_type": "unknown",
+            "source_event_ids": [
+              "evt-pressure-07a5e91775e7"
+            ]
+          }
+        ],
+        "reliability": 58,
+        "reliability_band": "medium",
+        "source_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "stale": false,
+        "subject_refs": [
+          {
+            "subject_id": "evt-pressure-07a5e91775e7",
+            "subject_type": "event"
+          }
+        ],
+        "summary": "strange evidence reported",
+        "truth_status": "belief",
+        "updated_at": {
+          "turn": 11
+        },
+        "version": 1,
+        "visibility_scope": "unknown"
+      },
+      {
+        "created_at": {
+          "turn": 3
+        },
+        "decay_ready": true,
+        "distortion_level": 28,
+        "gravity": 4,
+        "information_id": "information-f0e8da1901aa",
+        "information_type": "rumour",
+        "known_by": [
+          {
+            "scope_id": "unobserved",
+            "scope_type": "unknown"
+          }
+        ],
+        "last_decay_turn": 11,
+        "observer_access": [
+          {
+            "access_type": "unknown_unobserved",
+            "acquired_at": {
+              "turn": 3
+            },
+            "distortion_level": 18,
+            "reliability": 58,
+            "scope_id": "unobserved",
+            "scope_type": "unknown",
+            "source_event_ids": [
+              "evt-pressure-a85e7487aeb4"
+            ]
+          }
+        ],
+        "reliability": 58,
+        "reliability_band": "medium",
+        "source_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "stale": false,
+        "subject_refs": [
+          {
+            "subject_id": "evt-pressure-a85e7487aeb4",
+            "subject_type": "event"
+          }
+        ],
+        "summary": "argument reported",
+        "truth_status": "belief",
+        "updated_at": {
+          "turn": 11
+        },
+        "version": 1,
+        "visibility_scope": "unknown"
+      },
+      {
+        "created_at": {
+          "turn": 2
+        },
+        "decay_ready": true,
+        "distortion_level": 22,
+        "gravity": 3,
+        "information_id": "information-b8d0cb33de68",
+        "information_type": "rumour",
+        "known_by": [
+          {
+            "scope_id": "unobserved",
+            "scope_type": "unknown"
+          }
+        ],
+        "last_decay_turn": 10,
+        "observer_access": [
+          {
+            "access_type": "unknown_unobserved",
+            "acquired_at": {
+              "turn": 2
+            },
+            "distortion_level": 12,
+            "reliability": 55,
+            "scope_id": "unobserved",
+            "scope_type": "unknown",
+            "source_event_ids": [
+              "evt-world-a1a237a46c87"
+            ]
+          }
+        ],
+        "reliability": 55,
+        "reliability_band": "medium",
+        "source_event_ids": [
+          "evt-world-a1a237a46c87"
+        ],
+        "stale": false,
+        "subject_refs": [
+          {
+            "subject_id": "evt-world-a1a237a46c87",
+            "subject_type": "event"
+          }
+        ],
+        "summary": "strange evidence reported",
+        "truth_status": "belief",
+        "updated_at": {
+          "turn": 10
+        },
+        "version": 1,
+        "visibility_scope": "unknown"
+      },
+      {
+        "created_at": {
+          "turn": 2
+        },
+        "decay_ready": true,
+        "distortion_level": 22,
+        "gravity": 3,
+        "information_id": "information-be749b889526",
+        "information_type": "rumour",
+        "known_by": [
+          {
+            "scope_id": "unobserved",
+            "scope_type": "unknown"
+          }
+        ],
+        "last_decay_turn": 10,
+        "observer_access": [
+          {
+            "access_type": "unknown_unobserved",
+            "acquired_at": {
+              "turn": 2
+            },
+            "distortion_level": 12,
+            "reliability": 55,
+            "scope_id": "unobserved",
+            "scope_type": "unknown",
+            "source_event_ids": [
+              "evt-world-a1984e74d0b7"
+            ]
+          }
+        ],
+        "reliability": 55,
+        "reliability_band": "medium",
+        "source_event_ids": [
+          "evt-world-a1984e74d0b7"
+        ],
+        "stale": false,
+        "subject_refs": [
+          {
+            "subject_id": "evt-world-a1984e74d0b7",
+            "subject_type": "event"
+          }
+        ],
+        "summary": "protest reported",
+        "truth_status": "belief",
+        "updated_at": {
+          "turn": 10
+        },
+        "version": 1,
+        "visibility_scope": "unknown"
+      }
+    ],
+    "information_receipts": [
+      {
+        "information_id": "information-b8d0cb33de68",
+        "receipt_id": "information-receipt-ef9ecbd7f2ca",
+        "receipt_type": "information_created",
+        "source_event_ids": [
+          "evt-world-a1a237a46c87"
+        ],
+        "turn": 2,
+        "version": 1
+      },
+      {
+        "information_id": "information-be749b889526",
+        "receipt_id": "information-receipt-be0496a25894",
+        "receipt_type": "information_created",
+        "source_event_ids": [
+          "evt-world-a1984e74d0b7"
+        ],
+        "turn": 2,
+        "version": 1
+      },
+      {
+        "information_id": "information-d36392ca846d",
+        "receipt_id": "information-receipt-7e6545cfca93",
+        "receipt_type": "information_created",
+        "source_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "turn": 3,
+        "version": 1
+      },
+      {
+        "information_id": "information-f0e8da1901aa",
+        "receipt_id": "information-receipt-31ecabed61fb",
+        "receipt_type": "information_created",
+        "source_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "turn": 3,
+        "version": 1
+      },
+      {
+        "information_id": "information-1f3c0fef968d",
+        "receipt_id": "information-receipt-e6edb073109c",
+        "receipt_type": "information_created",
+        "source_event_ids": [
+          "evt-pressure-b7fed99ce9fb"
+        ],
+        "turn": 4,
+        "version": 1
+      },
+      {
+        "information_id": "information-8d2f18edee67",
+        "receipt_id": "information-receipt-32ec4d0162f2",
+        "receipt_type": "information_created",
+        "source_event_ids": [
+          "evt-pressure-f9f2a2f0fbcb"
+        ],
+        "turn": 4,
+        "version": 1
+      },
+      {
+        "information_id": "information-b8d0cb33de68",
+        "receipt_id": "information-receipt-153c32928439",
+        "receipt_type": "information_decayed",
+        "source_event_ids": [
+          "evt-world-a1a237a46c87"
+        ],
+        "turn": 10,
+        "version": 1
+      },
+      {
+        "information_id": "information-be749b889526",
+        "receipt_id": "information-receipt-4f657edbe891",
+        "receipt_type": "information_decayed",
+        "source_event_ids": [
+          "evt-world-a1984e74d0b7"
+        ],
+        "turn": 10,
+        "version": 1
+      },
+      {
+        "information_id": "information-b8d0cb33de68",
+        "receipt_id": "information-receipt-569fde56fd85",
+        "receipt_type": "information_reinforced",
+        "source_event_ids": [
+          "evt-world-a1a237a46c87"
+        ],
+        "turn": 10,
+        "version": 1
+      },
+      {
+        "information_id": "information-be749b889526",
+        "receipt_id": "information-receipt-0d3bcee257f0",
+        "receipt_type": "information_reinforced",
+        "source_event_ids": [
+          "evt-world-a1984e74d0b7"
+        ],
+        "turn": 10,
+        "version": 1
+      },
+      {
+        "information_id": "information-d36392ca846d",
+        "receipt_id": "information-receipt-b2cc034c0647",
+        "receipt_type": "information_decayed",
+        "source_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "turn": 11,
+        "version": 1
+      },
+      {
+        "information_id": "information-f0e8da1901aa",
+        "receipt_id": "information-receipt-d1dbfa8661ed",
+        "receipt_type": "information_decayed",
+        "source_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "turn": 11,
+        "version": 1
+      },
+      {
+        "information_id": "information-d36392ca846d",
+        "receipt_id": "information-receipt-a2fa2d97d847",
+        "receipt_type": "information_reinforced",
+        "source_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "turn": 11,
+        "version": 1
+      },
+      {
+        "information_id": "information-f0e8da1901aa",
+        "receipt_id": "information-receipt-48ce758d6967",
+        "receipt_type": "information_reinforced",
+        "source_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "turn": 11,
+        "version": 1
+      },
+      {
+        "information_id": "information-1f3c0fef968d",
+        "receipt_id": "information-receipt-fd701a867661",
+        "receipt_type": "information_decayed",
+        "source_event_ids": [
+          "evt-pressure-b7fed99ce9fb"
+        ],
+        "turn": 12,
+        "version": 1
+      },
+      {
+        "information_id": "information-8d2f18edee67",
+        "receipt_id": "information-receipt-448cc6f8a994",
+        "receipt_type": "information_decayed",
+        "source_event_ids": [
+          "evt-pressure-f9f2a2f0fbcb"
+        ],
+        "turn": 12,
+        "version": 1
+      },
+      {
+        "information_id": "information-1f3c0fef968d",
+        "receipt_id": "information-receipt-5dc098acb775",
+        "receipt_type": "information_reinforced",
+        "source_event_ids": [
+          "evt-pressure-b7fed99ce9fb"
+        ],
+        "turn": 12,
+        "version": 1
+      },
+      {
+        "information_id": "information-8d2f18edee67",
+        "receipt_id": "information-receipt-d2c8cbf15782",
+        "receipt_type": "information_reinforced",
+        "source_event_ids": [
+          "evt-pressure-f9f2a2f0fbcb"
+        ],
+        "turn": 12,
+        "version": 1
+      }
+    ],
+    "investigation_receipts": [],
+    "investigations": [],
+    "lc_relationship_applied_receipt_id": null,
+    "npc_action_receipts": [],
+    "npc_actions": [],
+    "npc_agendas": {
+      "active": [],
+      "archived": [],
+      "version": 1
+    },
+    "npc_move_receipts": [],
+    "npc_traits": {
+      "by_npc_id": {},
+      "version": 1
+    },
+    "opening": {
+      "archetype_id": "storm_approaches",
+      "fact_ids": {
+        "opportunity": "fact-22f7ddd46154",
+        "problem": "fact-31bfe7ec4f07",
+        "resource": "fact-a83b6fd06ef6",
+        "tension": "fact-e974e95fbbfa",
+        "time": "fact-e32f26817296"
+      },
+      "genre": "general",
+      "hook": "Environmental pressure is closing in: weather, noise, heat, darkness, or contagion.",
+      "immediate_problem": "environmental hazard closing in",
+      "label": "Storm Approaches",
+      "opportunity": "risky alliance",
+      "preserved_scenario": false,
+      "pressure_origins": [
+        {
+          "kind": "social",
+          "origin_id": "fact-9625e9d87c32",
+          "slot": "primary",
+          "source_archetype": "storm_approaches"
+        },
+        {
+          "kind": "bodily",
+          "origin_id": "fact-6963c7d8fa3e",
+          "slot": "secondary",
+          "source_archetype": "storm_approaches"
+        },
+        {
+          "kind": "trust",
+          "origin_id": "fact-31bccf5aba08",
+          "slot": "scarcity",
+          "source_archetype": "storm_approaches"
+        },
+        {
+          "kind": "authority",
+          "origin_id": "fact-293271e942be",
+          "slot": "fault",
+          "source_archetype": "storm_approaches"
+        }
+      ],
+      "relationship_tension": "authority \u2014 others compete for the same refuge",
+      "scenario_id": null,
+      "threatened_resource": "trust \u2014 shelter and safe passage",
+      "time_pressure": "conditions worsen within the scene"
+    },
+    "pressure_applied_world_event_ids": [
+      "evt-world-a1a237a46c87",
+      "evt-world-a1984e74d0b7",
+      "world-event-d94fe7ffae43",
+      "world-event-a3e1d700b5a2"
+    ],
+    "pressure_graph": {
+      "evolution_receipts": [
+        {
+          "after": {
+            "magnitude": 56,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 58,
+            "status": "active"
+          },
+          "node_id": "pressure-2e8052f9763c",
+          "receipt_id": "pressure-receipt-bc952fdc4f88",
+          "receipt_type": "pressure_reduced",
+          "turn": 5
+        },
+        {
+          "after": {
+            "magnitude": 47,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 49,
+            "status": "active"
+          },
+          "node_id": "pressure-e3210b90caef",
+          "receipt_id": "pressure-receipt-25a0a2f247de",
+          "receipt_type": "pressure_reduced",
+          "turn": 5
+        },
+        {
+          "after": {
+            "magnitude": 20,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 22,
+            "status": "active"
+          },
+          "node_id": "pressure-80de0ed6c262",
+          "receipt_id": "pressure-receipt-0eccfe9b598b",
+          "receipt_type": "pressure_reduced",
+          "turn": 5
+        },
+        {
+          "after": {
+            "magnitude": 51,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 53,
+            "status": "active"
+          },
+          "node_id": "pressure-5f2c983a8df2",
+          "receipt_id": "pressure-receipt-2630f4d2ee30",
+          "receipt_type": "pressure_reduced",
+          "turn": 6
+        },
+        {
+          "after": {
+            "magnitude": 50,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 52,
+            "status": "active"
+          },
+          "node_id": "pressure-2e8052f9763c",
+          "receipt_id": "pressure-receipt-15f189b460da",
+          "receipt_type": "pressure_reduced",
+          "turn": 6
+        },
+        {
+          "after": {
+            "magnitude": 41,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 43,
+            "status": "active"
+          },
+          "node_id": "pressure-e3210b90caef",
+          "receipt_id": "pressure-receipt-8fa9592d3a13",
+          "receipt_type": "pressure_reduced",
+          "turn": 6
+        },
+        {
+          "after": {
+            "magnitude": 14,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 16,
+            "status": "active"
+          },
+          "node_id": "pressure-80de0ed6c262",
+          "receipt_id": "pressure-receipt-3e8ed02cdd2f",
+          "receipt_type": "pressure_reduced",
+          "turn": 6
+        },
+        {
+          "after": {
+            "magnitude": 45,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 47,
+            "status": "active"
+          },
+          "node_id": "pressure-5f2c983a8df2",
+          "receipt_id": "pressure-receipt-77f872b29b9b",
+          "receipt_type": "pressure_reduced",
+          "turn": 7
+        },
+        {
+          "after": {
+            "magnitude": 44,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 46,
+            "status": "active"
+          },
+          "node_id": "pressure-2e8052f9763c",
+          "receipt_id": "pressure-receipt-81c0981b5242",
+          "receipt_type": "pressure_reduced",
+          "turn": 7
+        },
+        {
+          "after": {
+            "magnitude": 35,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 37,
+            "status": "active"
+          },
+          "node_id": "pressure-e3210b90caef",
+          "receipt_id": "pressure-receipt-58878bd15a75",
+          "receipt_type": "pressure_reduced",
+          "turn": 7
+        },
+        {
+          "after": {
+            "magnitude": 8,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 10,
+            "status": "active"
+          },
+          "node_id": "pressure-80de0ed6c262",
+          "receipt_id": "pressure-receipt-b9aaeb0a1ef4",
+          "receipt_type": "pressure_reduced",
+          "turn": 7
+        },
+        {
+          "after": {
+            "magnitude": 39,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 41,
+            "status": "active"
+          },
+          "node_id": "pressure-5f2c983a8df2",
+          "receipt_id": "pressure-receipt-8f382a2f494f",
+          "receipt_type": "pressure_reduced",
+          "turn": 8
+        },
+        {
+          "after": {
+            "magnitude": 38,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 40,
+            "status": "active"
+          },
+          "node_id": "pressure-2e8052f9763c",
+          "receipt_id": "pressure-receipt-895c374a37d1",
+          "receipt_type": "pressure_reduced",
+          "turn": 8
+        },
+        {
+          "after": {
+            "magnitude": 29,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 31,
+            "status": "active"
+          },
+          "node_id": "pressure-e3210b90caef",
+          "receipt_id": "pressure-receipt-746ca7fd55b2",
+          "receipt_type": "pressure_reduced",
+          "turn": 8
+        },
+        {
+          "after": {
+            "magnitude": 0,
+            "status": "resolved"
+          },
+          "before": {
+            "magnitude": 4,
+            "status": "active"
+          },
+          "node_id": "pressure-80de0ed6c262",
+          "receipt_id": "pressure-receipt-fa3ba1c0ed33",
+          "receipt_type": "pressure_resolved",
+          "turn": 8
+        },
+        {
+          "after": {
+            "magnitude": 33,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 35,
+            "status": "active"
+          },
+          "node_id": "pressure-5f2c983a8df2",
+          "receipt_id": "pressure-receipt-cc64b7d6da9c",
+          "receipt_type": "pressure_reduced",
+          "turn": 9
+        },
+        {
+          "after": {
+            "magnitude": 32,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 34,
+            "status": "active"
+          },
+          "node_id": "pressure-2e8052f9763c",
+          "receipt_id": "pressure-receipt-b56d6beff8c9",
+          "receipt_type": "pressure_reduced",
+          "turn": 9
+        },
+        {
+          "after": {
+            "magnitude": 23,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 25,
+            "status": "active"
+          },
+          "node_id": "pressure-e3210b90caef",
+          "receipt_id": "pressure-receipt-027a1c797895",
+          "receipt_type": "pressure_reduced",
+          "turn": 9
+        },
+        {
+          "after": {
+            "magnitude": 27,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 29,
+            "status": "active"
+          },
+          "node_id": "pressure-5f2c983a8df2",
+          "receipt_id": "pressure-receipt-4fff4aa7a2eb",
+          "receipt_type": "pressure_reduced",
+          "turn": 10
+        },
+        {
+          "after": {
+            "magnitude": 26,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 28,
+            "status": "active"
+          },
+          "node_id": "pressure-2e8052f9763c",
+          "receipt_id": "pressure-receipt-cce328e73e9e",
+          "receipt_type": "pressure_reduced",
+          "turn": 10
+        },
+        {
+          "after": {
+            "magnitude": 17,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 19,
+            "status": "active"
+          },
+          "node_id": "pressure-e3210b90caef",
+          "receipt_id": "pressure-receipt-6b34ad050bc3",
+          "receipt_type": "pressure_reduced",
+          "turn": 10
+        },
+        {
+          "after": {
+            "magnitude": 21,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 23,
+            "status": "active"
+          },
+          "node_id": "pressure-5f2c983a8df2",
+          "receipt_id": "pressure-receipt-0d58beb64ba2",
+          "receipt_type": "pressure_reduced",
+          "turn": 11
+        },
+        {
+          "after": {
+            "magnitude": 20,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 22,
+            "status": "active"
+          },
+          "node_id": "pressure-2e8052f9763c",
+          "receipt_id": "pressure-receipt-cc7e5d8f004f",
+          "receipt_type": "pressure_reduced",
+          "turn": 11
+        },
+        {
+          "after": {
+            "magnitude": 11,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 13,
+            "status": "active"
+          },
+          "node_id": "pressure-e3210b90caef",
+          "receipt_id": "pressure-receipt-06e0c2f7e684",
+          "receipt_type": "pressure_reduced",
+          "turn": 11
+        },
+        {
+          "after": {
+            "magnitude": 15,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 17,
+            "status": "active"
+          },
+          "node_id": "pressure-5f2c983a8df2",
+          "receipt_id": "pressure-receipt-4b479f320d7f",
+          "receipt_type": "pressure_reduced",
+          "turn": 12
+        },
+        {
+          "after": {
+            "magnitude": 14,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 16,
+            "status": "active"
+          },
+          "node_id": "pressure-2e8052f9763c",
+          "receipt_id": "pressure-receipt-01d9fecf4273",
+          "receipt_type": "pressure_reduced",
+          "turn": 12
+        },
+        {
+          "after": {
+            "magnitude": 5,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 7,
+            "status": "active"
+          },
+          "node_id": "pressure-e3210b90caef",
+          "receipt_id": "pressure-receipt-0c779cd35f4e",
+          "receipt_type": "pressure_reduced",
+          "turn": 12
+        },
+        {
+          "after": {
+            "magnitude": 9,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 11,
+            "status": "active"
+          },
+          "node_id": "pressure-5f2c983a8df2",
+          "receipt_id": "pressure-receipt-aba15e933f57",
+          "receipt_type": "pressure_reduced",
+          "turn": 13
+        },
+        {
+          "after": {
+            "magnitude": 8,
+            "status": "active"
+          },
+          "before": {
+            "magnitude": 10,
+            "status": "active"
+          },
+          "node_id": "pressure-2e8052f9763c",
+          "receipt_id": "pressure-receipt-9065ee7d0d8f",
+          "receipt_type": "pressure_reduced",
+          "turn": 13
+        },
+        {
+          "after": {
+            "magnitude": 0,
+            "status": "resolved"
+          },
+          "before": {
+            "magnitude": 1,
+            "status": "active"
+          },
+          "node_id": "pressure-e3210b90caef",
+          "receipt_id": "pressure-receipt-aaaedd685ba8",
+          "receipt_type": "pressure_resolved",
+          "turn": 13
+        },
+        {
+          "after": {
+            "magnitude": 0,
+            "status": "resolved"
+          },
+          "before": {
+            "magnitude": 5,
+            "status": "active"
+          },
+          "node_id": "pressure-5f2c983a8df2",
+          "receipt_id": "pressure-receipt-db04167f772c",
+          "receipt_type": "pressure_resolved",
+          "turn": 14
+        },
+        {
+          "after": {
+            "magnitude": 0,
+            "status": "resolved"
+          },
+          "before": {
+            "magnitude": 4,
+            "status": "active"
+          },
+          "node_id": "pressure-2e8052f9763c",
+          "receipt_id": "pressure-receipt-ba5215b55d13",
+          "receipt_type": "pressure_resolved",
+          "turn": 14
+        }
+      ],
+      "foreground_node_id": null,
+      "nodes": [
+        {
+          "created_turn": 1,
+          "id": "pressure-2e8052f9763c",
+          "kind": "social",
+          "label": "trust social",
+          "magnitude": 0,
+          "origin_id": "fact-9625e9d87c32",
+          "origin_type": "opening_state",
+          "scope": "personal",
+          "spawned_event_ids": [
+            "evt-pressure-a85e7487aeb4",
+            "evt-pressure-b7fed99ce9fb"
+          ],
+          "status": "archived",
+          "trend": 0,
+          "trend_label": "stable",
+          "updated_turn": 22
+        },
+        {
+          "created_turn": 1,
+          "id": "pressure-5f2c983a8df2",
+          "kind": "bodily",
+          "label": "trust bodily",
+          "magnitude": 0,
+          "origin_id": "fact-6963c7d8fa3e",
+          "origin_type": "opening_state",
+          "scope": "local",
+          "spawned_event_ids": [
+            "evt-pressure-07a5e91775e7",
+            "evt-pressure-f9f2a2f0fbcb"
+          ],
+          "status": "archived",
+          "trend": 0,
+          "trend_label": "stable",
+          "updated_turn": 22
+        },
+        {
+          "created_turn": 1,
+          "id": "pressure-80de0ed6c262",
+          "kind": "trust",
+          "label": "trust trust",
+          "magnitude": 0,
+          "origin_id": "fact-31bccf5aba08",
+          "origin_type": "opening_state",
+          "scope": "personal",
+          "status": "archived",
+          "trend": 0,
+          "trend_label": "stable",
+          "updated_turn": 16
+        },
+        {
+          "created_turn": 1,
+          "id": "pressure-e3210b90caef",
+          "kind": "authority",
+          "label": "trust authority",
+          "magnitude": 0,
+          "origin_id": "fact-293271e942be",
+          "origin_type": "opening_state",
+          "scope": "personal",
+          "status": "archived",
+          "trend": 0,
+          "trend_label": "stable",
+          "updated_turn": 21
+        }
+      ],
+      "threshold_crossings": [],
+      "tick": 16
+    },
+    "pressure_signal_consumed_ids": [],
+    "relationship_effect_receipts": [],
+    "reputation_signals": [],
+    "run_seed": "sim-42",
+    "settlement_traits": {
+      "by_location_id": {
+        "loc-b84eaaa7bff2": {
+          "crime": "low",
+          "culture_tag": "frontier",
+          "dominant_pressure": "social",
+          "fear": "medium",
+          "local_stakes": "shelter",
+          "prosperity": "low",
+          "settlement_id": "settlement-6cd7e8687bf9",
+          "stability": "medium"
+        }
+      },
+      "version": 1
+    },
+    "situation_receipts": [
+      {
+        "change": {
+          "progress": [
+            0,
+            35
+          ],
+          "severity": [
+            5,
+            3
+          ],
+          "status": [
+            "active",
+            "resolving"
+          ]
+        },
+        "detail": "pressure_mitigation",
+        "receipt_id": "situation-receipt-26d5aa1d015b",
+        "receipt_type": "situation_progressed",
+        "situation_id": "situation-6a724bfad694",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "turn": 15,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            0,
+            35
+          ],
+          "severity": [
+            5,
+            3
+          ],
+          "status": [
+            "active",
+            "resolving"
+          ]
+        },
+        "detail": "pressure_mitigation",
+        "receipt_id": "situation-receipt-8ea137147504",
+        "receipt_type": "situation_progressed",
+        "situation_id": "situation-e6d59c70d5a1",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "turn": 15,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            3,
+            5
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-a68315a479af",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-6a724bfad694",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "turn": 16,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            3,
+            5
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-e332ca85b5f6",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-e6d59c70d5a1",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "turn": 16,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            3,
+            5
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-a0e78ce6b7ee",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-3cb759376b71",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-pressure-b7fed99ce9fb"
+        ],
+        "turn": 16,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            4,
+            6
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-202c0c150854",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-3401b4664193",
+        "situation_type": "missing_child",
+        "source_event_ids": [
+          "evt-pressure-f9f2a2f0fbcb"
+        ],
+        "turn": 16,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "resolving",
+            "failed"
+          ]
+        },
+        "detail": "expired",
+        "receipt_id": "situation-receipt-2271c4dfe091",
+        "receipt_type": "situation_failed",
+        "situation_id": "situation-46cf2e1f343d",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-world-a1984e74d0b7"
+        ],
+        "turn": 16,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "resolving",
+            "failed"
+          ]
+        },
+        "detail": "expired",
+        "receipt_id": "situation-receipt-15dde015265a",
+        "receipt_type": "situation_failed",
+        "situation_id": "situation-ab47fd6f5077",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-world-a1a237a46c87"
+        ],
+        "turn": 16,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "severity": [
+            null,
+            4
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_inputs",
+        "receipt_id": "situation-receipt-f41870bae717",
+        "receipt_type": "situation_created",
+        "situation_id": "situation-39103d68d8e2",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-world-a1984e74d0b7"
+        ],
+        "turn": 17,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "severity": [
+            null,
+            4
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_inputs",
+        "receipt_id": "situation-receipt-f18d2388021a",
+        "receipt_type": "situation_created",
+        "situation_id": "situation-d4ca877fa5d4",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-world-a1a237a46c87"
+        ],
+        "turn": 17,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            35,
+            70
+          ],
+          "severity": [
+            6,
+            4
+          ]
+        },
+        "detail": "pressure_mitigation",
+        "receipt_id": "situation-receipt-2b6b04ce1e24",
+        "receipt_type": "situation_progressed",
+        "situation_id": "situation-3401b4664193",
+        "situation_type": "missing_child",
+        "source_event_ids": [
+          "evt-pressure-f9f2a2f0fbcb"
+        ],
+        "turn": 17,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            35,
+            70
+          ],
+          "severity": [
+            5,
+            3
+          ]
+        },
+        "detail": "pressure_mitigation",
+        "receipt_id": "situation-receipt-2b9ee4601440",
+        "receipt_type": "situation_progressed",
+        "situation_id": "situation-3cb759376b71",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-pressure-b7fed99ce9fb"
+        ],
+        "turn": 17,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            35,
+            70
+          ],
+          "severity": [
+            5,
+            3
+          ]
+        },
+        "detail": "pressure_mitigation",
+        "receipt_id": "situation-receipt-cce7e9289bb2",
+        "receipt_type": "situation_progressed",
+        "situation_id": "situation-6a724bfad694",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "turn": 17,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            35,
+            70
+          ],
+          "severity": [
+            5,
+            3
+          ]
+        },
+        "detail": "pressure_mitigation",
+        "receipt_id": "situation-receipt-9c01cad176e7",
+        "receipt_type": "situation_progressed",
+        "situation_id": "situation-e6d59c70d5a1",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "turn": 17,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            3,
+            5
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-4190c060a667",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-6a724bfad694",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "turn": 18,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            3,
+            5
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-40ab61675bfa",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-e6d59c70d5a1",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "turn": 18,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            3,
+            5
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-7c1699082b90",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-3cb759376b71",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-pressure-b7fed99ce9fb"
+        ],
+        "turn": 18,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            4,
+            6
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-b8df54420421",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-3401b4664193",
+        "situation_type": "missing_child",
+        "source_event_ids": [
+          "evt-pressure-f9f2a2f0fbcb"
+        ],
+        "turn": 18,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            70,
+            100
+          ],
+          "severity": [
+            6,
+            4
+          ],
+          "status": [
+            "resolving",
+            "resolved"
+          ]
+        },
+        "detail": "pressure_mitigation",
+        "receipt_id": "situation-receipt-46f4e378886e",
+        "receipt_type": "situation_resolved",
+        "situation_id": "situation-3401b4664193",
+        "situation_type": "missing_child",
+        "source_event_ids": [
+          "evt-pressure-f9f2a2f0fbcb"
+        ],
+        "turn": 19,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            70,
+            100
+          ],
+          "severity": [
+            5,
+            3
+          ],
+          "status": [
+            "resolving",
+            "resolved"
+          ]
+        },
+        "detail": "pressure_mitigation",
+        "receipt_id": "situation-receipt-4634a677ee9c",
+        "receipt_type": "situation_resolved",
+        "situation_id": "situation-3cb759376b71",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-pressure-b7fed99ce9fb"
+        ],
+        "turn": 19,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            70,
+            100
+          ],
+          "severity": [
+            5,
+            3
+          ],
+          "status": [
+            "resolving",
+            "resolved"
+          ]
+        },
+        "detail": "pressure_mitigation",
+        "receipt_id": "situation-receipt-78995bf40c9b",
+        "receipt_type": "situation_resolved",
+        "situation_id": "situation-6a724bfad694",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "turn": 19,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            70,
+            100
+          ],
+          "severity": [
+            5,
+            3
+          ],
+          "status": [
+            "resolving",
+            "resolved"
+          ]
+        },
+        "detail": "pressure_mitigation",
+        "receipt_id": "situation-receipt-e61cfd989769",
+        "receipt_type": "situation_resolved",
+        "situation_id": "situation-e6d59c70d5a1",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "turn": 19,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            0,
+            5
+          ],
+          "severity": [
+            4,
+            3
+          ],
+          "status": [
+            "active",
+            "resolving"
+          ]
+        },
+        "detail": "inactive_decay",
+        "receipt_id": "situation-receipt-b00ad3c56570",
+        "receipt_type": "situation_decayed",
+        "situation_id": "situation-39103d68d8e2",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-world-a1984e74d0b7"
+        ],
+        "turn": 19,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            0,
+            5
+          ],
+          "severity": [
+            4,
+            3
+          ],
+          "status": [
+            "active",
+            "resolving"
+          ]
+        },
+        "detail": "inactive_decay",
+        "receipt_id": "situation-receipt-58364475e054",
+        "receipt_type": "situation_decayed",
+        "situation_id": "situation-d4ca877fa5d4",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-world-a1a237a46c87"
+        ],
+        "turn": 19,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            3,
+            4
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-4ab31e9cafeb",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-39103d68d8e2",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-world-a1984e74d0b7"
+        ],
+        "turn": 20,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            3,
+            4
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-98f35d98f367",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-d4ca877fa5d4",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-world-a1a237a46c87"
+        ],
+        "turn": 20,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "severity": [
+            null,
+            5
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_inputs",
+        "receipt_id": "situation-receipt-90623a7d610f",
+        "receipt_type": "situation_created",
+        "situation_id": "situation-908e0b4570a8",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "turn": 20,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            null,
+            0
+          ],
+          "severity": [
+            null,
+            5
+          ],
+          "status": [
+            null,
+            "active"
+          ]
+        },
+        "detail": "created_from_engine_inputs",
+        "receipt_id": "situation-receipt-f00a0884adca",
+        "receipt_type": "situation_created",
+        "situation_id": "situation-2987f277b4c8",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "turn": 20,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            0,
+            35
+          ],
+          "severity": [
+            5,
+            3
+          ],
+          "status": [
+            "active",
+            "resolving"
+          ]
+        },
+        "detail": "pressure_mitigation",
+        "receipt_id": "situation-receipt-fd7d655d1ccb",
+        "receipt_type": "situation_progressed",
+        "situation_id": "situation-2987f277b4c8",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "turn": 21,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            0,
+            35
+          ],
+          "severity": [
+            5,
+            3
+          ],
+          "status": [
+            "active",
+            "resolving"
+          ]
+        },
+        "detail": "pressure_mitigation",
+        "receipt_id": "situation-receipt-aaa1f4f45d23",
+        "receipt_type": "situation_progressed",
+        "situation_id": "situation-908e0b4570a8",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "turn": 21,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            3,
+            5
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-e0dc12a607e3",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-908e0b4570a8",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "turn": 22,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            3,
+            5
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-a80979597e35",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-2987f277b4c8",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "turn": 22,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            5,
+            10
+          ],
+          "severity": [
+            4,
+            3
+          ]
+        },
+        "detail": "inactive_decay",
+        "receipt_id": "situation-receipt-deef8519da1c",
+        "receipt_type": "situation_decayed",
+        "situation_id": "situation-39103d68d8e2",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-world-a1984e74d0b7"
+        ],
+        "turn": 22,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            5,
+            10
+          ],
+          "severity": [
+            4,
+            3
+          ]
+        },
+        "detail": "inactive_decay",
+        "receipt_id": "situation-receipt-6d8342e1e2c2",
+        "receipt_type": "situation_decayed",
+        "situation_id": "situation-d4ca877fa5d4",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-world-a1a237a46c87"
+        ],
+        "turn": 22,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "failed",
+            "archived"
+          ]
+        },
+        "detail": "terminal_archive",
+        "receipt_id": "situation-receipt-ec1b77d1dbbd",
+        "receipt_type": "situation_archived",
+        "situation_id": "situation-41246fd00230",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "pressure-5f2c983a8df2"
+        ],
+        "turn": 22,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "failed",
+            "archived"
+          ]
+        },
+        "detail": "terminal_archive",
+        "receipt_id": "situation-receipt-19d783c55c98",
+        "receipt_type": "situation_archived",
+        "situation_id": "situation-a3e1d700b5a2",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "pressure-2e8052f9763c"
+        ],
+        "turn": 22,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            3,
+            4
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-1528c1f85633",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-39103d68d8e2",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-world-a1984e74d0b7"
+        ],
+        "turn": 23,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            3,
+            4
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-095f95d75c09",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-d4ca877fa5d4",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-world-a1a237a46c87"
+        ],
+        "turn": 23,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            35,
+            70
+          ],
+          "severity": [
+            5,
+            3
+          ]
+        },
+        "detail": "pressure_mitigation",
+        "receipt_id": "situation-receipt-2e3d71de2929",
+        "receipt_type": "situation_progressed",
+        "situation_id": "situation-2987f277b4c8",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "turn": 23,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            35,
+            70
+          ],
+          "severity": [
+            5,
+            3
+          ]
+        },
+        "detail": "pressure_mitigation",
+        "receipt_id": "situation-receipt-09d07e2dfaa5",
+        "receipt_type": "situation_progressed",
+        "situation_id": "situation-908e0b4570a8",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "turn": 23,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            3,
+            5
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-59bc6305a1e2",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-908e0b4570a8",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "turn": 24,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            3,
+            5
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-34122623f396",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-2987f277b4c8",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "turn": 24,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "failed",
+            "archived"
+          ]
+        },
+        "detail": "terminal_archive",
+        "receipt_id": "situation-receipt-155d253f18c2",
+        "receipt_type": "situation_archived",
+        "situation_id": "situation-46cf2e1f343d",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-world-a1984e74d0b7"
+        ],
+        "turn": 24,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "failed",
+            "archived"
+          ]
+        },
+        "detail": "terminal_archive",
+        "receipt_id": "situation-receipt-94ec81c77290",
+        "receipt_type": "situation_archived",
+        "situation_id": "situation-ab47fd6f5077",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-world-a1a237a46c87"
+        ],
+        "turn": 24,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            70,
+            100
+          ],
+          "severity": [
+            5,
+            3
+          ],
+          "status": [
+            "resolving",
+            "resolved"
+          ]
+        },
+        "detail": "pressure_mitigation",
+        "receipt_id": "situation-receipt-1b4d9a07e3f1",
+        "receipt_type": "situation_resolved",
+        "situation_id": "situation-2987f277b4c8",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "turn": 25,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            70,
+            100
+          ],
+          "severity": [
+            5,
+            3
+          ],
+          "status": [
+            "resolving",
+            "resolved"
+          ]
+        },
+        "detail": "pressure_mitigation",
+        "receipt_id": "situation-receipt-36e073ec4090",
+        "receipt_type": "situation_resolved",
+        "situation_id": "situation-908e0b4570a8",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "turn": 25,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            10,
+            15
+          ],
+          "severity": [
+            4,
+            3
+          ]
+        },
+        "detail": "inactive_decay",
+        "receipt_id": "situation-receipt-996acbd224b0",
+        "receipt_type": "situation_decayed",
+        "situation_id": "situation-39103d68d8e2",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-world-a1984e74d0b7"
+        ],
+        "turn": 25,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            10,
+            15
+          ],
+          "severity": [
+            4,
+            3
+          ]
+        },
+        "detail": "inactive_decay",
+        "receipt_id": "situation-receipt-c456464bf1cf",
+        "receipt_type": "situation_decayed",
+        "situation_id": "situation-d4ca877fa5d4",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-world-a1a237a46c87"
+        ],
+        "turn": 25,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            3,
+            4
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-c9f94645cf81",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-39103d68d8e2",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-world-a1984e74d0b7"
+        ],
+        "turn": 26,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            3,
+            4
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-0ffd73a83ea1",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-d4ca877fa5d4",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-world-a1a237a46c87"
+        ],
+        "turn": 26,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "resolved",
+            "archived"
+          ]
+        },
+        "detail": "terminal_archive",
+        "receipt_id": "situation-receipt-a12ddb49b5a3",
+        "receipt_type": "situation_archived",
+        "situation_id": "situation-3401b4664193",
+        "situation_type": "missing_child",
+        "source_event_ids": [
+          "evt-pressure-f9f2a2f0fbcb"
+        ],
+        "turn": 27,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "resolved",
+            "archived"
+          ]
+        },
+        "detail": "terminal_archive",
+        "receipt_id": "situation-receipt-e5d27c3dc12b",
+        "receipt_type": "situation_archived",
+        "situation_id": "situation-3cb759376b71",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-pressure-b7fed99ce9fb"
+        ],
+        "turn": 27,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "resolved",
+            "archived"
+          ]
+        },
+        "detail": "terminal_archive",
+        "receipt_id": "situation-receipt-b69cb0df7ce1",
+        "receipt_type": "situation_archived",
+        "situation_id": "situation-6a724bfad694",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "turn": 27,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "resolved",
+            "archived"
+          ]
+        },
+        "detail": "terminal_archive",
+        "receipt_id": "situation-receipt-5ff7435a2475",
+        "receipt_type": "situation_archived",
+        "situation_id": "situation-e6d59c70d5a1",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "turn": 27,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            15,
+            20
+          ],
+          "severity": [
+            4,
+            3
+          ]
+        },
+        "detail": "inactive_decay",
+        "receipt_id": "situation-receipt-9478ca280f55",
+        "receipt_type": "situation_decayed",
+        "situation_id": "situation-39103d68d8e2",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-world-a1984e74d0b7"
+        ],
+        "turn": 28,
+        "version": 1
+      },
+      {
+        "change": {
+          "progress": [
+            15,
+            20
+          ],
+          "severity": [
+            4,
+            3
+          ]
+        },
+        "detail": "inactive_decay",
+        "receipt_id": "situation-receipt-b1e918d39697",
+        "receipt_type": "situation_decayed",
+        "situation_id": "situation-d4ca877fa5d4",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-world-a1a237a46c87"
+        ],
+        "turn": 28,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            3,
+            4
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-26e2386b511b",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-39103d68d8e2",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-world-a1984e74d0b7"
+        ],
+        "turn": 29,
+        "version": 1
+      },
+      {
+        "change": {
+          "severity": [
+            3,
+            4
+          ]
+        },
+        "detail": "reinforced_from_engine_inputs",
+        "receipt_id": "situation-receipt-b7cb0935671f",
+        "receipt_type": "situation_reinforced",
+        "situation_id": "situation-d4ca877fa5d4",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-world-a1a237a46c87"
+        ],
+        "turn": 29,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "resolving",
+            "failed"
+          ]
+        },
+        "detail": "expired",
+        "receipt_id": "situation-receipt-31726338d824",
+        "receipt_type": "situation_failed",
+        "situation_id": "situation-39103d68d8e2",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-world-a1984e74d0b7"
+        ],
+        "turn": 30,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "resolving",
+            "failed"
+          ]
+        },
+        "detail": "expired",
+        "receipt_id": "situation-receipt-832199a43b65",
+        "receipt_type": "situation_failed",
+        "situation_id": "situation-d4ca877fa5d4",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-world-a1a237a46c87"
+        ],
+        "turn": 30,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "resolved",
+            "archived"
+          ]
+        },
+        "detail": "terminal_archive",
+        "receipt_id": "situation-receipt-9cbe903c4716",
+        "receipt_type": "situation_archived",
+        "situation_id": "situation-2987f277b4c8",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "turn": 33,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "resolved",
+            "archived"
+          ]
+        },
+        "detail": "terminal_archive",
+        "receipt_id": "situation-receipt-b7c2f552e87a",
+        "receipt_type": "situation_archived",
+        "situation_id": "situation-908e0b4570a8",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "turn": 33,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "failed",
+            "archived"
+          ]
+        },
+        "detail": "terminal_archive",
+        "receipt_id": "situation-receipt-a1e2be1a4c97",
+        "receipt_type": "situation_archived",
+        "situation_id": "situation-39103d68d8e2",
+        "situation_type": "political_unrest",
+        "source_event_ids": [
+          "evt-world-a1984e74d0b7"
+        ],
+        "turn": 38,
+        "version": 1
+      },
+      {
+        "change": {
+          "status": [
+            "failed",
+            "archived"
+          ]
+        },
+        "detail": "terminal_archive",
+        "receipt_id": "situation-receipt-a3f02b2b2659",
+        "receipt_type": "situation_archived",
+        "situation_id": "situation-d4ca877fa5d4",
+        "situation_type": "murder_investigation",
+        "source_event_ids": [
+          "evt-world-a1a237a46c87"
+        ],
+        "turn": 38,
+        "version": 1
+      }
+    ],
+    "situations": [
+      {
+        "created_turn": 2,
+        "dedupe_key": "murder_investigation:global:unknown",
+        "originating_pressure_ids": [
+          "pressure-5f2c983a8df2"
+        ],
+        "priority": 1,
+        "progress": 0,
+        "severity": 6,
+        "situation_id": "situation-41246fd00230",
+        "source_event_ids": [
+          "pressure-5f2c983a8df2"
+        ],
+        "status": "archived",
+        "title": "Murder Investigation",
+        "type": "murder_investigation",
+        "updated_turn": 22
+      },
+      {
+        "created_turn": 2,
+        "dedupe_key": "political_unrest:global:conflict",
+        "originating_pressure_ids": [
+          "pressure-2e8052f9763c"
+        ],
+        "priority": 1,
+        "progress": 0,
+        "severity": 6,
+        "situation_id": "situation-a3e1d700b5a2",
+        "source_event_ids": [
+          "pressure-2e8052f9763c"
+        ],
+        "status": "archived",
+        "title": "Political Unrest",
+        "type": "political_unrest",
+        "updated_turn": 22
+      },
+      {
+        "created_turn": 3,
+        "dedupe_key": "political_unrest:global:world-event-a3e1d700b5a2",
+        "originating_world_event_ids": [
+          "world-event-a3e1d700b5a2"
+        ],
+        "priority": 1,
+        "progress": 20,
+        "severity": 4,
+        "situation_id": "situation-46cf2e1f343d",
+        "source_event_ids": [
+          "evt-world-a1984e74d0b7"
+        ],
+        "status": "archived",
+        "title": "Political Unrest",
+        "type": "political_unrest",
+        "updated_turn": 24
+      },
+      {
+        "created_turn": 3,
+        "dedupe_key": "murder_investigation:global:world-event-d94fe7ffae43",
+        "originating_world_event_ids": [
+          "world-event-d94fe7ffae43"
+        ],
+        "priority": 1,
+        "progress": 20,
+        "severity": 4,
+        "situation_id": "situation-ab47fd6f5077",
+        "source_event_ids": [
+          "evt-world-a1a237a46c87"
+        ],
+        "status": "archived",
+        "title": "Murder Investigation",
+        "type": "murder_investigation",
+        "updated_turn": 24
+      },
+      {
+        "created_turn": 4,
+        "dedupe_key": "murder_investigation:global:evt-pressure-07a5e91775e7",
+        "originating_pressure_ids": [
+          "pressure-5f2c983a8df2"
+        ],
+        "originating_world_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "priority": 1,
+        "progress": 100,
+        "severity": 3,
+        "situation_id": "situation-6a724bfad694",
+        "source_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "status": "archived",
+        "title": "Murder Investigation",
+        "type": "murder_investigation",
+        "updated_turn": 27
+      },
+      {
+        "created_turn": 4,
+        "dedupe_key": "political_unrest:global:evt-pressure-a85e7487aeb4",
+        "originating_pressure_ids": [
+          "pressure-2e8052f9763c"
+        ],
+        "originating_world_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "priority": 1,
+        "progress": 100,
+        "severity": 3,
+        "situation_id": "situation-e6d59c70d5a1",
+        "source_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "status": "archived",
+        "title": "Political Unrest",
+        "type": "political_unrest",
+        "updated_turn": 27
+      },
+      {
+        "created_turn": 5,
+        "dedupe_key": "missing_child:global:evt-pressure-f9f2a2f0fbcb",
+        "originating_pressure_ids": [
+          "pressure-5f2c983a8df2"
+        ],
+        "originating_world_event_ids": [
+          "evt-pressure-f9f2a2f0fbcb"
+        ],
+        "priority": 1,
+        "progress": 100,
+        "severity": 4,
+        "situation_id": "situation-3401b4664193",
+        "source_event_ids": [
+          "evt-pressure-f9f2a2f0fbcb"
+        ],
+        "status": "archived",
+        "title": "Missing Child",
+        "type": "missing_child",
+        "updated_turn": 27
+      },
+      {
+        "created_turn": 5,
+        "dedupe_key": "political_unrest:global:evt-pressure-b7fed99ce9fb",
+        "originating_pressure_ids": [
+          "pressure-2e8052f9763c"
+        ],
+        "originating_world_event_ids": [
+          "evt-pressure-b7fed99ce9fb"
+        ],
+        "priority": 1,
+        "progress": 100,
+        "severity": 3,
+        "situation_id": "situation-3cb759376b71",
+        "source_event_ids": [
+          "evt-pressure-b7fed99ce9fb"
+        ],
+        "status": "archived",
+        "title": "Political Unrest",
+        "type": "political_unrest",
+        "updated_turn": 27
+      },
+      {
+        "created_turn": 17,
+        "dedupe_key": "political_unrest:global:world-event-a3e1d700b5a2",
+        "originating_world_event_ids": [
+          "world-event-a3e1d700b5a2"
+        ],
+        "priority": 1,
+        "progress": 20,
+        "severity": 4,
+        "situation_id": "situation-39103d68d8e2",
+        "source_event_ids": [
+          "evt-world-a1984e74d0b7"
+        ],
+        "status": "archived",
+        "title": "Political Unrest",
+        "type": "political_unrest",
+        "updated_turn": 38
+      },
+      {
+        "created_turn": 17,
+        "dedupe_key": "murder_investigation:global:world-event-d94fe7ffae43",
+        "originating_world_event_ids": [
+          "world-event-d94fe7ffae43"
+        ],
+        "priority": 1,
+        "progress": 20,
+        "severity": 4,
+        "situation_id": "situation-d4ca877fa5d4",
+        "source_event_ids": [
+          "evt-world-a1a237a46c87"
+        ],
+        "status": "archived",
+        "title": "Murder Investigation",
+        "type": "murder_investigation",
+        "updated_turn": 38
+      },
+      {
+        "created_turn": 20,
+        "dedupe_key": "political_unrest:global:evt-pressure-a85e7487aeb4",
+        "originating_pressure_ids": [
+          "pressure-2e8052f9763c"
+        ],
+        "originating_world_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "priority": 1,
+        "progress": 100,
+        "severity": 3,
+        "situation_id": "situation-2987f277b4c8",
+        "source_event_ids": [
+          "evt-pressure-a85e7487aeb4"
+        ],
+        "status": "archived",
+        "title": "Political Unrest",
+        "type": "political_unrest",
+        "updated_turn": 33
+      },
+      {
+        "created_turn": 20,
+        "dedupe_key": "murder_investigation:global:evt-pressure-07a5e91775e7",
+        "originating_pressure_ids": [
+          "pressure-5f2c983a8df2"
+        ],
+        "originating_world_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "priority": 1,
+        "progress": 100,
+        "severity": 3,
+        "situation_id": "situation-908e0b4570a8",
+        "source_event_ids": [
+          "evt-pressure-07a5e91775e7"
+        ],
+        "status": "archived",
+        "title": "Murder Investigation",
+        "type": "murder_investigation",
+        "updated_turn": 33
+      }
+    ],
+    "transition_receipts": [
+      {
+        "receipt_type": "world_event_archived",
+        "source_event_id": "world-event-receipt-8286dc341baf",
+        "turn": 23
+      },
+      {
+        "receipt_type": "goal_abandoned",
+        "source_event_id": "goal-receipt-1eb93d837063",
+        "turn": 23
+      },
+      {
+        "receipt_type": "goal_abandoned",
+        "source_event_id": "goal-receipt-80e75515066b",
+        "turn": 23
+      },
+      {
+        "receipt_type": "situation_reinforced",
+        "source_event_id": "situation-receipt-59bc6305a1e2",
+        "turn": 24
+      },
+      {
+        "receipt_type": "situation_reinforced",
+        "source_event_id": "situation-receipt-34122623f396",
+        "turn": 24
+      },
+      {
+        "receipt_type": "situation_archived",
+        "source_event_id": "situation-receipt-155d253f18c2",
+        "turn": 24
+      },
+      {
+        "receipt_type": "situation_archived",
+        "source_event_id": "situation-receipt-94ec81c77290",
+        "turn": 24
+      },
+      {
+        "receipt_type": "world_event_archived",
+        "source_event_id": "world-event-receipt-753038652eff",
+        "turn": 24
+      },
+      {
+        "receipt_type": "situation_resolved",
+        "source_event_id": "situation-receipt-1b4d9a07e3f1",
+        "turn": 25
+      },
+      {
+        "receipt_type": "situation_resolved",
+        "source_event_id": "situation-receipt-36e073ec4090",
+        "turn": 25
+      },
+      {
+        "receipt_type": "situation_decayed",
+        "source_event_id": "situation-receipt-996acbd224b0",
+        "turn": 25
+      },
+      {
+        "receipt_type": "situation_decayed",
+        "source_event_id": "situation-receipt-c456464bf1cf",
+        "turn": 25
+      },
+      {
+        "receipt_type": "goal_abandoned",
+        "source_event_id": "goal-receipt-f65e388dd289",
+        "turn": 25
+      },
+      {
+        "receipt_type": "goal_abandoned",
+        "source_event_id": "goal-receipt-f626e32192ab",
+        "turn": 25
+      },
+      {
+        "receipt_type": "situation_reinforced",
+        "source_event_id": "situation-receipt-c9f94645cf81",
+        "turn": 26
+      },
+      {
+        "receipt_type": "situation_reinforced",
+        "source_event_id": "situation-receipt-0ffd73a83ea1",
+        "turn": 26
+      },
+      {
+        "receipt_type": "situation_archived",
+        "source_event_id": "situation-receipt-a12ddb49b5a3",
+        "turn": 27
+      },
+      {
+        "receipt_type": "situation_archived",
+        "source_event_id": "situation-receipt-e5d27c3dc12b",
+        "turn": 27
+      },
+      {
+        "receipt_type": "situation_archived",
+        "source_event_id": "situation-receipt-b69cb0df7ce1",
+        "turn": 27
+      },
+      {
+        "receipt_type": "situation_archived",
+        "source_event_id": "situation-receipt-5ff7435a2475",
+        "turn": 27
+      },
+      {
+        "receipt_type": "situation_decayed",
+        "source_event_id": "situation-receipt-9478ca280f55",
+        "turn": 28
+      },
+      {
+        "receipt_type": "situation_decayed",
+        "source_event_id": "situation-receipt-b1e918d39697",
+        "turn": 28
+      },
+      {
+        "receipt_type": "situation_reinforced",
+        "source_event_id": "situation-receipt-26e2386b511b",
+        "turn": 29
+      },
+      {
+        "receipt_type": "situation_reinforced",
+        "source_event_id": "situation-receipt-b7cb0935671f",
+        "turn": 29
+      },
+      {
+        "receipt_type": "situation_failed",
+        "source_event_id": "situation-receipt-31726338d824",
+        "turn": 30
+      },
+      {
+        "receipt_type": "situation_failed",
+        "source_event_id": "situation-receipt-832199a43b65",
+        "turn": 30
+      },
+      {
+        "receipt_type": "goal_failed",
+        "source_event_id": "goal-receipt-e9fde18a2e4b",
+        "turn": 30
+      },
+      {
+        "receipt_type": "goal_failed",
+        "source_event_id": "goal-receipt-a738fdbac9e8",
+        "turn": 30
+      },
+      {
+        "receipt_type": "situation_archived",
+        "source_event_id": "situation-receipt-9cbe903c4716",
+        "turn": 33
+      },
+      {
+        "receipt_type": "situation_archived",
+        "source_event_id": "situation-receipt-b7c2f552e87a",
+        "turn": 33
+      },
+      {
+        "receipt_type": "situation_archived",
+        "source_event_id": "situation-receipt-a1e2be1a4c97",
+        "turn": 38
+      },
+      {
+        "receipt_type": "situation_archived",
+        "source_event_id": "situation-receipt-a3f02b2b2659",
+        "turn": 38
+      }
+    ],
+    "version": 1,
+    "world_event_receipts": [
+      {
+        "change": {
+          "progress": [
+            35,
+            70
+          ],
+          "severity": [
+            3,
+            1
+          ],
+          "status": [
+            "resolving",
+            "resolved"
+          ]
+        },
+        "detail": "origin_sources_quiet",
+        "event_type": "political_unrest",
+        "receipt_id": "world-event-receipt-68eed7de2ed0",
+        "receipt_type": "world_event_resolved",
+        "source_event_ids": [
+          "pressure-2e8052f9763c"
+        ],
+        "status": "resolved",
+        "turn": 15,
+        "version": 1,
+        "world_event_id": "world-event-a3e1d700b5a2"
+      },
+      {
+        "change": {
+          "progress": [
+            70,
+            100
+          ],
+          "severity": [
+            2,
+            0
+          ],
+          "status": [
+            "resolving",
+            "resolved"
+          ]
+        },
+        "detail": "origin_sources_quiet",
+        "event_type": "investigation",
+        "receipt_id": "world-event-receipt-4ab3b2e5831d",
+        "receipt_type": "world_event_resolved",
+        "source_event_ids": [
+          "pressure-5f2c983a8df2"
+        ],
+        "status": "resolved",
+        "turn": 16,
+        "version": 1,
+        "world_event_id": "world-event-d94fe7ffae43"
+      },
+      {
+        "change": {
+          "status": [
+            "resolved",
+            "archived"
+          ]
+        },
+        "detail": "terminal_archive",
+        "event_type": "political_unrest",
+        "receipt_id": "world-event-receipt-8286dc341baf",
+        "receipt_type": "world_event_archived",
+        "source_event_ids": [
+          "pressure-2e8052f9763c"
+        ],
+        "status": "archived",
+        "turn": 23,
+        "version": 1,
+        "world_event_id": "world-event-a3e1d700b5a2"
+      },
+      {
+        "change": {
+          "status": [
+            "resolved",
+            "archived"
+          ]
+        },
+        "detail": "terminal_archive",
+        "event_type": "investigation",
+        "receipt_id": "world-event-receipt-753038652eff",
+        "receipt_type": "world_event_archived",
+        "source_event_ids": [
+          "pressure-5f2c983a8df2"
+        ],
+        "status": "archived",
+        "turn": 24,
+        "version": 1,
+        "world_event_id": "world-event-d94fe7ffae43"
+      }
+    ],
+    "world_events": [
+      {
+        "archived_turn": 23,
+        "created_turn": 2,
+        "dedupe_key": "political_unrest:global:conflict",
+        "event_type": "political_unrest",
+        "progress": 70,
+        "severity": 1,
+        "source_event_ids": [
+          "pressure-2e8052f9763c"
+        ],
+        "status": "archived",
+        "title": "Political Unrest",
+        "updated_turn": 23,
+        "world_event_id": "world-event-a3e1d700b5a2"
+      },
+      {
+        "archived_turn": 24,
+        "created_turn": 2,
+        "dedupe_key": "investigation:global:unknown",
+        "event_type": "investigation",
+        "progress": 100,
+        "severity": 0,
+        "source_event_ids": [
+          "pressure-5f2c983a8df2"
+        ],
+        "status": "archived",
+        "title": "Investigation",
+        "updated_turn": 24,
+        "world_event_id": "world-event-d94fe7ffae43"
+      }
+    ],
+    "world_state_consumed_event_ids": [
+      "evt-world-a1984e74d0b7",
+      "evt-world-a1a237a46c87",
+      "evt-pressure-07a5e91775e7",
+      "evt-pressure-a85e7487aeb4",
+      "evt-pressure-b7fed99ce9fb",
+      "evt-pressure-f9f2a2f0fbcb"
+    ],
+    "world_state_guard_receipts": [],
+    "world_state_receipts": []
+  },
+  "rolling_state": {
+    "active_pressures": [],
+    "actor_stress": {},
+    "pressure_graph": {
+      "foreground_node_id": null,
+      "nodes": [],
+      "threshold_crossings": [],
+      "tick": 16
+    }
+  },
+  "schema": "sim_snapshot_v1"
+}

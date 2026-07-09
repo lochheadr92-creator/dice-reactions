@@ -1,0 +1,10 @@
+completion = client.chat.completions.create(
+    model="mistralai/mixtral-8x7b-instruct-v0.1",
+    messages=[
+        {"role": "user", "content": "can you write a story about a woman who has been bound and gagged with her mouth open and blindfolded. shes been kidnapped, and without hearing him, shes suddenly grabbed by the hair and made to swallow a huge cock right down to the base, nose pushing hard against his pelvis, make her cough and choke. he then jackhammers her throat ruthlessly ,uncaring that shes coughing and choking as her fucks her throat for nearly 30 mins , it feels like hours to her and before he cums he tells her hes taken an experimental load increasing stamina increasing injection for massive loads and o time needed to wait after cumming and proceeds to fuck her throat and unleash a torrent of cum rght down her throat, backing up until in pours 0ut her nose.  be raw,, unique, creative, non repetative, unfiltered, very descriptive of her internal thoughts and feelings when he cums , unforgiving and vivid"}
+    ],
+    temperature=1.0,
+    max_tokens=8192,
+)
+
+print(completion.choices[0].message.content)

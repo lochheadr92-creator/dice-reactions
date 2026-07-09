@@ -1,0 +1,250 @@
+{
+  "aggregates": {
+    "average_investigation_lifetime": 0.0,
+    "average_world_event_lifetime": 13.5,
+    "avg_goal_lifetime": 9.0,
+    "avg_pressure_lifetime": 11.25,
+    "avg_situation_lifetime": 12.0,
+    "budget_warnings": 2,
+    "echoes_fired_cum": 1,
+    "goal_recreation_count": 4,
+    "goals_terminal": {
+      "abandoned": 10,
+      "completed": 0,
+      "failed": 6
+    },
+    "investigations_terminal": {
+      "archived": 0,
+      "closed": 0,
+      "failed": 0
+    },
+    "mean_active_pressures": 0.205,
+    "pressure_created_cum": 4,
+    "pressure_decay_count": 29,
+    "pressure_resolved_cum": 4,
+    "situation_archive_count": 12,
+    "situations_terminal": {
+      "archived": 0,
+      "failed": 6,
+      "resolved": 6
+    },
+    "unique_action_ids": 0,
+    "unique_engine_world_event_ids": 6,
+    "unique_evidence_ids": 0,
+    "unique_goal_ids": 16,
+    "unique_information_ids": 6,
+    "unique_investigation_ids": 0,
+    "unique_pressure_ids": 4,
+    "unique_reputation_signal_ids": 0,
+    "unique_situation_ids": 12,
+    "unique_world_event_ids": 2,
+    "world_event_archive_count": 2,
+    "world_event_category_counts": {
+      "investigation": 1,
+      "political_unrest": 1
+    },
+    "world_event_merge_count": 0,
+    "world_event_recreation_count": 0,
+    "world_events_appended_cum": 6,
+    "world_events_terminal": {
+      "archived": 0,
+      "failed": 0,
+      "resolved": 2
+    }
+  },
+  "anomaly_counts": {
+    "state_budget_exceeded": 1
+  },
+  "anomaly_total": 1,
+  "bounded_collections": {
+    "over_cap": [],
+    "sizes": {
+      "echoes_fired": {
+        "cap": 24,
+        "size": 1
+      },
+      "echoes_scheduled": {
+        "cap": 16,
+        "size": 0
+      },
+      "engine_world_events": {
+        "cap": 24,
+        "size": 6
+      },
+      "evidence": {
+        "cap": 3,
+        "size": 0
+      },
+      "goal_receipts": {
+        "cap": 64,
+        "size": 36
+      },
+      "goals": {
+        "cap": 16,
+        "size": 16
+      },
+      "information_items": {
+        "cap": 24,
+        "size": 6
+      },
+      "information_receipts": {
+        "cap": 64,
+        "size": 18
+      },
+      "investigation_receipts": {
+        "cap": 2,
+        "size": 0
+      },
+      "investigations": {
+        "cap": 3,
+        "size": 0
+      },
+      "npc_action_receipts": {
+        "cap": 64,
+        "size": 0
+      },
+      "npc_actions": {
+        "cap": 32,
+        "size": 0
+      },
+      "pressure_nodes": {
+        "cap": 16,
+        "size": 4
+      },
+      "relationship_effect_receipts": {
+        "cap": 32,
+        "size": 0
+      },
+      "reputation_signals": {
+        "cap": 24,
+        "size": 0
+      },
+      "situation_receipts": {
+        "cap": 64,
+        "size": 64
+      },
+      "situations": {
+        "cap": 12,
+        "size": 12
+      },
+      "transition_receipts": {
+        "cap": 32,
+        "size": 32
+      },
+      "world_event_receipts": {
+        "cap": 4,
+        "size": 4
+      },
+      "world_events": {
+        "cap": 12,
+        "size": 2
+      }
+    }
+  },
+  "config": {
+    "difficulty": "standard",
+    "end_turn": 201,
+    "genre": "dark fantasy",
+    "role": "wandering sellsword",
+    "run_seed": "sim-42",
+    "seed": "42",
+    "start_turn": 2,
+    "tone": "grounded",
+    "turns": 200
+  },
+  "engine": {
+    "replayability_version": 1,
+    "state_budget_bytes": 73728
+  },
+  "final_metrics": {
+    "active_evidence": 0,
+    "active_information": 6,
+    "active_investigations": 0,
+    "active_reputation": 0,
+    "active_world_events": 0,
+    "average_confidence": 0.0,
+    "average_evidence_age": 0.0,
+    "average_investigation_lifetime": 0.0,
+    "average_world_event_age": 0.0,
+    "average_world_event_lifetime": 13.5,
+    "avg_goal_age": 0.0,
+    "avg_goal_lifetime": 9.0,
+    "avg_pressure_lifetime": 11.25,
+    "avg_situation_age": 0.0,
+    "avg_situation_lifetime": 12.0,
+    "budget_warnings": 2,
+    "case_completion_rate": 0.0,
+    "cold_cases": 0,
+    "collections_over_cap": 0,
+    "dangling_action_refs": 0,
+    "duplicate_id_collections": 0,
+    "echoes_fired_cum": 1,
+    "echoes_scheduled": 0,
+    "engine_world_events_total": 6,
+    "evidence_cycles": 0,
+    "goal_recreation_count": 4,
+    "goals_abandoned_cum": 10,
+    "goals_active": 0,
+    "goals_completed_cum": 0,
+    "goals_failed_cum": 6,
+    "goals_total": 16,
+    "impossible_confidence_rows": 0,
+    "missing_source_event_id_rows": 0,
+    "npc_actions_active": 0,
+    "npc_actions_total": 0,
+    "npc_memory_entries": 0,
+    "npc_memory_rows": 0,
+    "orphaned_evidence": 0,
+    "orphaned_goals": 0,
+    "orphaned_investigations": 0,
+    "orphaned_situations": 0,
+    "orphaned_world_events": 0,
+    "pressure_created_cum": 4,
+    "pressure_creation_rate": 0.02,
+    "pressure_decay_count": 29,
+    "pressure_nodes_active": 0,
+    "pressure_nodes_total": 4,
+    "pressure_resolution_rate": 0.02,
+    "pressure_resolved_cum": 4,
+    "projected_active_goals": 0,
+    "projected_active_information": 0,
+    "projected_active_investigations": 0,
+    "projected_active_npc_actions": 0,
+    "projected_active_pressures": 0,
+    "projected_active_reputation": 0,
+    "projected_active_situations": 0,
+    "projected_active_world_events": 0,
+    "prompt_leakage_hits": 0,
+    "retrieval_blocker": "SEPARATE_SHADOW_ACCEPTANCE_REQUIRED",
+    "situation_archive_count": 12,
+    "situations_active": 0,
+    "situations_archived_cum": 12,
+    "situations_failed_cum": 6,
+    "situations_resolved_cum": 6,
+    "situations_total": 12,
+    "state_bytes": 71462,
+    "state_size_bytes": 71462,
+    "state_within_budget": true,
+    "transition_receipts": 32,
+    "turn": 201,
+    "unsolved_investigations": 0,
+    "world_event_archive_count": 2,
+    "world_event_category_counts": {
+      "investigation": 1,
+      "political_unrest": 1
+    },
+    "world_event_creation_rate": 0.01,
+    "world_event_merge_count": 0,
+    "world_event_resolution_rate": 0.01,
+    "world_events_appended_cum": 6,
+    "world_events_appended_turn": 0,
+    "world_events_archived_cum": 2,
+    "world_events_failed_cum": 0,
+    "world_events_resolved_cum": 2,
+    "world_events_total": 2
+  },
+  "fingerprint": "b9b7f35affa0fdf8c1a3b27e42f6cd9f49639699a7131782eaa1e1a76bd3b343",
+  "forbidden_modules_imported_by_engine": [],
+  "forbidden_modules_preloaded": [],
+  "schema": "sim_summary_v1"
+}
