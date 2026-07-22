@@ -99,4 +99,5 @@ terminals/
 
 Dice Reactions API.txt
 
-Dice Reactions API.txt
+# Accidental local API-key export
+from openai import OpenAI.txt
