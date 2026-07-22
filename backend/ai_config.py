@@ -139,19 +139,17 @@ def _bool_env(name: str, default: str = "false") -> bool:
 # Foundation promotion flags (Phase 2 — Foundation Completion).
 #
 # Each flag promotes ONE canonical foundation subsystem from shadow evaluation
-# into the authoritative decision path. ALL DEFAULT OFF. With every flag off the
-# turn path is byte-identical to the pre-promotion behaviour and the canonical
-# systems keep running as shadow diagnostics only. Legacy implementations remain
-# available as the fallback whenever a flag is off or a canonical subsystem
-# raises (fail-closed). Flipping a flag on is gated by separate acceptance and is
-# only intended for comparison/acceptance runs — see docs/foundation-promotion.md.
+# into the authoritative decision path. Utility AI is accepted for the beta
+# golden path and defaults ON; the remaining seams stay opt-in. Legacy
+# implementations remain available whenever a canonical subsystem raises
+# (fail-closed). See docs/foundation-promotion.md.
 # ---------------------------------------------------------------------------
 ENABLE_CANONICAL_ACTOR_RESOLUTION: bool = _bool_env("ENABLE_CANONICAL_ACTOR_RESOLUTION")
 ENABLE_CANONICAL_GRAVITY: bool = _bool_env("ENABLE_CANONICAL_GRAVITY")
 # Canonical name for the ADR-024 live Utility AI handoff. Either this OR the
 # legacy ENABLE_UTILITY_AI_LIVE_SELECTION engages the authoritative winner; the
 # shadow comparison continues to run in every case.
-ENABLE_CANONICAL_UTILITY: bool = _bool_env("ENABLE_CANONICAL_UTILITY")
+ENABLE_CANONICAL_UTILITY: bool = _bool_env("ENABLE_CANONICAL_UTILITY", "true")
 ENABLE_CANONICAL_MEMORY_RETRIEVAL: bool = _bool_env("ENABLE_CANONICAL_MEMORY_RETRIEVAL")
 
 # Memory Retrieval prompt injection is BLOCKED pending SEPARATE_SHADOW_ACCEPTANCE

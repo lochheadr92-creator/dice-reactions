@@ -18,17 +18,17 @@ import memory
 # ---------------------------------------------------------------------------
 # Flags
 # ---------------------------------------------------------------------------
-def test_all_promotion_flags_default_off():
-    # The shipped defaults must be OFF so the turn path is byte-identical.
+def test_promotion_defaults_keep_utility_live():
+    # Utility is accepted for the beta path; remaining promotions stay opt-in.
     assert ai_config.ENABLE_CANONICAL_ACTOR_RESOLUTION is False
     assert ai_config.ENABLE_CANONICAL_GRAVITY is False
-    assert ai_config.ENABLE_CANONICAL_UTILITY is False
+    assert ai_config.ENABLE_CANONICAL_UTILITY is True
     assert ai_config.ENABLE_CANONICAL_MEMORY_RETRIEVAL is False
     assert ai_config.CANONICAL_MEMORY_RETRIEVAL_PROMPT_INJECTION_ACCEPTED is False
     assert fp.promotion_flags() == {
         "actor_resolution": False,
         "gravity": False,
-        "utility": False,
+        "utility": True,
         "memory_retrieval": False,
         "memory_retrieval_prompt_injection_allowed": False,
     }

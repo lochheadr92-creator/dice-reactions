@@ -14,7 +14,8 @@ Design contract:
   • With every flag OFF the returned value is identical to the legacy input, so
     the surrounding turn path stays byte-identical to pre-promotion behaviour.
 
-Flag defaults (all OFF) live in ai_config; this module only reads them.
+Flag defaults live in ai_config; Utility defaults ON while Actor Resolution,
+Gravity, and Memory Retrieval remain OFF. This module only reads them.
 """
 from __future__ import annotations
 
