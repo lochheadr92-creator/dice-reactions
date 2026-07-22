@@ -14,6 +14,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 import npc_agendas as agendas  # noqa: E402
 import npc_world_moves as world_moves  # noqa: E402
 import player_api  # noqa: E402
+import pressure_graph  # noqa: E402
 import replayability  # noqa: E402
 import scenarios  # noqa: E402
 import server  # noqa: E402
@@ -30,6 +31,11 @@ CORPUS = (
     "44444444-4444-4444-4444-444444444444",
     "55555555-5555-5555-5555-555555555555",
 )
+
+# A full 12-NPC new-story fixture is 16.1 KiB under production compact JSON.
+# Keep a narrow 20 KiB envelope here; long-run all-subsystem state has its own
+# independently measured budget in replayability.REPLAYABILITY_STATE_BUDGET_BYTES.
+INITIAL_REPLAYABILITY_STATE_BUDGET_BYTES = 20 * 1024
 
 
 def _record(name: str, slot: int = 0) -> dict:
@@ -226,8 +232,12 @@ def test_replayability_state_size_bounds():
         }
         for i in range(12)
     ]
-    size = len(json.dumps(state))
-    assert size < 14000
+    size = replayability.replayability_state_byte_size(state)
+    assert size <= INITIAL_REPLAYABILITY_STATE_BUDGET_BYTES
+    assert len(state["npc_agendas"]["active"]) == agendas.MAX_ACTIVE_AGENDAS
+    assert len(state["npc_move_receipts"]) <= world_moves.MAX_NPC_MOVE_RECEIPTS
+    assert len(state["npc_traits"]["by_npc_id"]) == agendas.MAX_ACTIVE_AGENDAS
+    assert len(state["pressure_graph"]["nodes"]) <= pressure_graph.MAX_ACTIVE_NODES
 
 
 def test_directive_size_bounded():

@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 ECHO_DIRECTIVE_MARKER = "[REPLAYABILITY_ECHO_V1]"
 MAX_SCHEDULED = 16
+MAX_PENDING = 16
 MAX_FIRED_LOG = 24
 
 # v1 supported echo kinds tied to confirmed structured sources only.
@@ -168,6 +169,18 @@ def mature_echoes(echo_state: Dict[str, Any], turn_number: int) -> List[Dict[str
             remain.append(entry)
 
     echo_state["scheduled"] = remain
+    if len(pending) > MAX_PENDING:
+        # Preserve the newest due consequences, matching the scheduled/fired
+        # rolling-window policy while preventing a multi-source turn backlog
+        # from growing faster than the one-echo-per-turn firing rate.
+        pending = pending[-MAX_PENDING:]
+        echo_state["pending"] = pending
+        retained_ids = {
+            entry.get("id") for entry in pending if isinstance(entry, dict)
+        }
+        matured = [
+            entry for entry in matured if entry.get("id") in retained_ids
+        ]
     return matured
 
 

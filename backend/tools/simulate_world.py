@@ -215,6 +215,7 @@ def _collection_caps() -> List[Tuple[str, int]]:
 
 PRESSURE_NODES_CAP = pressure_graph.MAX_TOTAL_NODES
 ECHO_SCHEDULED_CAP = echoes.MAX_SCHEDULED
+ECHO_PENDING_CAP = echoes.MAX_PENDING
 ECHO_FIRED_CAP = echoes.MAX_FIRED_LOG
 STATE_BUDGET_BYTES = replayability.REPLAYABILITY_STATE_BUDGET_BYTES
 
@@ -432,11 +433,15 @@ def bounded_collection_report(state: Mapping[str, Any]) -> Dict[str, Any]:
         over.append("pressure_nodes")
     echo_state = state.get("consequence_echoes") or {}
     scheduled = len(echo_state.get("scheduled") or [])
+    pending = len(echo_state.get("pending") or [])
     fired = len(echo_state.get("fired") or [])
     sizes["echoes_scheduled"] = {"size": scheduled, "cap": ECHO_SCHEDULED_CAP}
+    sizes["echoes_pending"] = {"size": pending, "cap": ECHO_PENDING_CAP}
     sizes["echoes_fired"] = {"size": fired, "cap": ECHO_FIRED_CAP}
     if scheduled > ECHO_SCHEDULED_CAP:
         over.append("echoes_scheduled")
+    if pending > ECHO_PENDING_CAP:
+        over.append("echoes_pending")
     if fired > ECHO_FIRED_CAP:
         over.append("echoes_fired")
     return {"sizes": sizes, "over_cap": sorted(over)}
@@ -1164,6 +1169,7 @@ class TelemetryCollector:
             "world_events_appended_turn": len(new_events),
             "world_events_appended_cum": self.events_appended_cum,
             "echoes_scheduled": len(echo_state.get("scheduled") or []),
+            "echoes_pending": len(echo_state.get("pending") or []),
             "echoes_fired_cum": self.echoes_fired_cum,
             "transition_receipts": len(state.get("transition_receipts") or []),
             "npc_memory_rows": len(npc_memory),

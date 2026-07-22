@@ -69,6 +69,27 @@ def test_mature_moves_ready_entries_to_pending():
     assert state["pending"]
 
 
+def test_pending_echoes_keep_newest_bounded_window():
+    state = _state()
+    first_batch = [
+        {**_source(event_id=f"old-{index}"), "mature_in": 1}
+        for index in range(echoes.MAX_PENDING)
+    ]
+    echoes.schedule_from_structured_events(state, first_batch, turn_number=1)
+    echoes.mature_echoes(state, turn_number=2)
+
+    second_batch = [
+        {**_source(event_id=f"new-{index}"), "mature_in": 1}
+        for index in range(echoes.MAX_PENDING)
+    ]
+    echoes.schedule_from_structured_events(state, second_batch, turn_number=2)
+    retained = echoes.mature_echoes(state, turn_number=3)
+
+    assert len(state["pending"]) == echoes.MAX_PENDING
+    assert len(retained) == echoes.MAX_PENDING
+    assert all(row["source_event_id"].startswith("new-") for row in state["pending"])
+
+
 def test_fire_at_most_one_per_turn():
     state = _state()
     echoes.schedule_from_structured_events(state, [_source(event_id="a")], 1)

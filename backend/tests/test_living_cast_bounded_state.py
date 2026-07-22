@@ -33,6 +33,7 @@ def test_max_cap_fixture_counts():
     assert len(state["relationship_effect_receipts"]) == fixtures.CAP_REL_EFFECT_RECEIPTS
     assert len(state["arc_diversity"]["recent_beats"]) == fixtures.CAP_ARC_BEATS
     assert len(state["consequence_echoes"]["scheduled"]) == fixtures.CAP_ECHO_SCHEDULED
+    assert len(state["consequence_echoes"]["pending"]) == fixtures.CAP_ECHO_PENDING
     assert len(state["consequence_echoes"]["fired"]) == fixtures.CAP_ECHO_FIRED
     assert len(state["pressure_graph"]["nodes"]) == fixtures.CAP_PRESSURE_NODES
     assert len(state["pressure_graph"]["threshold_crossings"]) == fixtures.CAP_THRESHOLD_RECEIPTS

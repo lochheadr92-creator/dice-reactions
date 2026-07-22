@@ -52,11 +52,12 @@ RELATIONSHIP_EFFECT_RECEIPTS_MAX = 32
 PRESSURE_SIGNAL_CONSUMED_IDS_MAX = 64
 PRESSURE_APPLIED_WORLD_EVENT_IDS_MAX = 64
 MAX_ENGINE_WORLD_EVENTS = 24
-# Documented hard budget for full replayability_state at simultaneous caps.
-# Stage 5F adds bounded information/reputation state. The 500-turn harness peaks
-# below 69 KiB with simultaneous late-stage receipts; 72 KiB preserves a strict
-# envelope without forcing information caps to a non-useful size.
-REPLAYABILITY_STATE_BUDGET_BYTES = 73_728
+# Documented hard budget for the full multi-engine replayability_state.
+# A 200-turn, 12-NPC deterministic stress fixture peaks at 254,690 bytes and
+# stabilises near 251 KiB once every collection reaches its explicit cap.
+# 320 KiB preserves about 29% headroom without accepting unbounded growth; the
+# simulation harness independently rejects any collection that exceeds its cap.
+REPLAYABILITY_STATE_BUDGET_BYTES = 327_680
 
 # Keys the LLM must never own in rolling_state. `pressure_graph` is stripped here
 # and then re-added by `enforce_authoritative` as an engine-owned projection.

@@ -24,6 +24,7 @@ CAP_MOVE_RECEIPTS = world_moves.MAX_NPC_MOVE_RECEIPTS
 CAP_REL_EFFECT_RECEIPTS = replayability.RELATIONSHIP_EFFECT_RECEIPTS_MAX
 CAP_ARC_BEATS = arc.MAX_RECENT_BEATS
 CAP_ECHO_SCHEDULED = echoes.MAX_SCHEDULED
+CAP_ECHO_PENDING = echoes.MAX_PENDING
 CAP_ECHO_FIRED = echoes.MAX_FIRED_LOG
 CAP_PRESSURE_NODES = pressure_graph.MAX_ACTIVE_NODES
 CAP_THRESHOLD_RECEIPTS = pressure_graph.MAX_THRESHOLD_RECEIPTS
@@ -184,7 +185,7 @@ def build_echoes_at_cap() -> Dict[str, Any]:
     ]
     state["pending"] = [
         build_echo_entry(i + CAP_ECHO_SCHEDULED, bucket="pending")
-        for i in range(min(4, CAP_ECHO_SCHEDULED))
+        for i in range(CAP_ECHO_PENDING)
     ]
     state["fired"] = [
         build_echo_entry(i, bucket="fired") for i in range(CAP_ECHO_FIRED)

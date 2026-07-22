@@ -311,6 +311,14 @@ def test_unbounded_growth_detection_unit():
     report = simulate_world.bounded_collection_report(crafted)
     assert "goals" in report["over_cap"]
 
+    echo_overflow = {
+        "consequence_echoes": {
+            "pending": [{} for _ in range(simulate_world.ECHO_PENDING_CAP + 1)]
+        }
+    }
+    echo_report = simulate_world.bounded_collection_report(echo_overflow)
+    assert "echoes_pending" in echo_report["over_cap"]
+
 
 # ---------------------------------------------------------------------------
 # Anomaly detectors (unit-level, crafted states).
