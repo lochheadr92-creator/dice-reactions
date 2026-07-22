@@ -22,6 +22,7 @@ import {
   getSession,
   getSessionHistory,
   HistoryTurn,
+  TurnOutcome,
   sendAction,
   deleteSession,
   exportSession,
@@ -105,6 +106,7 @@ export default function PlayScreen() {
   const [showMenu, setShowMenu] = useState(false);
   const [showWhy, setShowWhy] = useState(false);
   const [whyHistory, setWhyHistory] = useState<HistoryTurn[]>([]);
+  const [latestOutcome, setLatestOutcome] = useState<TurnOutcome | null>(null);
   const [whyLoading, setWhyLoading] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
   const [mode, setMode] = useState<"basic" | "advanced">("advanced");
@@ -126,6 +128,18 @@ export default function PlayScreen() {
   const mountedRef = useRef(true);
   const actionBusy = submitting || syncingConflict;
 
+  const refreshCausalHistory = useCallback(async () => {
+    if (!sessionId || !deviceIdRef.current) return;
+    try {
+      const res = await getSessionHistory(sessionId, deviceIdRef.current);
+      if (!mountedRef.current) return;
+      setWhyHistory(res.history || []);
+      setLatestOutcome(res.latest_outcome || null);
+    } catch {
+      // The causal projection is supplemental; play remains usable if it fails.
+    }
+  }, [sessionId]);
+
   const refreshSessionReadOnly = useCallback(async () => {
     if (!sessionId || !deviceIdRef.current) return;
     const refreshGen = ++focusRefreshGenerationRef.current;
@@ -143,10 +157,11 @@ export default function PlayScreen() {
       }
       setSession(res.session);
       setTurns((prev) => mergeChronicleTurns(prev, res.turns));
+      void refreshCausalHistory();
     } catch {
       // Read-only refresh failures are non-fatal.
     }
-  }, [sessionId]);
+  }, [refreshCausalHistory, sessionId]);
 
   // Refresh display preferences and lightly sync chronicle state on focus.
   useFocusEffect(
@@ -182,6 +197,7 @@ export default function PlayScreen() {
       const res = await getSession(sessionId, deviceId);
       setSession(res.session);
       setTurns(res.turns);
+      void refreshCausalHistory();
       // On initial load, land at the start of the most recent turn (no animation).
       pendingScrollRef.current = false;
       setDebugMode(res.session.debug_mode);
@@ -191,7 +207,7 @@ export default function PlayScreen() {
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [refreshCausalHistory, sessionId]);
 
   useEffect(() => {
     load();
@@ -260,6 +276,7 @@ export default function PlayScreen() {
 
       setSession(result.session);
       setTurns((prev) => mergeChronicleTurns(prev, result.turns));
+      void refreshCausalHistory();
 
       if (result.foundNewerTurn) {
         pendingScrollRef.current = true;
@@ -307,6 +324,7 @@ export default function PlayScreen() {
       setTurns((prev) => [...prev, res.turn]);
       pendingScrollRef.current = true;
       setCustomAction("");
+      void refreshCausalHistory();
     } catch (e: unknown) {
       if (generation !== submitGenerationRef.current) return;
 
@@ -438,6 +456,44 @@ export default function PlayScreen() {
           <View style={styles.pressureBar} testID="pressure-bar">
             <Text style={styles.pressureLabel}>PRS</Text>
             <Text style={styles.pressureText} numberOfLines={1}>{pressure}</Text>
+          </View>
+        ) : null}
+
+        {latestOutcome ? (
+          <View style={styles.outcomeCard} testID="latest-outcome">
+            <View style={styles.outcomeHeader}>
+              <Text style={styles.outcomeEyebrow}>
+                · TURN {String(latestOutcome.turn).padStart(2, "0")} · WHAT CHANGED
+              </Text>
+              <Text style={styles.outcomeHint}>RECORDED</Text>
+            </View>
+            {latestOutcome.events.map((ev, i) => {
+              const chipCfg = WHY_CHIPS[ev.kind] || {
+                label: ev.kind.toUpperCase(),
+                color: COLORS.textSecondary,
+              };
+              return (
+                <View key={`outcome-event-${i}`} style={styles.outcomeRow}>
+                  <Text style={[styles.outcomeChip, { color: chipCfg.color, borderColor: chipCfg.color }]}>
+                    {chipCfg.label}
+                  </Text>
+                  <Text style={styles.outcomeText}>{ev.text}</Text>
+                </View>
+              );
+            })}
+            {latestOutcome.changes.length > 0 ? (
+              <View style={styles.outcomeChanges}>
+                <Text style={styles.outcomeChangesHeader}>STATE SHIFT</Text>
+                {latestOutcome.changes.map((change, i) => (
+                  <View key={`outcome-change-${i}`} style={styles.outcomeChangeRow}>
+                    <Text style={styles.outcomeChangeLabel}>{change.label}</Text>
+                    <Text style={styles.outcomeChangeValue}>
+                      {change.before ? `${change.before} → ${change.after}` : change.after}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
           </View>
         ) : null}
 
@@ -679,6 +735,7 @@ export default function PlayScreen() {
                   const deviceId = deviceIdRef.current || (await getDeviceId());
                   const res = await getSessionHistory(sessionId, deviceId);
                   setWhyHistory(res.history || []);
+                  setLatestOutcome(res.latest_outcome || null);
                 } catch (e: any) {
                   const { title, message } = friendlyError(e);
                   if (Platform.OS === "web") alert(`${title}\n\n${message}`);
@@ -885,6 +942,88 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: FONTS.bodyItalic,
     color: COLORS.textProse,
+    fontSize: 14,
+  },
+  outcomeCard: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.surface,
+  },
+  outcomeHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  outcomeEyebrow: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.primary,
+    fontSize: 10,
+    letterSpacing: 1.5,
+  },
+  outcomeHint: {
+    fontFamily: FONTS.mono,
+    color: COLORS.textMuted,
+    fontSize: 9,
+    letterSpacing: 1,
+  },
+  outcomeRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    marginTop: 6,
+  },
+  outcomeChip: {
+    minWidth: 52,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderWidth: 1,
+    fontFamily: FONTS.monoBold,
+    fontSize: 8,
+    letterSpacing: 1,
+    textAlign: "center",
+  },
+  outcomeText: {
+    flex: 1,
+    fontFamily: FONTS.body,
+    color: COLORS.textProse,
+    fontSize: 15,
+    lineHeight: 20,
+  },
+  outcomeChanges: {
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.borderDim,
+  },
+  outcomeChangesHeader: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.textMuted,
+    fontSize: 9,
+    letterSpacing: 1.5,
+    marginBottom: 5,
+  },
+  outcomeChangeRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 8,
+    paddingVertical: 2,
+  },
+  outcomeChangeLabel: {
+    fontFamily: FONTS.mono,
+    color: COLORS.textSecondary,
+    fontSize: 10,
+    letterSpacing: 1,
+  },
+  outcomeChangeValue: {
+    flex: 1,
+    textAlign: "right",
+    fontFamily: FONTS.bodyMed,
+    color: COLORS.objective,
     fontSize: 14,
   },
   scroll: { paddingHorizontal: 22, paddingTop: 18 },

@@ -162,11 +162,17 @@ export async function exportSession(sessionId: string, deviceId: string): Promis
 
 export type HistoryEvent = { kind: string; text: string };
 export type HistoryTurn = { turn: number; events: HistoryEvent[] };
+export type OutcomeChange = { label: string; before?: string; after: string };
+export type TurnOutcome = {
+  turn: number;
+  events: HistoryEvent[];
+  changes: OutcomeChange[];
+};
 
 export async function getSessionHistory(
   sessionId: string,
   deviceId: string
-): Promise<{ history: HistoryTurn[] }> {
+): Promise<{ history: HistoryTurn[]; latest_outcome?: TurnOutcome | null }> {
   const res = await fetch(`${API}/story/session/${sessionId}/history`, {
     headers: deviceHeaders(deviceId),
   });

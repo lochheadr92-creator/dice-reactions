@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 
-from causal_history import build_causal_history
+from causal_history import build_causal_history, build_latest_outcome
 
 MARLENE_ID = "npc-aaaaaaaaaaaa"
 GREG_ID = "npc-bbbbbbbbbbbb"
@@ -52,7 +52,7 @@ def _demo_session() -> dict:
     }
 
 
-def _turn(n: int, action: str = "", guards: str = "", vectors=None, dbg_extra=None) -> dict:
+def _turn(n: int, action: str = "", guards: str = "", vectors=None, dbg_extra=None, state=None) -> dict:
     debug = {"state_guard_adjustments": guards} if guards else {}
     debug.update(dbg_extra or {})
     return {
@@ -60,6 +60,7 @@ def _turn(n: int, action: str = "", guards: str = "", vectors=None, dbg_extra=No
         "player_action": action,
         "debug": debug,
         "rolling_state": {"relationship_vectors": vectors or []},
+        "state": state or {},
     }
 
 
@@ -172,3 +173,27 @@ def test_empty_and_degenerate_inputs_are_safe():
     assert history == [
         {"turn": 2, "events": [{"kind": "action", "text": "You: I wait."}]}
     ]
+
+
+def test_latest_outcome_is_bounded_and_qualitative():
+    turns = [
+        _turn(1, state={"Pressure": "rising", "Health": "stable"}),
+        _turn(2, action="I press on.", state={"Pressure": "elevated", "Health": "bruised"}),
+    ]
+    outcome = build_latest_outcome({}, turns)
+    assert outcome == {
+        "turn": 2,
+        "events": [{"kind": "action", "text": "You: I press on."}],
+        "changes": [
+            {"label": "Health", "before": "stable", "after": "bruised"},
+            {"label": "Pressure", "before": "rising", "after": "elevated"},
+        ],
+    }
+
+
+def test_latest_outcome_drops_internal_state_values():
+    turns = [
+        _turn(1, state={"Pressure": "stable"}),
+        _turn(2, state={"Pressure": "stable", "Danger": "secret_registry=true"}),
+    ]
+    assert build_latest_outcome({}, turns) is None

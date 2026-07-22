@@ -80,6 +80,29 @@ _CONSEQUENCE_DEFAULT = "An earlier event returned: {label}."
 
 _REL_TOKEN_RE = re.compile(r"^rel:(?P<name>[^:]+):(?P<kinds>[a-z_+]+)$")
 
+_OUTCOME_STATE_KEYS = (
+    "Health",
+    "Stress",
+    "Fatigue",
+    "Position",
+    "Inventory Summary",
+    "Conditions",
+    "Notable Conditions",
+    "Danger",
+    "Momentum",
+    "Pressure",
+)
+_OUTCOME_LABELS = {"Inventory Summary": "Supplies", "Notable Conditions": "Conditions"}
+_OUTCOME_BLOCKED_TERMS = (
+    "rolling_state",
+    "debug",
+    "secret",
+    "latent",
+    "delayed trigger",
+    "active systems",
+    "engine",
+)
+
 
 def _clean(text: Any) -> str:
     """Humanize an engine label: no underscores, collapsed whitespace."""
@@ -258,3 +281,69 @@ def build_causal_history(
             history.append({"turn": turn_no, "events": events})
 
     return history
+
+
+def _safe_outcome_state(turn: Mapping[str, Any]) -> Dict[str, str]:
+    """Allowlist small, qualitative state values for the latest-outcome card."""
+    raw_state = turn.get("state") or {}
+    if not isinstance(raw_state, Mapping):
+        return {}
+    safe: Dict[str, str] = {}
+    for key in _OUTCOME_STATE_KEYS:
+        value = raw_state.get(key)
+        if value is None or isinstance(value, (Mapping, list, tuple, set)):
+            continue
+        text = _clean(value)[:120]
+        lowered = text.lower()
+        if not text or any(term in lowered for term in _OUTCOME_BLOCKED_TERMS):
+            continue
+        safe[key] = text
+    return safe
+
+
+def build_latest_outcome(
+    session: Mapping[str, Any],
+    turns: List[Mapping[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Return a bounded, player-safe projection of the latest committed turn."""
+    ordered = sorted(
+        (t for t in turns if isinstance(t, Mapping) and isinstance(t.get("turn_number"), int)),
+        key=lambda t: int(t["turn_number"]),
+    )
+    if not ordered:
+        return None
+
+    history = build_causal_history(session, ordered)
+    latest = ordered[-1]
+    turn_number = int(latest["turn_number"])
+    history_row = next((row for row in history if row.get("turn") == turn_number), None)
+    events: List[Dict[str, str]] = []
+    for event in list((history_row or {}).get("events") or [])[:4]:
+        if not isinstance(event, Mapping):
+            continue
+        kind = _clean(event.get("kind"))
+        text = _clean(event.get("text"))[:240]
+        if kind and text:
+            events.append({"kind": kind, "text": text})
+
+    before = _safe_outcome_state(ordered[-2]) if len(ordered) > 1 else {}
+    after = _safe_outcome_state(latest)
+    changes: List[Dict[str, str]] = []
+    for key in _OUTCOME_STATE_KEYS:
+        old = before.get(key)
+        new = after.get(key)
+        if not new or new == old:
+            continue
+        row: Dict[str, str] = {
+            "label": _OUTCOME_LABELS.get(key, key),
+            "after": new,
+        }
+        if old:
+            row["before"] = old
+        changes.append(row)
+        if len(changes) >= 6:
+            break
+
+    if not events and not changes:
+        return None
+    return {"turn": turn_number, "events": events, "changes": changes}

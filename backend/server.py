@@ -3957,12 +3957,13 @@ async def session_causal_history(session_id: str, device_id: str = Depends(requi
     session = await fetch_owned_session(db, session_id, device_id)
     turns = await db.turns.find(
         {"session_id": session_id},
-        {"_id": 0, "turn_number": 1, "player_action": 1, "debug": 1, "rolling_state": 1},
+        {"_id": 0, "turn_number": 1, "player_action": 1, "debug": 1, "rolling_state": 1, "state": 1},
     ).sort("turn_number", 1).to_list(length=500)
     return {
         "session_id": session_id,
         "title": session.get("title"),
         "history": causal_history.build_causal_history(session, turns),
+        "latest_outcome": causal_history.build_latest_outcome(session, turns),
     }
 
 
