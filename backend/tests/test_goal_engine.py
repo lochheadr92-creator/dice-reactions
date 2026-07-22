@@ -165,6 +165,28 @@ def test_goal_duplicate_suppression_and_replay_idempotence():
     assert second["diagnostics"]["goal_duplicate_suppressed"] >= 1
 
 
+def test_goal_receipt_history_keeps_newest_provenance_window():
+    state = _replay_state()
+    state["goal_receipts"] = [
+        {"receipt_id": f"old-{index}", "source_event_ids": [f"evt-{index}"]}
+        for index in range(goal_engine.MAX_GOAL_RECEIPTS)
+    ]
+
+    added = goal_engine._append_receipt(
+        state,
+        [],
+        receipt_type="goal_created",
+        turn_number=99,
+        goal=_goal("g-new"),
+        source_event_ids=["evt-new"],
+    )
+
+    assert added is True
+    assert len(state["goal_receipts"]) == goal_engine.MAX_GOAL_RECEIPTS
+    assert state["goal_receipts"][0]["receipt_id"] == "old-1"
+    assert state["goal_receipts"][-1]["source_event_ids"] == ["evt-new"]
+
+
 def test_recreated_goal_after_terminal_history_gets_new_deterministic_id():
     base = _replay_state(situations=[_situation()])
     goal_engine.evolve_goals(base, {}, 3, run_seed=FIXED_SEED)

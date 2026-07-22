@@ -22,7 +22,8 @@ MAX_SITUATIONS = 12
 MAX_ACTIVE_SITUATIONS = 8
 MAX_SITUATION_INPUTS_PER_TICK = 8
 MAX_SITUATION_CHANGES_PER_TICK = 6
-MAX_SITUATION_RECEIPTS = 64
+# Keep one recent provenance receipt per retained canonical situation.
+MAX_SITUATION_RECEIPTS = 12
 MAX_SITUATION_REFS = 8
 MAX_SITUATION_OBJECTIVES = 4
 MAX_SITUATION_BLOCKERS = 4
@@ -95,6 +96,12 @@ PROMOTED_SITUATION_FIELDS = (
     "evidence_exposure_behaviours",
     "ambition_signals",
     "ambition_opportunities",
+)
+
+PROMPT_SAFE_WORLD_STATE_SIGNAL_FIELDS = (
+    "signal_kind",
+    "severity",
+    "status",
 )
 
 CREATION_PRESSURE_THRESHOLD = 50
@@ -1407,14 +1414,21 @@ def _world_state_signals_for_situation(
         location_ids=locations,
         faction_ids=factions,
     )
+    return _prompt_safe_world_state_signals(matched)
+
+
+def _prompt_safe_world_state_signals(signals: Any) -> List[Dict[str, Any]]:
+    """Return the player-facing subset of world-state signal metadata."""
+    if not isinstance(signals, list):
+        return []
     return [
         {
-            "signal_kind": signal.get("signal_kind"),
-            "signal_id": signal.get("signal_id"),
-            "severity": signal.get("severity"),
-            "status": signal.get("status"),
+            key: copy.deepcopy(signal.get(key))
+            for key in PROMPT_SAFE_WORLD_STATE_SIGNAL_FIELDS
+            if key in signal
         }
-        for signal in matched
+        for signal in signals
+        if isinstance(signal, Mapping)
     ]
 
 
@@ -1712,13 +1726,16 @@ def prompt_safe_rolling_state(rolling_state: Mapping[str, Any]) -> Dict[str, Any
     for row in rows[:MAX_PROMPT_SITUATIONS]:
         if not isinstance(row, Mapping):
             continue
-        cleaned.append(
-            {
-                key: copy.deepcopy(row.get(key))
-                for key in PROMOTED_SITUATION_FIELDS
-                if key in row
-            }
-        )
+        projection = {
+            key: copy.deepcopy(row.get(key))
+            for key in PROMOTED_SITUATION_FIELDS
+            if key in row
+        }
+        if "world_state_signals" in projection:
+            projection["world_state_signals"] = _prompt_safe_world_state_signals(
+                projection["world_state_signals"]
+            )
+        cleaned.append(projection)
     safe["active_situations"] = cleaned
     return safe
 

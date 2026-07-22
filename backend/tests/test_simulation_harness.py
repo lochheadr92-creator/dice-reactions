@@ -9,6 +9,7 @@ bounded, reproducible telemetry.
 from __future__ import annotations
 
 import json
+import copy
 import random
 import subprocess
 import sys
@@ -92,6 +93,8 @@ REQUIRED_METRIC_FIELDS = {
     "collections_over_cap",
     "avg_pressure_lifetime",
     "pressure_decay_count",
+    "significance_entries",
+    "significance_critical_entries",
 }
 
 
@@ -556,3 +559,128 @@ def test_clean_run_has_no_prompt_leakage(sim_run):
     assert "prompt_leakage" not in summary["anomaly_counts"]
     rows = _metrics_rows(out_dir)
     assert all(row["prompt_leakage_hits"] == 0 for row in rows)
+
+
+def test_significance_projection_diagnostics_are_passive_and_replay_only():
+    state = {
+        "pressure_graph": {
+            "evolution_receipts": [
+                {
+                    "receipt_id": "pressure-receipt-1",
+                    "receipt_type": "pressure_escalated",
+                    "turn": 3,
+                    "node_id": "pressure-dock",
+                    "before": {"status": "active", "magnitude": 40},
+                    "after": {"status": "active", "magnitude": 70},
+                    "source_event_ids": ["info-raid", "evt-raid"],
+                    "source_kind": "information_item",
+                    "pressure_kind": "social_tension",
+                    "reason": "spreading rumour reached 2 scopes",
+                    "affected_location_ids": ["dock"],
+                }
+            ]
+        },
+        "relationship_effect_receipts": [
+            {
+                "receipt_id": "rel-src-1",
+                "receipt_type": "relationship_threshold_crossed",
+                "turn": 4,
+                "npc_name": "Greg Stahl",
+                "before_state": "neutral",
+                "after_state": "collapsed",
+                "source_event_id": "evt-rel-greg-turn-4",
+                "source_kind": "relationship_threshold_crossed",
+            }
+        ],
+        "scheduling_receipts": [
+            {
+                "receipt_id": "sched-1",
+                "receipt_type": "gravity_compress",
+                "turn": 5,
+                "subject_id": "actor:npc-mara",
+                "detail": "keep_active->compress",
+            }
+        ],
+    }
+    rolling = {
+        "scene": "dock",
+        "active_pressures": [{"label": "Harbor panic"}],
+        "active_npc_actions": [{"title": "Hold the gate"}],
+    }
+    state_before = copy.deepcopy(state)
+    rolling_before = copy.deepcopy(rolling)
+
+    projection = simulate_world.build_significance_diagnostics(state, turn_number=5)
+
+    assert projection["entry_count"] == 3
+    assert projection["entries"][0]["effect_category"] == "relationship"
+    assert state == state_before
+    assert rolling == rolling_before
+
+    collector = simulate_world.TelemetryCollector()
+    metrics_row, timeline = collector.observe_turn(
+        5,
+        state,
+        rolling,
+        {"significance_projection": projection},
+        [],
+    )
+    significance_events = [row for row in timeline if row["kind"] == "significance_projection"]
+
+    assert metrics_row["significance_entries"] == 3
+    assert metrics_row["significance_critical_entries"] >= 1
+    assert len(significance_events) == 1
+    assert significance_events[0]["entries"][0]["affected_entity_id"] == "Greg Stahl"
+    assert "significance_projection" not in rolling
+    assert "significance_projection" not in state
+
+
+def test_significance_diagnostics_do_not_leak_into_authoritative_or_prompt_state():
+    state = simulate_world.replayability.empty_replayability_state()
+    state["run_seed"] = "sim-significance-test"
+    prior_rolling = {
+        "relationship_vectors": [
+            {
+                "name": "Guard",
+                "trust": 0,
+                "loyalty": 0,
+                "fear": 0,
+                "resentment": 0,
+                "state": "neutral",
+            }
+        ]
+    }
+    merged_rolling = {
+        "relationship_vectors": [
+            {
+                "name": "Guard",
+                "trust": -70,
+                "loyalty": 10,
+                "fear": 15,
+                "resentment": 80,
+                "state": "collapsed",
+            }
+        ]
+    }
+    sources = simulate_world.replayability.collect_qualifying_echo_sources(
+        prior_rolling=prior_rolling,
+        merged_rolling=merged_rolling,
+        turn_number=3,
+        guard_adjustments=[],
+    )
+    finalized = simulate_world.replayability.finalize_action_turn(
+        copy.deepcopy(state),
+        sources,
+        3,
+    )
+    finalized_before = copy.deepcopy(finalized)
+
+    diagnostics = simulate_world.build_significance_diagnostics(
+        finalized,
+        turn_number=3,
+    )
+
+    assert diagnostics["entry_count"] >= 1
+    assert finalized == finalized_before
+    assert "significance_projection" not in finalized
+    assert "significance_projection" not in merged_rolling

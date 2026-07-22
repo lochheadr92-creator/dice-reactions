@@ -74,6 +74,29 @@ def test_rumour_creation_from_source_event_and_replay_duplicate_suppression():
     assert state["information_receipts"] == snapshot["information_receipts"]
 
 
+def test_information_receipt_history_keeps_newest_provenance_window():
+    state = _state()
+    state["information_receipts"] = [
+        {"receipt_id": f"old-{index}", "source_event_ids": [f"evt-{index}"]}
+        for index in range(information_engine.MAX_INFORMATION_RECEIPTS)
+    ]
+
+    added = information_engine._append_receipt(
+        state,
+        [],
+        receipt_type="information_created",
+        turn_number=99,
+        target_key="information_id",
+        target_id="info-new",
+        source_event_ids=["evt-new"],
+    )
+
+    assert added is True
+    assert len(state["information_receipts"]) == information_engine.MAX_INFORMATION_RECEIPTS
+    assert state["information_receipts"][0]["receipt_id"] == "old-1"
+    assert state["information_receipts"][-1]["source_event_ids"] == ["evt-new"]
+
+
 def test_belief_and_reputation_do_not_overwrite_objective_event_truth():
     event = _pressure_event(kind="theft", magnitude=70)
     state = _state(events=[copy.deepcopy(event)])

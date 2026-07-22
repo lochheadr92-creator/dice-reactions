@@ -66,12 +66,14 @@ FORBIDDEN_MODULES = ("gateway", "ai_service", "server")
 _FORBIDDEN_PRELOADED = sorted(m for m in FORBIDDEN_MODULES if m in sys.modules)
 
 import consequence_echoes as echoes  # noqa: E402
+import causal_visibility  # noqa: E402
 import goal_engine  # noqa: E402
 import information_engine  # noqa: E402
 import investigation_engine  # noqa: E402
 import npc_action_engine  # noqa: E402
 import pressure_graph  # noqa: E402
 import replayability  # noqa: E402
+import significance_projection  # noqa: E402
 import situation_engine  # noqa: E402
 import world_event_engine  # noqa: E402
 import world_state_consumers as world_consumers  # noqa: E402
@@ -753,6 +755,32 @@ class TelemetryCollector:
                     "move_kind": str(diagnostics["npc_move_kind"]),
                 }
             )
+        significance_projection_diag = diagnostics.get("significance_projection")
+        significance_entries = []
+        if isinstance(significance_projection_diag, Mapping):
+            significance_entries = [
+                row
+                for row in (significance_projection_diag.get("entries") or [])
+                if isinstance(row, Mapping)
+            ]
+        if significance_entries:
+            timeline.append(
+                {
+                    "turn": turn,
+                    "kind": "significance_projection",
+                    "entry_count": len(significance_entries),
+                    "entries": [
+                        {
+                            "affected_entity_type": str(row.get("affected_entity_type") or ""),
+                            "affected_entity_id": str(row.get("affected_entity_id") or ""),
+                            "effect_category": str(row.get("effect_category") or ""),
+                            "significance_band": str(row.get("significance_band") or ""),
+                            "significance_score": row.get("significance_score"),
+                        }
+                        for row in significance_entries[:3]
+                    ],
+                }
+            )
         for evt in threshold_events or []:
             timeline.append(
                 {
@@ -1217,6 +1245,14 @@ class TelemetryCollector:
             "projected_active_pressures": len(
                 merged_rolling.get("active_pressures") or []
             ),
+            "significance_entries": len(significance_entries),
+            "significance_critical_entries": len(
+                [
+                    row
+                    for row in significance_entries
+                    if str(row.get("significance_band") or "") == "critical"
+                ]
+            ),
         }
         return metrics_row, timeline[:TIMELINE_EVENTS_PER_TURN_CAP]
 
@@ -1302,7 +1338,24 @@ def advance_turn(
     state = replayability.finalize_action_turn(
         state, qualifying_sources, turn_number
     )
+    diagnostics["significance_projection"] = build_significance_diagnostics(
+        state,
+        turn_number=turn_number,
+    )
     return state, merged_rolling, diagnostics, threshold_events
+
+
+def build_significance_diagnostics(
+    replayability_state: Mapping[str, Any],
+    *,
+    turn_number: int,
+) -> Dict[str, Any]:
+    """Build a passive Significance projection from authoritative replayability state."""
+    causal_projection = causal_visibility.project_causal_visibility(replayability_state)
+    return significance_projection.project_significance(
+        causal_projection.get("entries") or [],
+        {"turn_sequence": turn_number},
+    )
 
 
 def _canonical_dumps(value: Any) -> str:

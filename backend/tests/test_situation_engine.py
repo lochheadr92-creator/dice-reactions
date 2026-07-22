@@ -263,6 +263,14 @@ def test_prompt_safe_projection_hides_situation_receipts_and_metadata():
                 "severity": 5,
                 "source_event_ids": ["evt-hidden"],
                 "updated_turn": 3,
+                "world_state_signals": [
+                    {
+                        "signal_id": "route-hidden",
+                        "signal_kind": "route_blocked",
+                        "severity": 5,
+                        "status": "blocked",
+                    }
+                ],
             }
         ],
     }
@@ -273,6 +281,54 @@ def test_prompt_safe_projection_hides_situation_receipts_and_metadata():
     assert safe["active_situations"][0]["situation_id"] == "s1"
     assert "source_event_ids" not in safe["active_situations"][0]
     assert "updated_turn" not in safe["active_situations"][0]
+    assert safe["active_situations"][0]["world_state_signals"] == [
+        {"signal_kind": "route_blocked", "severity": 5, "status": "blocked"}
+    ]
+
+
+def test_promoted_situation_omits_world_state_signal_identifiers():
+    state = _replay_state(situations=[_situation("s-route")])
+    rolling = {
+        "scene": "market",
+        "travel_routes": [
+            {
+                "id": "route-market",
+                "location_id": "market",
+                "status": "blocked",
+            }
+        ],
+    }
+
+    promoted = situation_engine.project_promoted_situations_for_rolling(
+        state,
+        rolling_state=rolling,
+    )
+
+    assert promoted[0]["world_state_signals"] == [
+        {"signal_kind": "route_blocked", "severity": 5, "status": "blocked"}
+    ]
+
+
+def test_situation_receipt_history_keeps_newest_provenance_window():
+    state = _replay_state()
+    state["situation_receipts"] = [
+        {"receipt_id": f"old-{index}", "source_event_ids": [f"evt-{index}"]}
+        for index in range(situation_engine.MAX_SITUATION_RECEIPTS)
+    ]
+
+    added = situation_engine._append_receipt(
+        state,
+        [],
+        receipt_type="situation_created",
+        turn_number=99,
+        situation=_situation("s-new"),
+        source_event_ids=["evt-new"],
+    )
+
+    assert added is True
+    assert len(state["situation_receipts"]) == situation_engine.MAX_SITUATION_RECEIPTS
+    assert state["situation_receipts"][0]["receipt_id"] == "old-1"
+    assert state["situation_receipts"][-1]["source_event_ids"] == ["evt-new"]
 
 
 def test_utility_ai_situation_modifier_is_bounded_and_absent_keeps_legacy_score():
