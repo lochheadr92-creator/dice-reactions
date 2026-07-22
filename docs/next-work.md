@@ -92,10 +92,10 @@ Practical backlog from confirmed repo gaps on the **`emergent`** branch. No spec
 | Field | Detail |
 |-------|--------|
 | **Status** | ADR-024 Phase 1 complete; NW-UTILITY-01 complete on `emergent` @ `cf2329d`; deterministic live-handoff proof complete |
-| **Resolution** | Shadow comparison always runs. `ENABLE_UTILITY_AI_LIVE_SELECTION` defaults OFF; when enabled, an authorised band-aware `utility_ai.select_action` winner is handed to the unchanged `npc_world_moves` commit path |
-| **Safety** | Flag OFF preserves current live selection; missing/invalid Utility inputs fail closed to the heuristic winner; dev-only diagnostics record enabled/applied/source/candidate/receipt evidence |
-| **Verification status** | Deterministic backend tests prove eligible candidate generation, agreement and disagreement live-handoff paths, and committed receipts matching the Utility AI winner. `TURN_INTEGRATION_UNVERIFIED` remains correct because live LLM gameplay turn-path acceptance is separate |
-| **Follow-up** | Real LLM gameplay turn-path acceptance before any `TURN_INTEGRATION_VERIFIED` claim or default activation |
+| **Resolution** | Shadow comparison always runs. `ENABLE_CANONICAL_UTILITY` defaults ON for the beta golden path; `ENABLE_UTILITY_AI_LIVE_SELECTION` remains a legacy alias. An authorised band-aware `utility_ai.select_action` winner is handed to the unchanged `npc_world_moves` commit path. |
+| **Safety** | Flag OFF restores heuristic selection; missing/invalid Utility inputs fail closed to the heuristic winner; dev-only diagnostics record enabled/applied/source/candidate/receipt evidence |
+| **Verification status** | Deterministic backend tests prove eligible candidate generation, agreement and disagreement live-handoff paths, and committed receipts matching the Utility AI winner. `TURN_INTEGRATION_UNVERIFIED` remains correct only for provider-backed gameplay acceptance |
+| **Follow-up** | Provider-backed gameplay acceptance before any `TURN_INTEGRATION_VERIFIED` or production-validation claim |
 
 ---
 
@@ -103,10 +103,10 @@ Practical backlog from confirmed repo gaps on the **`emergent`** branch. No spec
 
 | Field | Detail |
 |-------|--------|
-| **Status** | Promotion infrastructure landed on `emergent`; all `ENABLE_CANONICAL_*` flags default OFF. OFF path byte-identical to pre-promotion behaviour |
+| **Status** | Promotion infrastructure landed on `emergent`; `ENABLE_CANONICAL_UTILITY` defaults ON, while the Actor Resolution, Gravity, and Memory Retrieval promotion flags default OFF. Explicit all-flags-off remains byte-identical to pre-promotion behaviour |
 | **Resolution** | `foundation_promotion.py` (pure, fail-closed routing) + flags in `ai_config.py`; Stage 1 Actor Resolution veto in `replayability.py`; Stage 2 Gravity `npc_memory` prompt-projection ordering in `memory.py`; Stage 3 `ENABLE_CANONICAL_UTILITY` alias for the ADR-024 handoff; Stage 4 Memory Retrieval flag + diagnostics with prompt injection gated OFF |
 | **Safety** | Every helper returns legacy on flag-off / error / mapping gap; deterministic (no new RNG/I/O/LLM); persisted `rolling_state` untouched; context-budget count unchanged; canonical-vs-legacy diagnostics are dev/admin only |
-| **Verification** | Offline deterministic: 76-passed OFF baseline (foundation + integration + context budget) + new `test_foundation_promotion.py`. Live/LLM acceptance for any flag-ON default flip is separate and PENDING |
+| **Verification** | Offline deterministic promotion coverage is green; Utility default-on routing and fail-closed fallback are verified. Provider-backed Utility gameplay acceptance remains pending; any future Actor/Gravity/Memory default flip requires separate acceptance |
 | **Remaining blocker** | **Memory Retrieval authoritative prompt use** — blocked by `SEPARATE_SHADOW_ACCEPTANCE_REQUIRED` (`D_MEMORY_RETRIEVAL_SHADOW`); requires granting `CANONICAL_MEMORY_RETRIEVAL_PROMPT_INJECTION_ACCEPTED` after a separate shadow-acceptance pass |
 | **Docs** | `docs/foundation-promotion.md`; `current-state.md` promotion section (2026-07-02) |
 

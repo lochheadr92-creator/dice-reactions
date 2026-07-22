@@ -101,7 +101,7 @@ Authoritative truth = prior `session.rolling_state` + `session.last_state`. Gate
 - Authority: prior turn vectors; LLM-injected vectors ignored (`test_engine_owns_vectors_ignores_llm_injection`)
 - Per turn: neglect decay, regex event detection, stance sync on `npcs` list
 - Prompt: `build_relationship_block` — behavioural guidance without exposing numbers to player UI
-- **Not supported:** NPC↔NPC edges, actor resolution, Utility AI
+- **Not owned by this subsystem:** NPC↔NPC edges or actor/Utility selection; Utility AI is a separate deterministic pre-provider selector and may consume relationship-derived inputs
 
 ## HUD shaping (`hud.py`)
 

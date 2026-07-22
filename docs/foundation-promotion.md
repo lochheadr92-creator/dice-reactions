@@ -1,7 +1,8 @@
 # Foundation Promotion — Phase 2 (Foundation Completion)
 
 **Branch:** `emergent`
-**Status:** Promotion infrastructure landed; **all promotion flags default OFF**.
+**Status:** Promotion infrastructure landed; Utility defaults ON, while Actor
+Resolution, Gravity, and Memory Retrieval default OFF.
 **Scope:** Promote the canonical foundation subsystems from *shadow evaluation*
 into the *authoritative* decision path, one explicit feature flag at a time,
 with legacy fallback, fail-closed error handling, and comparison diagnostics.
@@ -39,7 +40,7 @@ modules exist and execute every turn via `foundation_integration.evaluate_founda
 
 ---
 
-## Feature flags (all default OFF)
+## Feature flags
 
 Defined in `ai_config.py`. Read-only helpers live in `foundation_promotion.py`.
 
@@ -47,7 +48,7 @@ Defined in `ai_config.py`. Read-only helpers live in `foundation_promotion.py`.
 |------|---------|:------:|----------------|
 | Actor Resolution | `ENABLE_CANONICAL_ACTOR_RESOLUTION` | `false` | Canonical Actor Resolution is the authority over *who* acts each turn (veto + re-pick within the existing candidate set). |
 | Gravity Governance | `ENABLE_CANONICAL_GRAVITY` | `false` | Canonical retention scoring ranks the `npc_memory` prompt projection (persisted state untouched). |
-| Utility AI | `ENABLE_CANONICAL_UTILITY` | `false` | Authorised `utility_ai.select_action` winner drives the live NPC move (canonical name for the ADR-024 handoff). |
+| Utility AI | `ENABLE_CANONICAL_UTILITY` | `true` | Authorised `utility_ai.select_action` winner drives the live NPC move (canonical name for the ADR-024 handoff). |
 | Memory Retrieval | `ENABLE_CANONICAL_MEMORY_RETRIEVAL` | `false` | Surfaces canonical retrieval in diagnostics. **Does not** feed the prompt (see blocker). |
 
 Non-env code constant:
@@ -132,7 +133,7 @@ before this promotion is complete.**
 |-----------|-------|
 | Actor Resolution authoritative behind flag | ✅ (default OFF) |
 | Gravity Governance authoritative behind flag | ✅ (prompt projection; default OFF) |
-| Utility AI authoritative behind flag | ✅ (default OFF) |
+| Utility AI authoritative behind flag | ✅ (default ON; deterministic routing verified, provider-backed acceptance pending) |
 | Memory Retrieval authoritative | ⛔ blocked by `SEPARATE_SHADOW_ACCEPTANCE_REQUIRED` |
 | Legacy implementations available behind flags | ✅ |
 | Replay deterministic | ✅ (pure, no new RNG) |

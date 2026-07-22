@@ -353,18 +353,18 @@ For each mode: detection, prevention, recovery, and **current protection status*
 
 ## FM-25: Replayability state unbounded growth
 
-**Scope:** `recovery/living-cast-working-tree` only — Living Cast modules are **not on `emergent` HEAD**; unmerged, not deployed.
+**Scope:** current `emergent` deterministic replayability state.
 
 | Field | Detail |
 |-------|--------|
-| **Trigger** | Agendas, receipts, echoes, or beat history append without cap enforcement; echo references pin full move receipts indefinitely. |
+| **Trigger** | Any authoritative or diagnostic collection appends without cap enforcement; specifically, matured echoes can enter `consequence_echoes.pending` faster than the one-per-turn firing rate. |
 | **Effect** | Session document grows without bound; Mongo payload bloat; nondeterministic eviction. |
-| **Detection** | `living_cast_state_metrics`; `test_living_cast_bounded_state.py`; `REPLAYABILITY_STATE_BUDGET_BYTES` assertion. |
-| **Prevention** | Documented hard caps on every slice; `enforce_npc_move_receipt_cap` (compress then drop); echo `source_provenance` copied at schedule (receipts not pinned); relationship threshold receipts separate from move bundles. |
+| **Detection** | `living_cast_state_metrics`; `bounded_collection_report`; focused cap tests; repeated 500-turn simulation harness; `REPLAYABILITY_STATE_BUDGET_BYTES` telemetry/assertions. |
+| **Prevention** | Deterministic hard caps on every persisted slice, including `MAX_PENDING = 16`; `enforce_npc_move_receipt_cap` compresses then drops; echo provenance does not pin full move receipts; the measured full-state envelope is 320 KiB. |
 | **Recovery** | Cap functions are deterministic and idempotent; reset clears `replayability_state`. |
 | **Files** | `living_cast_bounded_fixtures.py`, `npc_world_moves.py`, `consequence_echoes.py`, `replayability.py`, `arc_diversity.py`, `npc_agendas.py` |
-| **Tests** | `test_living_cast_bounded_state.py` ✅ |
-| **Status** | **Protected** (deterministic, measured at cap) |
+| **Tests** | `test_consequence_echoes.py`, `test_living_cast_bounded_state.py`, `test_living_cast_integration.py`, `test_simulation_harness.py` ✅ |
+| **Status** | **Protected** (deterministic; 200-turn 12-NPC state stabilizes near 251 KiB; repeated 500-turn standard harness green) |
 
 ---
 
@@ -449,4 +449,4 @@ For each mode: detection, prevention, recovery, and **current protection status*
 
 ## Removed from catalogue (N/A)
 
-Historical pre-foundation scoring equivalence remains **N/A** because that implementation never existed. Foundation Utility AI scoring now exists in shadow mode; determinism and non-finite-input protection are covered by its focused tests and must be revisited before any live/load-bearing activation.
+Historical pre-foundation scoring equivalence remains **N/A** because that implementation never existed. Foundation Utility AI scoring now drives the deterministic live selector by default through `ENABLE_CANONICAL_UTILITY`; shadow comparison and fail-closed heuristic fallback remain active. Provider-backed gameplay acceptance is still unverified.

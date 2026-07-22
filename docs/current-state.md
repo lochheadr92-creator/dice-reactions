@@ -1,6 +1,6 @@
 # Current State Snapshot
 
-**Generated:** 2026-06-25 (reconciled against `emergent` runtime @ `cf2329d`)
+**Generated:** 2026-07-22 (reconciled against the local `emergent` runtime and deterministic test suite)
 **Repository:** `dice-reactions` (FastAPI backend + Expo frontend)
 **Git branch:** `emergent` (canonical runtime branch for this documentation pass)
 
@@ -29,7 +29,7 @@ This document is the canonical operational snapshot of the repository **as it ex
 | Merge status | Canonical runtime branch | **Unmerged** — not deployed |
 | CI coverage | Deterministic CI on `emergent` only | **Not covered by emergent CI** |
 | Living Cast | **Present & live on `emergent`** -- `npc_agendas.py`, `npc_world_moves.py`, `arc_diversity.py`, `consequence_echoes.py`, `living_cast_*` merged; wired into the live turn path (`replayability.prepare_action_turn` -> `select_npc_move`/`commit_npc_move`). Remains a **local substitute** for full PRD Ch 25 Actor Resolution; ADR-024 supplies the Utility AI scoring bridge. | Superseded -- merged to `emergent` |
-| Actor Resolution / Utility AI | ADR-024 Phase 1 and NW-UTILITY-01 are complete. `ENABLE_UTILITY_AI_LIVE_SELECTION` exposes feature-gated live selection and defaults OFF. Shadow comparison always calls `utility_ai.select_action` over the eligible `npc_world_moves` candidate set; flag ON hands an authorised Utility AI winner to the unchanged commit path. Deterministic backend proof now covers eligible candidate generation, agreement and disagreement handoff paths, and committed receipts matching the Utility AI winner; live LLM gameplay validation remains separate. Utility AI remains `TURN_INTEGRATION_UNVERIFIED`; full PRD Ch 25 Actor Resolution remains incomplete. | Merged to `emergent` |
+| Actor Resolution / Utility AI | ADR-024 Phase 1 and NW-UTILITY-01 are complete. Canonical Utility AI live selection defaults ON through `ENABLE_CANONICAL_UTILITY`; `ENABLE_UTILITY_AI_LIVE_SELECTION` remains a legacy alias. Shadow comparison always calls `utility_ai.select_action` over the eligible `npc_world_moves` candidate set; an authorised Utility AI winner is handed to the unchanged commit path. Deterministic backend proof covers eligible candidate generation, agreement and disagreement handoff paths, and committed receipts matching the Utility AI winner; provider-backed gameplay validation remains separate. Full PRD Ch 25 Actor Resolution remains incomplete. | Merged to `emergent` |
 | World execution mode | `TURN_COUPLED_AUTONOMY_ONLY` | Same (turn-coupled; no offline sim) |
 | Event sourcing | Turn log only on `emergent` HEAD | **LOCAL SUBSTITUTE** — bounded transition receipts provide idempotency and causal pointers but do not provide canonical reconstruction or durable complete event history; **DEFERRED** — full contract unavailable beyond PRD summary |
 | Pressure authority | **ADR-023 complete** — `replayability_state.pressure_graph` is canonical; `rolling_state.active_pressures` is a derived, engine-owned projection | Recovery branch superseded by canonical `emergent` implementation |
@@ -80,7 +80,7 @@ Do **not** report 39.8%. The chapter matrix remains authoritative.
 | `MAX_RETRIES` | `2` per model | `backend/ai_config.py` |
 | `PROVIDER_TIMEOUT` | `180` s | `backend/ai_config.py` |
 | `ENABLE_DEBUG_PANEL` | `true` | `backend/ai_config.py` |
-| `ENABLE_UTILITY_AI_LIVE_SELECTION` | `false` | `backend/ai_config.py` |
+| `ENABLE_CANONICAL_UTILITY` | `true` | `backend/ai_config.py` |
 | `developer_mode` (admin settings) | `false` | `backend/server.py` (`get_ai_settings`) |
 | `ADMIN_API_KEY` | unset unless configured in deployment | `backend/security.py` — required for admin routes |
 | `CORS_ORIGINS` | `*` | `backend/server.py` |
@@ -101,9 +101,9 @@ Do **not** report 39.8%. The chapter matrix remains authoritative.
 |--------|--------|----------|
 | Story session CRUD | Implemented | Code (`server.py` routes) |
 | Early-Game Pacing Governor v1 | Implemented (deterministic structural Stage 1) | Code (`pacing.py`) + Tests (`test_early_game_pacing.py` ✅) |
-| Replayability Engine v1 | Implemented (deterministic — session `replayability_state`); ADR-023 pressure authority complete; Stage 6D-1A passive `npc_traits` / `settlement_traits` seeded at init (not consumed by turn path) | Code (`replayability.py`, `npc_settlement_traits.py`, `run_identity.py`, `opening_state.py`, `pressure_graph.py`, `consequence_echoes.py`) + Tests (`test_run_identity.py`, `test_opening_state.py`, `test_pressure_graph.py`, `test_consequence_echoes.py`, `test_replayability_integration.py`, `test_npc_settlement_traits.py` ✅) |
+| Replayability Engine v1 | Implemented (deterministic — session `replayability_state`); every persisted collection, including pending consequence echoes, has an explicit cap; the measured full-state envelope is 320 KiB | Code (`replayability.py`, `npc_settlement_traits.py`, `run_identity.py`, `opening_state.py`, `pressure_graph.py`, `consequence_echoes.py`) + focused replayability/Living Cast tests and repeated 500-turn simulation harness ✅ |
 | P1 actor stress substrate | **Canonical — `TURN_INTEGRATION_VERIFIED` / `UTILITY_STRESS_INPUT_COMPLETE`** | Code (`stress.py`, `foundation_snapshot.py`, `replayability.py`, `server.py`) + Tests (`test_stress.py`, `test_stress_integration.py`) |
-| Foundation Utility AI | **ADR-024 Phase 1 + NW-UTILITY-01 complete; deterministic live-handoff proof complete; feature-gated live selection available; default OFF; `TURN_INTEGRATION_UNVERIFIED`** — shadow comparison remains active in both modes; authorised band-aware Utility AI winners drive NPC choice only when enabled | Code (`ai_config.py`, `utility_ai.py`, `living_cast_shadow.py`, `replayability.py`) + Tests (foundation acceptance / utility / `test_living_cast_shadow` agreement + disagreement live-handoff proof / Living Cast integration) |
+| Foundation Utility AI | **ADR-024 Phase 1 + NW-UTILITY-01 complete; canonical live selection defaults ON; deterministic live routing verified; provider-backed gameplay acceptance unverified** — `TURN_INTEGRATION_UNVERIFIED` now refers only to that provider-backed acceptance gap; invalid or unauthorised Utility inputs fail closed to the heuristic winner | Code (`ai_config.py`, `utility_ai.py`, `living_cast_shadow.py`, `replayability.py`) + foundation acceptance / Utility / live-handoff / Living Cast integration tests ✅ |
 | Turn generation pipeline | Implemented | Code |
 | Anti-Hallucination Gateway | Implemented | Code (`gateway.py`) + Tests (`test_anti_hallucination_gateway.py`, `test_gateway_e2e.py` ✅) |
 | LLM chokepoint (`invoke_llm`) | Implemented | Code — all `_generate_turn` / retry calls route through `gateway.invoke_llm` |
@@ -139,7 +139,7 @@ Do **not** report 39.8%. The chapter matrix remains authoritative.
 
 P1 stress is canonical on `emergent` as of merge commit `5c042fb`, with runtime status **`TURN_INTEGRATION_VERIFIED`** and Utility input status **`UTILITY_STRESS_INPUT_COMPLETE`**. Actor stress is deterministic, persisted in `rolling_state["actor_stress"]`, and engine-owned across model consolidation. When authoritative stress values are present, stress and capacity are committed into foundation snapshot identity.
 
-The accepted P1 update scope is **living actors with active agendas only**. Widening to all scene-present actors is deferred to a separate future design decision. Utility AI remains shadow-evaluated on every eligible turn and can drive the existing NPC commit path only when `ENABLE_UTILITY_AI_LIVE_SELECTION=true`; the default is false. Deterministic tests now prove candidate generation plus agreement and disagreement live handoff, including committed receipts matching the Utility AI winner. Live LLM gameplay validation remains separate, so live turn integration remains unverified.
+The accepted P1 update scope is **living actors with active agendas only**. Widening to all scene-present actors is deferred to a separate future design decision. Utility AI remains shadow-evaluated on every eligible turn and, by default, drives the existing NPC commit path through `ENABLE_CANONICAL_UTILITY=true`; `ENABLE_UTILITY_AI_LIVE_SELECTION` remains a legacy alias. Deterministic tests cover candidate generation plus agreement and disagreement live handoff, including committed receipts matching the Utility AI winner. Provider-backed gameplay validation remains separate.
 
 ---
 
@@ -408,7 +408,8 @@ blocker code; candidate visible in shadow but never an authorised replacement.
 Determinism/hash: candidate identity, `candidate_set_hash`, noise seed, and
 tie-breaking unchanged; P2 diagnostics excluded from `state_hash`; CALM/invalid
 byte-identical to pre-P2. P1 accumulation/scope/off-screen and snapshot identity
-unchanged. Band-aware Utility AI live handoff is default-off and fail-closed.
+unchanged. Band-aware Utility AI live handoff is default-on through
+`ENABLE_CANONICAL_UTILITY` and remains fail-closed to the heuristic winner.
 P3/P4 remain deferred.
 
 **Verification (truthful):** `stress.py`+`utility_ai.py` compile; focused
@@ -477,9 +478,9 @@ real LLM turns. Not run; requires a live stack.
 
 ## Foundation promotion — Phase 2 (2026-07-02)
 
-**Status: promotion infrastructure landed on `emergent`; all promotion flags
-default OFF. With every flag off, the turn path is byte-identical to
-pre-promotion behaviour.**
+**Status: promotion infrastructure landed on `emergent`; Utility defaults ON,
+while Actor Resolution, Gravity, and Memory Retrieval default OFF. An explicit
+all-flags-off configuration remains byte-identical to pre-promotion behaviour.**
 
 The four canonical foundation subsystems (Actor Resolution, Gravity Governance,
 Utility AI, Memory Retrieval) already run every turn as a shadow evaluation via
@@ -488,9 +489,9 @@ Utility AI, Memory Retrieval) already run every turn as a shadow evaluation via
 **promotion layer** that lets each canonical subsystem become the authoritative
 decision path while the legacy implementation remains available as fallback.
 
-- **Flags (default OFF, `ai_config.py`):** `ENABLE_CANONICAL_ACTOR_RESOLUTION`,
-  `ENABLE_CANONICAL_GRAVITY`, `ENABLE_CANONICAL_UTILITY`,
-  `ENABLE_CANONICAL_MEMORY_RETRIEVAL`. Routing helpers live in
+- **Flags (`ai_config.py`):** `ENABLE_CANONICAL_UTILITY` defaults ON;
+  `ENABLE_CANONICAL_ACTOR_RESOLUTION`, `ENABLE_CANONICAL_GRAVITY`, and
+  `ENABLE_CANONICAL_MEMORY_RETRIEVAL` default OFF. Routing helpers live in
   `foundation_promotion.py` (pure, deterministic, no I/O/LLM).
 - **Actor Resolution** (Stage 1): canonical veto + re-pick over the existing NPC
   candidate set; unmapped actors fail open; legacy `resolve_actor_tier` fallback.
@@ -499,7 +500,8 @@ decision path while the legacy implementation remains available as fallback.
   retained count unchanged (context budget preserved); legacy heuristic fallback.
 - **Utility AI** (Stage 3): `ENABLE_CANONICAL_UTILITY` is the canonical name for
   the existing ADR-024 live handoff; legacy `ENABLE_UTILITY_AI_LIVE_SELECTION`
-  remains an accepted alias.
+  remains an accepted alias. Deterministic live routing is verified; provider-backed
+  gameplay acceptance remains unverified.
 - **Memory Retrieval** (Stage 4): **BLOCKED** for authoritative prompt use by
   `SEPARATE_SHADOW_ACCEPTANCE_REQUIRED` (`D_MEMORY_RETRIEVAL_SHADOW`). Flag +
   comparison diagnostics added; prompt injection stays gated OFF behind

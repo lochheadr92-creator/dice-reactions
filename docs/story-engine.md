@@ -274,24 +274,28 @@ When `developer_mode` is false (default in code):
 
 Frontend `sanitize.ts` adds a presentation-only filter on paragraphs and choices regardless of API sanitization.
 
-## Planned / not present on `emergent` HEAD
+## Current foundation/runtime status on `emergent`
 
 | System | Status |
 |--------|--------|
-| Utility AI | Planned (PRD Ch 27 summary only) — not on `emergent` HEAD; recovery has **local substitute** in `npc_world_moves.py` (unmerged) |
-| Actor resolution | Planned (PRD Ch 25 summary only) — not on `emergent` HEAD; recovery has **local substitute** tier policy (unmerged) |
+| Utility AI | Implemented; canonical selection defaults ON through `ENABLE_CANONICAL_UTILITY`; deterministic live routing verified; fail-closed heuristic fallback retained; provider-backed gameplay acceptance unverified |
+| Actor resolution | Canonical module present in shadow/default-off promotion mode; the existing `npc_world_moves` tier resolver remains the live local substitute |
 | Formal event sourcing | **DEFERRED** — full contract unavailable beyond PRD summary; turn log only on `emergent` HEAD |
-| Living Cast | **Provisional integrated local substitute** on `recovery/living-cast-working-tree` only — unmerged, not deployed |
+| Living Cast | Merged and live on `emergent` as a local substitute for the unavailable full PRD contract |
 | Scoring / NaN ranking guards | N/A — never existed in this repo |
 
 ---
 
-## Recovery branch appendix (Living Cast — provisional)
+## Historical recovery branch appendix (superseded)
+
+The snapshot below is retained as historical merge context. Current runtime
+status is the table above; do not treat the default-off/unmerged wording below
+as operational truth.
 
 **Branch:** `recovery/living-cast-working-tree` @ `4dadb3f` — **unmerged**, **not deployed**, **not covered by emergent CI**, **not merge-ready**.
 
-Living Cast adds `npc_agendas.py`, `npc_world_moves.py`, `arc_diversity.py` orchestrated in `replayability.prepare_action_turn` with world execution mode `TURN_COUPLED_AUTONOMY_ONLY`. Actor Resolution and Utility AI are **local substitutes** — not full PRD Ch 25/27 modules (Bible full text ends at Chapter 21; Chapters 22–32 are PRD tracker summaries only).
+At that point, Living Cast added `npc_agendas.py`, `npc_world_moves.py`, `arc_diversity.py` orchestrated in `replayability.prepare_action_turn` with world execution mode `TURN_COUPLED_AUTONOMY_ONLY`. Actor Resolution and Utility AI were classified as **local substitutes** rather than full PRD Ch 25/27 modules (Bible full text ends at Chapter 21; Chapters 22–32 are PRD tracker summaries only).
 
 Bounded `npc_move_receipts` and `transition_receipts` are **LOCAL SUBSTITUTE** — they provide idempotency and causal pointers but do not provide canonical reconstruction or durable complete event history.
 
-**Blockers before merge:** pressure authority unresolved; relationship provenance unresolved (vectors mutated from player intent + generated prose); golden-path blockers remain. Feature development remains frozen.
+**Historical blockers before merge (superseded):** pressure authority unresolved; relationship provenance unresolved (vectors mutated from player intent + generated prose); golden-path blockers remained at that snapshot.

@@ -7,6 +7,12 @@
 **Amends / relates:** ADR-020 (Living Cast / `npc_world_moves`), ADR-022 (P2 stress bands feed the canon scorer), ADR-023 (pressure authority — `pressure_graph` feeds the canon dimensions)
 **Source material:** T2 static turn-path trace + live-NPC-selection design pass (code inspection, 2026-06-24)
 
+> **Current status (2026-07-22; supersedes only the activation/default wording below):**
+> `ENABLE_CANONICAL_UTILITY` now defaults ON. Deterministic live routing and the
+> fail-closed heuristic fallback are verified. Provider-backed gameplay acceptance
+> remains unverified, so `TURN_INTEGRATION_UNVERIFIED` applies only to that gap.
+> The original default-off decision text is retained below as historical context.
+
 ---
 
 ## 1. Context / problem

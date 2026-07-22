@@ -112,7 +112,8 @@ Current canonical baseline on `emergent` is **`TURN_INTEGRATION_VERIFIED` / `UTI
 - [ ] Stress updates remain scoped to living actors with active agendas
 - [ ] Any proposal to include all scene-present actors is handled as a separate design decision
 - [ ] If stress runtime code changed, rerun compile, focused P1/foundation/utility/determinism tests, turn-path integration, and snapshot hash comparison
-- [ ] Utility AI remains shadow-mode and does not drive live NPC actions unless a separate activation decision and proof have landed
+- [ ] Canonical Utility AI defaults ON, deterministic handoff remains green, and invalid/unauthorised inputs still fail closed to the heuristic path
+- [ ] Provider-backed Utility gameplay acceptance is not described as verified or production-validated until separately run
 - [ ] P1 is described as canonical only after its runtime commit is merged into `emergent`
 
 ### Migration / index review

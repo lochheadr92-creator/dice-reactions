@@ -201,7 +201,7 @@ These topics appear in `memory/PRD.md` or design briefs but **lack sufficient co
 |-------|---------|
 | Actor caps / actor resolution | No resolver module; NPCs are LLM-authored lists (PRD Ch 25 ❌) |
 | NPC↔NPC relationship edges | Only NPC→player vectors implemented |
-| Deterministic utility AI | Foundation implementation is shadow-evaluated on every eligible turn; ADR-024 provides a default-off, fail-closed feature flag for live selection |
+| Deterministic utility AI | Foundation implementation is shadow-evaluated on every eligible turn and drives live selection by default through `ENABLE_CANONICAL_UTILITY`; invalid/unauthorised inputs fail closed to the heuristic winner; provider-backed acceptance remains unverified |
 | Gravity-based memory retention | Only context budget + rolling merge |
 | Formal event sourcing | Turn log only (see ADR-003) |
 
@@ -435,7 +435,8 @@ Promote to ADR when implementation and tests exist.
 | Field | Detail |
 |-------|--------|
 | **Date** | Proposed 2026-06-24; Phase 2 accepted 2026-06-25 |
-| **Status** | **Phase 1 retained; NW-UTILITY-01 Phase 2 implemented behind default-off `ENABLE_UTILITY_AI_LIVE_SELECTION`.** Utility AI remains shadow-evaluated in both modes; authorised winners become live only when enabled. `TURN_INTEGRATION_UNVERIFIED`. |
+| **Historical status** | **Phase 1 retained; NW-UTILITY-01 Phase 2 implemented behind default-off `ENABLE_UTILITY_AI_LIVE_SELECTION`.** Utility AI remained shadow-evaluated in both modes; authorised winners became live only when enabled. |
+| **Current status (2026-07-22)** | Default wording superseded: `ENABLE_CANONICAL_UTILITY` defaults ON; deterministic live routing and fail-closed fallback are verified. `TURN_INTEGRATION_UNVERIFIED` remains only for provider-backed gameplay acceptance. |
 | **Context** | T2 static trace: live NPC moves are decided + committed by `npc_world_moves` (local heuristic `score_move`, ADR-020 substitute); Ch 27 `utility_ai.select_action` runs after commit and is staged-but-unconsumed (`foundation_prepared_v1.utility_selection` has no readers). Two parallel engine-state scorers; canon Ch 27 is inert. Canon-fidelity + duplication problem (not a State-is-truth violation). |
 | **Decision** | `npc_world_moves` remains the eligibility/target/effect/receipt/commit substrate. The same-candidate comparison always calls band-aware `utility_ai.select_action`. Flag OFF commits the existing heuristic winner; flag ON hands off an authorised Utility AI winner. Missing/invalid authoritative inputs fail closed to the heuristic. |
 | **Migration** | Phase 0 ADR; Phase 1 same-candidate-set shadow comparison; Phase 2 default-off handoff at the pre-commit seam. The local scorer remains available for shadow comparison and safe fallback; no effects/receipt/pressure/server logic changes. |
