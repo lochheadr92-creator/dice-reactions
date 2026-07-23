@@ -73,21 +73,86 @@ const MOMENTUM_COLOR_MAP: Record<string, string> = {
   lost: COLORS.danger,
 };
 
-// "Why this happened" — display chips for player-safe causal event kinds.
+// Outcome-card event kinds (player-safe; state dumps belong in the HUD / bag).
 const WHY_CHIPS: Record<string, { label: string; color: string }> = {
   opening: { label: "WORLD", color: COLORS.textSecondary },
   action: { label: "YOU", color: COLORS.primary },
-  change: { label: "CHANGE", color: COLORS.objective },
+  change: { label: "CONSEQUENCE", color: COLORS.objective },
   cast: { label: "CAST", color: COLORS.stress },
   seed: { label: "SET", color: COLORS.textMuted },
   return: { label: "RETURN", color: COLORS.danger },
 };
+
+// Words already covered by status chips — omit from the compact condition line.
+const CONDITION_CHIP_DUPLICATES = new Set([
+  "stable",
+  "bruised",
+  "wounded",
+  "badly wounded",
+  "critical",
+  "clear",
+  "tense",
+  "overloaded",
+  "distorted",
+  "breaking",
+  "none",
+  "low",
+  "elevated",
+  "high",
+  "surging",
+  "steady",
+  "stalling",
+  "declining",
+  "lost",
+  "health",
+  "stress",
+  "fatigue",
+  "danger",
+  "momentum",
+  "pressure",
+]);
 
 function chip(state: Record<string, string>, key: string, label: string, colorMap?: Record<string, string>) {
   const v = state[key];
   if (!v) return null;
   const color = colorMap?.[v.toLowerCase()] || COLORS.textSecondary;
   return { label, value: v, color };
+}
+
+/**
+ * Compact current-condition summary for the HUD.
+ * Presentation only — does not mutate turn state.
+ */
+function compactConditionLine(state: Record<string, string>): string | null {
+  const raw = String(state["Conditions"] || state["Notable Conditions"] || "").trim();
+  if (!raw) return null;
+
+  const clauses = raw
+    .split(/[;|]/)
+    .map((part) => part.trim().replace(/\s+/g, " "))
+    .filter(Boolean)
+    .filter((part) => {
+      const lower = part.toLowerCase();
+      if (CONDITION_CHIP_DUPLICATES.has(lower)) return false;
+      // Drop pure restatements of a chip value ("Health: bruised").
+      if (/^(health|stress|fatigue|danger|momentum|pressure)\s*[:=]/i.test(part)) return false;
+      return true;
+    });
+
+  if (clauses.length === 0) return null;
+
+  // Prefer shorter, distinct clauses; cap to three.
+  const picked: string[] = [];
+  const seen = new Set<string>();
+  for (const clause of clauses) {
+    const key = clause.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    picked.push(clause.length > 48 ? `${clause.slice(0, 45).replace(/\s+\S*$/, "").trim()}…` : clause);
+    if (picked.length >= 3) break;
+  }
+  if (picked.length === 0) return null;
+  return picked.join(" · ");
 }
 
 export default function PlayScreen() {
@@ -393,73 +458,81 @@ export default function PlayScreen() {
   const ledger = latest.ledger || {};
   const visibleChoices = sanitizeChoices(latest.choices);
 
-  const healthChip = chip(state, "Health", "HP", HEALTH_COLOR_MAP);
-  const stressChip = chip(state, "Stress", "STR", STRESS_COLOR_MAP);
-  const fatigueChip = chip(state, "Fatigue", "FTG");
-  const dangerChip = chip(state, "Danger", "DNG", DANGER_COLOR_MAP);
-  const momentumChip = chip(state, "Momentum", "MOM", MOMENTUM_COLOR_MAP);
+  const healthChip = chip(state, "Health", "Health", HEALTH_COLOR_MAP);
+  const stressChip = chip(state, "Stress", "Stress", STRESS_COLOR_MAP);
+  const fatigueChip = chip(state, "Fatigue", "Fatigue");
+  const dangerChip = chip(state, "Danger", "Danger", DANGER_COLOR_MAP);
+  const momentumChip = chip(state, "Momentum", "Momentum", MOMENTUM_COLOR_MAP);
   const pressure = state["Pressure"];
+  const conditionLine = compactConditionLine(state);
+  const statusChips = [healthChip, stressChip, fatigueChip, dangerChip, momentumChip].filter(
+    Boolean
+  ) as { label: string; value: string; color: string }[];
+  // Events only — never dump latestOutcome.changes (STATE SHIFT) on the play surface.
+  const outcomeEvents = (latestOutcome?.events || []).filter((ev) => ev?.text?.trim());
 
   return (
     <SafeAreaView style={styles.safe} testID="play-screen">
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-        {/* Top sticky state bar */}
-        <View style={styles.topBar}>
-          <TouchableOpacity onPress={() => router.replace("/")} hitSlop={12} testID="exit-play-btn">
-            <Ionicons name="chevron-back" size={20} color={COLORS.textSecondary} />
-          </TouchableOpacity>
+        {/* Top sticky state bar — single place for current condition */}
+        <View style={styles.hudBlock} testID="play-hud">
+          <View style={styles.topBar}>
+            <TouchableOpacity onPress={() => router.replace("/")} hitSlop={12} testID="exit-play-btn">
+              <Ionicons name="chevron-back" size={20} color={COLORS.textSecondary} />
+            </TouchableOpacity>
 
-          <View style={styles.statRow}>
-            {healthChip && (
-              <View style={styles.statChip} testID="state-health">
-                <Text style={styles.statKey}>{healthChip.label}</Text>
-                <Text style={[styles.statVal, { color: healthChip.color }]}>{healthChip.value}</Text>
-              </View>
-            )}
-            {stressChip && (
-              <View style={styles.statChip} testID="state-stress">
-                <Text style={styles.statKey}>{stressChip.label}</Text>
-                <Text style={[styles.statVal, { color: stressChip.color }]}>{stressChip.value}</Text>
-              </View>
-            )}
-            {fatigueChip && (
-              <View style={styles.statChip} testID="state-fatigue">
-                <Text style={styles.statKey}>{fatigueChip.label}</Text>
-                <Text style={[styles.statVal, { color: COLORS.textSecondary }]}>{fatigueChip.value}</Text>
-              </View>
-            )}
-            {dangerChip && (
-              <View style={styles.statChip} testID="state-danger">
-                <Text style={styles.statKey}>{dangerChip.label}</Text>
-                <Text style={[styles.statVal, { color: dangerChip.color }]}>{dangerChip.value}</Text>
-              </View>
-            )}
-            {momentumChip && (
-              <View style={styles.statChip} testID="state-momentum">
-                <Text style={styles.statKey}>{momentumChip.label}</Text>
-                <Text style={[styles.statVal, { color: momentumChip.color }]}>{momentumChip.value}</Text>
-              </View>
-            )}
+            <View style={styles.statRow}>
+              {statusChips.map((item) => (
+                <View
+                  key={item.label}
+                  style={styles.statChip}
+                  testID={`state-${item.label.toLowerCase()}`}
+                  accessible
+                  accessibilityLabel={`${item.label}: ${item.value}`}
+                  accessibilityRole="text"
+                >
+                  <Text style={styles.statKey}>{item.label}</Text>
+                  <Text style={styles.statDot}>·</Text>
+                  <Text style={[styles.statVal, { color: item.color }]}>{item.value}</Text>
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.topActions}>
+              <TouchableOpacity
+                onPress={() => setShowLedger(true)}
+                hitSlop={10}
+                testID="open-ledger-btn"
+                accessibilityLabel="Open bag and supplies"
+                accessibilityRole="button"
+              >
+                <Ionicons name="briefcase-outline" size={18} color={COLORS.primary} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setShowMenu(true)} hitSlop={10} testID="open-menu-btn">
+                <Ionicons name="ellipsis-horizontal" size={20} color={COLORS.textSecondary} />
+              </TouchableOpacity>
+            </View>
           </View>
 
-          <View style={styles.topActions}>
-            <TouchableOpacity onPress={() => setShowLedger(true)} hitSlop={10} testID="open-ledger-btn">
-              <Ionicons name="briefcase-outline" size={18} color={COLORS.primary} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setShowMenu(true)} hitSlop={10} testID="open-menu-btn">
-              <Ionicons name="ellipsis-horizontal" size={20} color={COLORS.textSecondary} />
-            </TouchableOpacity>
-          </View>
+          {conditionLine ? (
+            <View style={styles.conditionLine} testID="hud-condition-line">
+              <Text style={styles.conditionLabel}>Condition</Text>
+              <Text style={styles.conditionDot}>·</Text>
+              <Text style={styles.conditionText} numberOfLines={2}>
+                {conditionLine}
+              </Text>
+            </View>
+          ) : null}
+
+          {pressure ? (
+            <View style={styles.pressureBar} testID="pressure-bar">
+              <Text style={styles.pressureLabel}>Pressure</Text>
+              <Text style={styles.pressureText} numberOfLines={1}>{pressure}</Text>
+            </View>
+          ) : null}
         </View>
 
-        {pressure ? (
-          <View style={styles.pressureBar} testID="pressure-bar">
-            <Text style={styles.pressureLabel}>PRS</Text>
-            <Text style={styles.pressureText} numberOfLines={1}>{pressure}</Text>
-          </View>
-        ) : null}
-
-        {latestOutcome ? (
+        {latestOutcome && outcomeEvents.length > 0 ? (
           <View style={styles.outcomeCard} testID="latest-outcome">
             <View style={styles.outcomeHeader}>
               <Text style={styles.outcomeEyebrow}>
@@ -467,7 +540,7 @@ export default function PlayScreen() {
               </Text>
               <Text style={styles.outcomeHint}>RECORDED</Text>
             </View>
-            {latestOutcome.events.map((ev, i) => {
+            {outcomeEvents.map((ev, i) => {
               const chipCfg = WHY_CHIPS[ev.kind] || {
                 label: ev.kind.toUpperCase(),
                 color: COLORS.textSecondary,
@@ -481,19 +554,6 @@ export default function PlayScreen() {
                 </View>
               );
             })}
-            {latestOutcome.changes.length > 0 ? (
-              <View style={styles.outcomeChanges}>
-                <Text style={styles.outcomeChangesHeader}>STATE SHIFT</Text>
-                {latestOutcome.changes.map((change, i) => (
-                  <View key={`outcome-change-${i}`} style={styles.outcomeChangeRow}>
-                    <Text style={styles.outcomeChangeLabel}>{change.label}</Text>
-                    <Text style={styles.outcomeChangeValue}>
-                      {change.before ? `${change.before} → ${change.after}` : change.after}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            ) : null}
           </View>
         ) : null}
 
@@ -897,29 +957,75 @@ const styles = StyleSheet.create({
     fontSize: 12,
     letterSpacing: 2,
   },
+  hudBlock: {
+    backgroundColor: COLORS.background,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.borderDim,
+  },
   topBar: {
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 12,
     paddingVertical: 10,
     gap: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.borderDim,
     backgroundColor: COLORS.background,
   },
-  statRow: { flex: 1, flexDirection: "row", gap: 10, flexWrap: "wrap" },
+  statRow: { flex: 1, flexDirection: "row", gap: 8, flexWrap: "wrap" },
   statChip: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    gap: 5,
     paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingVertical: 5,
     borderWidth: 1,
     borderColor: COLORS.borderDim,
+    maxWidth: "100%",
   },
-  statKey: { fontFamily: FONTS.monoBold, color: COLORS.textMuted, fontSize: 9, letterSpacing: 1 },
-  statVal: { fontFamily: FONTS.mono, fontSize: 10, letterSpacing: 0.5 },
+  statKey: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.textMuted,
+    fontSize: 9,
+    letterSpacing: 0.8,
+  },
+  statDot: {
+    fontFamily: FONTS.mono,
+    color: COLORS.textMuted,
+    fontSize: 9,
+  },
+  statVal: {
+    fontFamily: FONTS.mono,
+    fontSize: 10,
+    letterSpacing: 0.3,
+    textTransform: "capitalize",
+  },
   topActions: { flexDirection: "row", gap: 14, alignItems: "center" },
+  conditionLine: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  conditionLabel: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.textMuted,
+    fontSize: 9,
+    letterSpacing: 1,
+    marginTop: 2,
+  },
+  conditionDot: {
+    fontFamily: FONTS.mono,
+    color: COLORS.textMuted,
+    fontSize: 9,
+    marginTop: 2,
+  },
+  conditionText: {
+    flex: 1,
+    fontFamily: FONTS.body,
+    color: COLORS.textProse,
+    fontSize: 13,
+    lineHeight: 18,
+  },
   pressureBar: {
     flexDirection: "row",
     gap: 10,
@@ -927,8 +1033,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
     backgroundColor: COLORS.surfaceDeep,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.borderDim,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.borderDim,
     borderLeftWidth: 2,
     borderLeftColor: COLORS.danger,
   },
@@ -936,7 +1042,7 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.monoBold,
     color: COLORS.danger,
     fontSize: 9,
-    letterSpacing: 2,
+    letterSpacing: 1.2,
   },
   pressureText: {
     flex: 1,
@@ -978,7 +1084,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   outcomeChip: {
-    minWidth: 52,
+    minWidth: 72,
     paddingHorizontal: 5,
     paddingVertical: 2,
     borderWidth: 1,
@@ -993,38 +1099,6 @@ const styles = StyleSheet.create({
     color: COLORS.textProse,
     fontSize: 15,
     lineHeight: 20,
-  },
-  outcomeChanges: {
-    marginTop: 10,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.borderDim,
-  },
-  outcomeChangesHeader: {
-    fontFamily: FONTS.monoBold,
-    color: COLORS.textMuted,
-    fontSize: 9,
-    letterSpacing: 1.5,
-    marginBottom: 5,
-  },
-  outcomeChangeRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    gap: 8,
-    paddingVertical: 2,
-  },
-  outcomeChangeLabel: {
-    fontFamily: FONTS.mono,
-    color: COLORS.textSecondary,
-    fontSize: 10,
-    letterSpacing: 1,
-  },
-  outcomeChangeValue: {
-    flex: 1,
-    textAlign: "right",
-    fontFamily: FONTS.bodyMed,
-    color: COLORS.objective,
-    fontSize: 14,
   },
   scroll: { paddingHorizontal: 22, paddingTop: 18 },
   turnBlock: { marginBottom: 8 },
