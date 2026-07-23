@@ -241,7 +241,19 @@ def derive_settlement_traits(
     stability = "low" if tension in ("volatile", "acute") else "medium"
     if tension == "slow_burn":
         stability = "high"
-    stability = _level_from_namespace(mixed, f"stability:{tension}", bias=stability)
+    # Stage 2A: worldCondition (creation stability) overrides identity bias only.
+    # Kept separate from tone / storyFeel.
+    condition = str(custom_world_setup.get("worldCondition") or "").strip().lower()
+    condition_stability = {
+        "stable": "high",
+        "uneasy": "medium",
+        "divided": "low",
+        "collapsing": "low",
+    }.get(condition)
+    if condition_stability:
+        stability = condition_stability
+    else:
+        stability = _level_from_namespace(mixed, f"stability:{tension}", bias=stability)
 
     hidden = bool(setup.get("hidden_threat") or scenario.get("hidden_threat"))
     fear = "high" if hidden else _level_from_namespace(mixed, "settlement_fear", bias="medium")
@@ -351,7 +363,16 @@ def seed_settlement_traits(
     if not location_text and isinstance(scenario, dict):
         location_text = str(scenario.get("starting_location") or "")
     if not location_text and isinstance(custom_world_setup, dict):
-        location_text = str(custom_world_setup.get("starting_location") or custom_world_setup.get("location") or "")
+        # Prefer Advanced Builder camelCase keys; fall back to snake_case / free-text.
+        if custom_world_setup.get("startingLocation") == "custom_location":
+            location_text = str(custom_world_setup.get("customLocation") or "")
+        else:
+            location_text = str(
+                custom_world_setup.get("startingLocation")
+                or custom_world_setup.get("starting_location")
+                or custom_world_setup.get("location")
+                or ""
+            )
     location_id = canonical_location_id(location_text or run_seed)
     state["by_location_id"][location_id] = derive_settlement_traits(
         run_seed,
@@ -384,6 +405,12 @@ def seed_traits_for_new_story(
         identity=identity,
         scenario_id=scenario_id,
     )
+    setup_location = ""
+    if isinstance(custom_world_setup, dict):
+        if custom_world_setup.get("startingLocation") == "custom_location":
+            setup_location = str(custom_world_setup.get("customLocation") or "")
+        else:
+            setup_location = str(custom_world_setup.get("startingLocation") or "")
     settlement_traits = seed_settlement_traits(
         run_seed,
         identity=identity,
@@ -391,6 +418,8 @@ def seed_traits_for_new_story(
         scenario=scenario,
         custom_world_setup=custom_world_setup,
         setup=setup,
-        starting_location=str((scenario or {}).get("starting_location") or ""),
+        starting_location=str(
+            (scenario or {}).get("starting_location") or setup_location or ""
+        ),
     )
     return {"npc_traits": npc_traits, "settlement_traits": settlement_traits}

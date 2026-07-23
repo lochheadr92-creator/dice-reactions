@@ -160,13 +160,12 @@ GENRE_ARCHETYPE_CATALOG: Dict[str, List[str]] = {
         "last_chance_window",
     ],
     "prehistoric survival": [
+        # Survival/environment only — no debt/creditor/property social openings.
         "injury_complicates",
         "storm_approaches",
         "resource_runs_out",
-        "witness_present",
         "locked_in",
-        "deadline_arrived",
-        "unexpected_visitor",
+        "last_chance_window",
     ],
     "noir": [
         "wrong_number",
@@ -211,12 +210,84 @@ GENRE_ARCHETYPE_CATALOG: Dict[str, List[str]] = {
         "authority_demands",
         "deadline_arrived",
     ],
+    # Stage 2B — Guided/Advanced genres must not fall into "general" (debt-heavy).
+    # Science fiction stays general SF — not cyberpunk neon/debt defaults.
+    "science fiction": [
+        "resource_runs_out",
+        "message_arrives",
+        "locked_in",
+        "injury_complicates",
+        "authority_demands",
+        "last_chance_window",
+        "storm_approaches",
+        "witness_present",
+    ],
+    "modern": [
+        "unexpected_visitor",
+        "message_arrives",
+        "deadline_arrived",
+        "betrayal_suspected",
+        "authority_demands",
+        "resource_runs_out",
+        "last_chance_window",
+        "witness_present",
+    ],
+    # Modern research containment (not prehistoric): injury/environment only.
+    "modern containment": [
+        "injury_complicates",
+        "storm_approaches",
+        "resource_runs_out",
+        "locked_in",
+        "last_chance_window",
+        "unexpected_visitor",
+    ],
+    # Explicit cyberpunk may use social/debt pressure; general SF must not inherit this.
+    "cyberpunk": [
+        "debt_called",
+        "authority_demands",
+        "betrayal_suspected",
+        "message_arrives",
+        "deadline_arrived",
+        "locked_in",
+        "last_chance_window",
+    ],
 }
 
 SCENARIO_ARCHETYPE_HINTS: Dict[str, str] = {
+    # Fantasy
+    "oath-broken-keep": "resource_runs_out",
+    "relic-road-toll": "locked_in",
+    "kingdom-border-curse": "message_arrives",
+    # Post-apocalyptic
     "suburban-collapse": "unexpected_visitor",
-    "dinosaur-containment-breach": "injury_complicates",
+    "ash-caravan-ambush": "witness_present",
+    "dry-reservoir-claim": "resource_runs_out",
+    # Cosmic horror
     "cosmic-horror-road-town": "witness_present",
+    "lighthouse-signal-loop": "message_arrives",
+    "library-that-rewrites": "wrong_number",
+    # Detective / noir
+    "rain-district-alibi": "deadline_arrived",
+    "warehouse-shift-murder": "witness_present",
+    "jazz-club-blackmail": "deadline_arrived",
+    # Literal prehistoric survival
+    "flint-band-stalked": "storm_approaches",
+    "river-ice-calving": "locked_in",
+    "tar-pit-foraging": "injury_complicates",
+    # Modern containment (not Quick prehistoric)
+    "dinosaur-containment-breach": "injury_complicates",
+    # Horror
+    "farmhouse-false-safety": "unexpected_visitor",
+    "mine-elevator-stuck": "locked_in",
+    "fog-boarding-house": "wrong_number",
+    # Urban crime
+    "dockside-cut": "deadline_arrived",
+    "rooftop-debt-run": "last_chance_window",
+    "precinct-leak": "betrayal_suspected",
+    # War
+    "trench-supply-gap": "resource_runs_out",
+    "convoy-bridge-hold": "deadline_arrived",
+    "occupied-quarter-curfew": "unexpected_visitor",
 }
 
 
@@ -230,8 +301,30 @@ def _bound_text(value: str) -> str:
     return text[:MAX_FACT_LEN]
 
 
+# Genre aliases → catalog keys (Guided/Advanced + Quick Start labels).
+# Never map general science fiction → cyberpunk.
+_GENRE_ALIASES: Dict[str, str] = {
+    "dinosaur survival": "prehistoric survival",
+    "prehistoric": "prehistoric survival",
+    "cosmic horror": "horror",
+    "urban crime": "noir",
+    "detective": "mystery",
+    "mystery or crime": "mystery",
+    "mystery-crime": "mystery",
+    "war survival": "post-apocalyptic",
+    "post apocalyptic": "post-apocalyptic",
+    "post-apocalypse": "post-apocalyptic",
+    "science-fiction": "science fiction",
+    "sci-fi": "science fiction",
+    "scifi": "science fiction",
+    "sf": "science fiction",
+    # custom / free-text falls through to general if unlisted
+}
+
+
 def normalize_genre(genre: Optional[str]) -> str:
     g = (genre or DEFAULT_GENRE).strip().lower()
+    g = _GENRE_ALIASES.get(g, g)
     return g if g in GENRE_ARCHETYPE_CATALOG else DEFAULT_GENRE
 
 
@@ -361,6 +454,33 @@ def build_opening_directive(
             lines.append(
                 "- Honour scenario starting_pressure as the immediate foreground symptom."
             )
+        frame = scenario.get("world_frame") if isinstance(scenario.get("world_frame"), dict) else {}
+        if frame.get("era") or frame.get("setting"):
+            lines.append(
+                f"- World frame: era={frame.get('era', '')}; setting={frame.get('setting', '')}; "
+                f"technology={frame.get('technology', '')}."
+            )
+        forbidden = frame.get("forbidden_opening_frames") or []
+        if forbidden:
+            lines.append(
+                "- Do NOT open on these frames (even if locally coherent): "
+                + ", ".join(str(x) for x in forbidden[:8])
+                + "."
+            )
+        pressures = frame.get("primary_pressures") or []
+        if pressures:
+            lines.append(
+                "- Active pressures must derive from: "
+                + ", ".join(str(x) for x in pressures[:6])
+                + "."
+            )
+        lines.append(
+            "- Name every important person in narrative prose before any choice may reference them."
+        )
+        lines.append(
+            "- Do not invent ownership contracts, debt collection, building inspections, or "
+            "creditor-foreman property disputes unless the scenario seed already establishes them."
+        )
 
     if identity.get("has_secret"):
         lines.append(
@@ -368,4 +488,45 @@ def build_opening_directive(
             "surface symptoms, pressure, or moral weight only."
         )
 
+    return "\n".join(lines)
+
+
+def build_scenario_frame_directive(
+    session: Mapping[str, Any],
+    scenario: Optional[Mapping[str, Any]] = None,
+) -> str:
+    """Compact later-turn scenario reassertion — small, always-on when scenario_id set."""
+    sid = str(session.get("scenario_id") or "")
+    if not sid and not scenario:
+        return ""
+    sc = scenario
+    if sc is None:
+        try:
+            from scenarios import get_scenario  # local import avoids cycles
+
+            sc = get_scenario(sid)
+        except Exception:
+            sc = None
+    if not sc:
+        return (
+            f"[SCENARIO_FRAME: id={sid}] Remain inside the selected scenario. "
+            "Do not replace it with an unrelated modern property, debt, or paperwork plot."
+        )
+    frame = sc.get("world_frame") if isinstance(sc.get("world_frame"), dict) else {}
+    title = str(sc.get("title") or sid)[:80]
+    genre = str(sc.get("genre") or session.get("genre") or "")[:60]
+    pressures = ", ".join(str(p) for p in (frame.get("primary_pressures") or [])[:4])
+    forbidden = ", ".join(str(f) for f in (frame.get("forbidden_opening_frames") or [])[:4])
+    lines = [
+        f"[SCENARIO_FRAME: {title} | genre={genre}]",
+        "Selected scenario remains authoritative starting reality until engine events displace it.",
+    ]
+    if pressures:
+        lines.append(f"Primary pressure classes: {pressures}.")
+    if forbidden:
+        lines.append(f"Do not make dominant: {forbidden}.")
+    lines.append(
+        "Choices may reference only people, objects, and obligations already established "
+        "in narrative or structured state — never invent them inside a choice."
+    )
     return "\n".join(lines)

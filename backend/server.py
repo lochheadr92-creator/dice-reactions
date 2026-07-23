@@ -43,7 +43,15 @@ from ai_config import (  # noqa: E402
     LOW_COST_CONTEXT_BUDGET_TOKENS,
     ADVANCED_CONTEXT_BUDGET_TOKENS,
 )
-from scenarios import get_scenarios, get_scenario  # noqa: E402
+from scenarios import (  # noqa: E402
+    get_scenarios,
+    get_scenario,
+    resolve_new_story_scenario,
+    ScenarioResolutionError,
+)
+import scenario_coherence  # noqa: E402
+import opening_state  # noqa: E402
+import creation_contract  # noqa: E402 — Stage 2A creation projection
 from memory import (  # noqa: E402
     consolidate_rolling_state,
     compute_compression_metrics,
@@ -56,7 +64,7 @@ import relationships  # noqa: E402  — Relationship Calculus (Ch 29)
 import hud  # noqa: E402  — player-facing HUD shaping (status chips + Pressure)
 import pacing  # noqa: E402  — Early-Game Pacing Governor v1 (deterministic)
 import prose_modes  # noqa: E402  — Prose Length System v2 (presentation-only)
-import secrets  # noqa: E402  — Secret Reveal Trigger v1 (deterministic)
+import story_secrets as secrets  # deterministic story secret engine
 import replayability  # noqa: E402  — Replayability Engine v1 (deterministic)
 import stress  # noqa: E402  — Ch 14 Stress substrate v1 (deterministic)
 import causal_history  # noqa: E402  — player-safe "Why this happened" projection
@@ -552,9 +560,12 @@ class NewStoryRequest(BaseModel):
     # (brief/standard/story/cinematic) and legacy S/M/L aliases.
     prose_mode: Optional[str] = None
     scenario_id: Optional[str] = None
+    # Quick Start category key — when set, backend is sole scenario-selection authority.
+    quick_start_key: Optional[str] = Field(default=None, max_length=64)
     custom_world_setup: Optional[Dict[str, Any]] = None
     # Client-generated idempotency key so a creation retry after a failed/lost
     # first attempt cannot create a duplicate completed session. Optional.
+    # Also seeds deterministic Quick Start pool selection when quick_start_key is set.
     creation_request_id: Optional[str] = Field(default=None, max_length=128)
 
 class ActionRequest(BaseModel):
@@ -578,6 +589,9 @@ class TurnRecord(BaseModel):
     turn_number: int
     player_action: Optional[str] = None
     narrative: str
+    # Internal provider-independent prose used for future simulation context.
+    # Player-facing rerenders never feed back into the authoritative model call.
+    canonical_narrative: Optional[str] = None
     paragraphs: List[str]
     choices: List[Dict[str, str]]
     state: Dict[str, str]
@@ -597,6 +611,7 @@ class SessionRecord(BaseModel):
     debug_mode: bool = False
     custom_premise: Optional[str] = None
     custom_world_setup: Optional[Dict[str, Any]] = None
+    rendering_policy: Dict[str, Any] = Field(default_factory=dict)
     title: str = "Untitled Chronicle"
     turn_count: int = 0
     last_narrative_snippet: str = ""
@@ -950,16 +965,16 @@ _PROMPT_HIDDEN_ROLLING_KEYS = frozenset({
 
 def _humanize_hook(value: Any) -> str:
     """Turn a catalog slug (e.g. 'losing-control') into prose ('losing control')."""
-    return str(value or "").replace("-", " ").strip()
+    return str(value or "").replace("-", " ").replace("_", " ").strip()
 
 
 def _effective_relationships_level(setup: Optional[Dict[str, Any]]) -> str:
     """Option A: if 'whoMatters' is chosen (and not 'nobody'), raise the
     relationship content floor to at least 'low' so the bond is actually
-    simulated. Pure — never mutates the input."""
+    simulated. Pure — never mutates the input. Archetypes stay unnamed."""
     content = setup.get("contentSettings") if isinstance(setup, dict) else None
     current = str((content or {}).get("relationships") or "none").strip().lower()
-    who = str((setup or {}).get("whoMatters") or "").strip().lower()
+    who = creation_contract.normalize_who_matters((setup or {}).get("whoMatters"))
     if who and who != "nobody" and current in ("", "none"):
         return "low"
     return current or "none"
@@ -1117,110 +1132,83 @@ def _dedupe_simulation_hooks(hooks: List[Any]) -> List[Any]:
 def _seed_custom_setup_into_rolling(
     rolling: Dict[str, Any], setup: Optional[Dict[str, Any]]
 ) -> Dict[str, Any]:
-    """Guarantee setup answers enter protected rolling-state fields even if the model omits a key."""
+    """Guarantee setup answers enter protected rolling-state fields even if the model omits a key.
+
+    Stage 2A: seed via creation_contract projection (structured hooks, unnamed
+    relationship archetypes, location/stability). Dead controls (worldPace,
+    storyFocus) are not seeded. Secret remains engine-only.
+    """
     if not setup:
         return rolling or {}
-    out = dict(rolling or {})
-    pressures = setup.get("pressures") if isinstance(setup.get("pressures"), list) else []
-    focus = setup.get("storyFocus") if isinstance(setup.get("storyFocus"), list) else []
-    seeds = setup.get("seedAnswers") if isinstance(setup.get("seedAnswers"), list) else []
+
+    # Preserve engine-only secret before normalization strips it from the bag.
+    secret = setup.get("secret") if isinstance(setup, dict) else None
+
+    contract = creation_contract.build_creation_contract(custom_world_setup=setup)
+    out = creation_contract.seed_creation_into_rolling(rolling, contract, setup=setup)
+
+    # Legacy free-text Advanced fields that are not in the compact contract.
     hooks = list(out.get("simulation_hooks") or [])
     for label, value in (
         ("world danger", setup.get("danger")),
         ("player weakness", setup.get("weakness")),
-        ("urgent desire", setup.get("desire")),
+        ("urgent desire", setup.get("desire") if not setup.get("want") else None),
     ):
         if value:
             hooks.append(f"{label}: {_short_text(value, 220)}")
+    seeds = setup.get("seedAnswers") if isinstance(setup.get("seedAnswers"), list) else []
     for idx, answer in enumerate(seeds[:3], start=1):
         if answer:
             hooks.append(f"seed question {idx}: {_short_text(answer, 220)}")
-    # Onboarding story hooks (Quick Start + Advanced hook pool). These ARE
-    # intentionally prompt-visible: they shape NPC creation, pressure, and arcs.
-    # NOTE: `secret` is deliberately excluded here — it is engine-only (below).
-    for label, value in (
-        ("core desire", setup.get("want")),
-        ("core fear", setup.get("fear")),
-        ("buried past (the ghost)", setup.get("ghost")),
-        ("signature talent", setup.get("talent")),
-        ("fatal flaw", setup.get("flaw")),
-        ("moral line never to cross", setup.get("line")),
-    ):
-        if value:
-            hooks.append(f"{label}: {_humanize_hook(value)}")
-    who = _humanize_hook(setup.get("whoMatters"))
-    if who and who != "nobody":
-        hooks.append(f"person who matters most: {who}")
+    if setup.get("consequenceSeverity"):
+        hooks.append(
+            f"consequence_severity:{_humanize_hook(setup.get('consequenceSeverity'))}"
+        )
     out["simulation_hooks"] = _dedupe_simulation_hooks(hooks)[:16]
 
-    existing_instability = out.get("world_instability")
-    if isinstance(existing_instability, list):
-        instability = list(existing_instability)
-    elif existing_instability:
-        instability = [existing_instability]
-    else:
-        instability = []
-    for p in pressures:
-        instability.append(f"active pressure: {_short_text(p, 120)}")
+    # Always re-normalise instability through the stable JSON dedupe path so
+    # pre-existing dict/list rows and Stage 2A seeds share one representation.
+    instability = list(out.get("world_instability") or [])
     if setup.get("danger"):
         instability.append(f"danger: {_short_text(setup.get('danger'), 220)}")
+    # Legacy free-text pressures not captured as closed catalog slugs.
+    raw_pressures = setup.get("pressures") if isinstance(setup.get("pressures"), list) else []
+    for p in raw_pressures[:3]:
+        if isinstance(p, str) and p.strip():
+            label = f"active pressure: {_short_text(p, 120)}"
+            if label not in instability:
+                instability.append(label)
+        elif isinstance(p, dict) and p:
+            # Structured pressure rows stay as stable JSON after dedupe.
+            instability.append(p)
     out["world_instability"] = _dedupe_world_instability_entries(instability)[:12]
 
-    if focus and not out.get("story_focus"):
-        out["story_focus"] = focus[:8]
+    # storyFocus remains unsupported/excluded — do not seed story_focus.
 
-    rel = _effective_relationships_level(setup)
-    if rel and rel != "none":
-        threads = list(out.get("relationship_threads") or [])
-        threads.append({
-            "name": "social ecosystem",
-            "dynamic": rel,
-            "intensity": "medium",
-            "leverage": "affects NPC memory, faction reactions, trust, stress, delayed consequences, and material choices",
-        })
-        if who and who != "nobody":
-            threads.append({
-                "name": f"the {who} who matters most",
-                "dynamic": "attachment",
-                "intensity": "medium",
-                "leverage": "their safety and regard are primary emotional stakes; can be threatened, leveraged, or lost",
-            })
-        out["relationship_threads"] = threads[:8]
-
+    # Inventory object_locations from carried (seed_creation handles inventory_objects).
     carried = setup.get("carried")
     if carried:
         items = [x.strip() for x in re.split(r";|,", str(carried)) if x.strip()]
-    else:
-        items = []
-    if items and not out.get("inventory_objects"):
-        out["inventory_objects"] = [
-            {"object": item[:80], "qty": "1", "condition": "player-described", "location_state": "carried", "where": "on player at story start"}
-            for item in items[:10]
-        ]
-    if items:
-        existing_locations = list(out.get("object_locations") or [])
-        existing_cores = []
-        for loc in existing_locations:
-            name = loc.get("object") if isinstance(loc, dict) else loc
-            existing_cores.append(_item_core(str(name)))
-        for item in items[:10]:
-            core = _item_core(item)
-            already_tracked = any(core and len(core & known) >= 1 for known in existing_cores)
-            if not already_tracked:
-                existing_locations.append({
-                    "object": item[:80],
-                    "status": "carried",
-                    "where": "on player at story start",
-                    "turn_changed": 1,
-                })
-        out["object_locations"] = existing_locations[:12]
+        if items:
+            existing_locations = list(out.get("object_locations") or [])
+            existing_cores = []
+            for loc in existing_locations:
+                name = loc.get("object") if isinstance(loc, dict) else loc
+                existing_cores.append(_item_core(str(name)))
+            for item in items[:10]:
+                core = _item_core(item)
+                already_tracked = any(core and len(core & known) >= 1 for known in existing_cores)
+                if not already_tracked:
+                    existing_locations.append({
+                        "object": item[:80],
+                        "status": "carried",
+                        "where": "on player at story start",
+                        "turn_changed": 1,
+                    })
+            out["object_locations"] = existing_locations[:12]
 
     # Secret (Phase 1 Blocker A): engine-only hidden state. NEVER seeded into
-    # simulation_hooks or any prompt-visible field. Stored unrevealed until a
-    # future explicit reveal trigger promotes it. Already excluded from the
-    # LLM <prior_state> block (_prompt_safe_rolling) and from player API
-    # (player_api blocks the nested key 'secret_registry').
-    secret = setup.get("secret")
+    # simulation_hooks or any prompt-visible field.
     if secret:
         registry = list(out.get("secret_registry") or [])
         registry.append({
@@ -2195,7 +2183,7 @@ def _summarise_turn_for_assistant(turn: Dict[str, Any]) -> str:
     """
     parts: List[str] = []
 
-    narrative = turn.get("narrative") or ""
+    narrative = turn.get("canonical_narrative") or turn.get("narrative") or ""
     if narrative:
         if len(narrative) > 1800:
             narrative = narrative[:1800].rstrip() + "…"
@@ -2268,7 +2256,53 @@ async def _build_messages(
     ):
         messages.append({"role": "system", "content": rb_body})
 
+    # Runtime authority order (Stage 2B):
+    #   session + rolling → creation/scenario contract → pressure/consequences
+    #   → player-safe knowledge → memory/narration → response
+    # Recent narration must not become authority by repetition.
+
+    # Compact scenario reassertion on every turn when a curated scenario is selected.
+    # Prevents narrative recency from replacing scenario authority after Turn 1.
+    if session.get("scenario_id"):
+        frame = opening_state.build_scenario_frame_directive(session)
+        if frame:
+            messages.append({"role": "system", "content": frame})
+
+    # Stage 2A/2B — bounded later-turn creation projection for Guided/Advanced.
+    # Session fields are authoritative; do not resend the full onboarding bag.
+    if session.get("custom_world_setup") and not session.get("scenario_id"):
+        contract = creation_contract.build_creation_contract(session)
+        # Re-assert unresolved seeded pressures into the bounded projection.
+        seeded = creation_contract.active_seeded_pressure_labels(session)
+        if seeded and not contract.get("active_pressures"):
+            contract = dict(contract)
+            contract["active_pressures"] = seeded
+        creation_ctx = creation_contract.build_later_turn_creation_directive(contract)
+        if creation_ctx:
+            messages.append({"role": "system", "content": creation_ctx})
+        hook_inf = creation_contract.build_hook_influence_directive(contract)
+        if hook_inf:
+            messages.append({"role": "system", "content": hook_inf})
+        # Difficulty is consequence policy (severity multiplier), not tone.
+        diff_info = creation_contract.difficulty_reaches_severity(session)
+        if diff_info.get("difficulty") and diff_info.get("difficulty") != "standard":
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        f"[DIFFICULTY_POLICY: {diff_info['difficulty']}; "
+                        f"severity_multiplier={diff_info['severity_multiplier']}] "
+                        "Apply consequence harshness via existing difficulty rules. "
+                        "Tone remains a separate presentation policy."
+                    ),
+                }
+            )
+
     rolling = session.get("rolling_state")
+    # Restore creation surfaces from durable session before projecting prior_state
+    # (compaction may have dropped dict-only world_frame/character_hooks).
+    if isinstance(rolling, dict) and session.get("custom_world_setup"):
+        rolling = creation_contract.restore_creation_surfaces(rolling, session)
 
     # Pull recent turns. If we have rolling_state, we only need a small number
     # for tone/voice continuity. If not, we fall back to the larger window.
@@ -2719,7 +2753,7 @@ def _full_validate(
     """Format validation, optional Stage-1 pacing check, then prose contradiction.
 
     Returns ``(ok, reason, kind)`` where kind ∈
-    {"format", "pacing", "hallucination", "ok"}.
+    {"format", "pacing", "hallucination", "coherence", "ok"}.
     """
     ok, reason = _validate_parsed(parsed, player_action=player_action)
     if not ok:
@@ -2728,12 +2762,274 @@ def _full_validate(
         pacing_reason = pacing.validate_opening_structure(parsed)
         if pacing_reason:
             return False, pacing_reason, "pacing"
+
+    # Scenario / named-entity coherence (model-independent).
+    is_opening = not player_action and int(session.get("turn_count") or 0) <= 0
+    scenario = None
+    if session.get("scenario_id"):
+        scenario = get_scenario(str(session.get("scenario_id")))
+    prior_rolling = session.get("rolling_state") if not is_opening else None
+    ok, reason = scenario_coherence.run_coherence_checks(
+        parsed=parsed,
+        session=session,
+        scenario=scenario,
+        prior_rolling=prior_rolling if isinstance(prior_rolling, dict) else None,
+        is_opening=is_opening or early_game_stage == 1,
+    )
+    if not ok:
+        return False, reason, "coherence"
+
     contradictions = gateway.detect_prose_contradictions(
         session.get("rolling_state"), parsed, player_action
     )
     if contradictions:
         return False, "; ".join(contradictions[:3]), "hallucination"
     return True, "", "ok"
+
+
+# Soft validation defects may still select "best-available" model prose.
+# Hard defects (creation/scenario authority, illegal state, leaks) must never
+# be committed merely because they are the better of two invalid outputs.
+_SOFT_COHERENCE_REASON_PREFIXES = (
+    "choice too long",
+    "choice packs multiple strategies",
+)
+
+
+def _validation_failure_is_hard(kind: str, reason: str) -> bool:
+    """True when the failure must not be accepted as best-available output."""
+    k = (kind or "").strip().lower()
+    r = (reason or "").strip().lower()
+    if k in ("", "ok"):
+        return False
+    if k == "pacing":
+        return False
+    if k == "coherence":
+        return not any(r.startswith(p) for p in _SOFT_COHERENCE_REASON_PREFIXES)
+    # format + hallucination + unknown kinds: hard (state/structure/leak risk)
+    return True
+
+
+def _fallback_scene_label(session: Dict[str, Any], rolling: Dict[str, Any]) -> str:
+    scene = str(rolling.get("scene") or "").strip()
+    if scene and scene.lower() not in ("unknown", "unspecified"):
+        return scene[:160]
+    contract = creation_contract.build_creation_contract(session) or {}
+    loc = str(contract.get("starting_location") or "").strip()
+    if loc:
+        return loc[:160]
+    role = str(session.get("role") or "").strip()
+    if role:
+        return f"your place as {role}"[:160]
+    return "the immediate area"
+
+
+def _fallback_pressure_phrase(rolling: Dict[str, Any], session: Dict[str, Any]) -> str:
+    for row in rolling.get("active_pressures") or []:
+        if isinstance(row, dict):
+            label = str(row.get("label") or row.get("name") or row.get("id") or "").strip()
+            if label:
+                return label[:80]
+        elif row:
+            return str(row)[:80]
+    labels = creation_contract.active_seeded_pressure_labels(session)
+    if labels:
+        return str(labels[0])[:80]
+    last_state = session.get("last_state") if isinstance(session.get("last_state"), dict) else {}
+    pressure = str(last_state.get("Pressure") or "").strip()
+    return pressure[:80] if pressure else ""
+
+
+def _grounded_fail_forward_choices(
+    rolling: Dict[str, Any], session: Dict[str, Any]
+) -> List[Dict[str, str]]:
+    """Bounded choices from location, visible objects, known entities, pressures."""
+    objects: List[str] = []
+    for key in ("inventory_objects", "object_locations"):
+        for row in rolling.get(key) or []:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("object") or row.get("item") or "").strip()
+            if name and name not in objects:
+                objects.append(name)
+    npcs: List[str] = []
+    for row in rolling.get("npcs") or []:
+        if not isinstance(row, dict):
+            continue
+        if row.get("alive") is False:
+            continue
+        name = str(row.get("name") or "").strip()
+        if name and name not in npcs:
+            npcs.append(name)
+    pressure = _fallback_pressure_phrase(rolling, session)
+
+    texts = [
+        "Survey the immediate surroundings carefully",
+        (
+            f"Check the {objects[0][:48]}"
+            if objects
+            else "Examine what is within arm's reach"
+        ),
+        (
+            f"Watch {npcs[0][:48]} closely"
+            if npcs
+            else "Listen for movement nearby"
+        ),
+        (
+            f"Respond carefully to {pressure[:48]}"
+            if pressure
+            else "Hold position and wait a moment"
+        ),
+    ]
+    return [{"label": label, "text": text} for label, text in zip("ABCD", texts)]
+
+
+def _build_fail_forward_parsed_turn(
+    session: Dict[str, Any],
+    player_action: Optional[str],
+    *,
+    first_kind: str,
+    first_reason: str,
+    second_kind: str = "",
+    second_reason: str = "",
+    retry_exception: str = "",
+) -> Tuple[ParsedTurn, str, Dict[str, str]]:
+    """Deterministic player-safe turn from authoritative state only.
+
+    Does not invent people, objects, factions, or obligations. Preserves the
+    last valid rolling snapshot so merge/commit cannot adopt hard-invalid
+    model mutations. Engine-owned pre-generation transitions already applied
+    to ``session['rolling_state']`` are kept.
+    """
+    prior = session.get("rolling_state")
+    rolling = copy.deepcopy(prior) if isinstance(prior, dict) else {}
+    scene = _fallback_scene_label(session, rolling)
+    pressure = _fallback_pressure_phrase(rolling, session)
+    role = str(
+        rolling.get("character")
+        or session.get("role")
+        or "yourself"
+    ).strip()[:120]
+
+    # Do not echo freeform player_action into prose — it may name unknown
+    # people, forbidden tech, or other hard-invalid content that validation
+    # already rejected. Keep the receipt of failure in structured meta only.
+    action_bit = (
+        " Your last move does not settle cleanly."
+        if player_action and str(player_action).strip()
+        else ""
+    )
+
+    paragraphs = [
+        (
+            f"The moment holds without a clean resolution.{action_bit} "
+            f"You remain as {role} in {scene}."
+        ).strip(),
+        (
+            f"{pressure} still presses on the scene; nothing new is invented to escape it."
+            if pressure
+            else "Time edges forward under the same constraints you already face."
+        ),
+    ]
+    narrative = "\n\n".join(paragraphs)
+    choices = _grounded_fail_forward_choices(rolling, session)
+
+    last_state = session.get("last_state") if isinstance(session.get("last_state"), dict) else {}
+    state: Dict[str, str] = {
+        str(k): str(v) for k, v in last_state.items() if v is not None
+    }
+    if "Pressure" not in state and pressure:
+        state["Pressure"] = pressure
+    if "Position" not in state:
+        state["Position"] = scene[:80]
+    if "Health" not in state:
+        state["Health"] = "stable"
+
+    ledger: Dict[str, Any] = {}
+    carried = [
+        str(row.get("object") or row.get("item") or "").strip()
+        for row in (rolling.get("inventory_objects") or [])
+        if isinstance(row, dict) and (row.get("object") or row.get("item"))
+    ]
+    if carried:
+        ledger["Carried"] = ", ".join(carried[:6])
+    elif last_state.get("Inventory Summary"):
+        ledger["Carried"] = str(last_state.get("Inventory Summary"))
+
+    receipt = {
+        "validation_hard_fallback": "yes",
+        "validation_fallback_mode": "fail_forward_preserved_state",
+        "validation_first_kind": str(first_kind or ""),
+        "validation_first_fail": str(first_reason or "")[:300],
+        "validation_second_kind": str(second_kind or ""),
+        "validation_second_fail": str(second_reason or "")[:300],
+    }
+    if retry_exception:
+        receipt["retry_exception"] = retry_exception[:240]
+
+    # Minimal synthetic raw for audit/replay reconstruction — not model prose.
+    choice_lines = "\n".join(f"{c['label']}. {c['text']}" for c in choices)
+    raw = (
+        f"<rolling_state>{_json_dumps_compact(rolling)}</rolling_state>\n"
+        f"<narrative>\n{narrative}\n</narrative>\n"
+        f"<choices>\n{choice_lines}\n</choices>\n"
+        f"<state>\n"
+        + "\n".join(f"{k}: {v}" for k, v in state.items())
+        + "\n</state>\n"
+        f"<ledger>\n"
+        + ("\n".join(f"{k}: {v}" for k, v in ledger.items()) if ledger else "")
+        + "\n</ledger>"
+    )
+    parsed = ParsedTurn(
+        narrative=narrative,
+        paragraphs=paragraphs,
+        choices=choices,
+        state=state,
+        ledger=ledger,
+        rolling_state=rolling,
+        debug=dict(receipt),
+        raw=raw,
+    )
+    return parsed, raw, receipt
+
+
+def _json_dumps_compact(obj: Any) -> str:
+    try:
+        import json as _json
+
+        return _json.dumps(obj, ensure_ascii=False, separators=(",", ":"), default=str)
+    except Exception:
+        return "{}"
+
+
+def _select_soft_best_available(
+    parsed: ParsedTurn,
+    raw: str,
+    parsed2: ParsedTurn,
+    raw2: str,
+    kind: str,
+    reason: str,
+    kind2: str,
+    reason2: str,
+) -> Optional[Tuple[ParsedTurn, str, str]]:
+    """Return (parsed, raw, which) when a soft-only failure may be accepted.
+
+    Hard-invalid attempts are never selected. When both are soft, prefer more
+    choices (legacy best-available), then the retry.
+    """
+    soft1 = not _validation_failure_is_hard(kind, reason)
+    soft2 = not _validation_failure_is_hard(kind2, reason2)
+    if soft1 and soft2:
+        if len(parsed2.choices or []) > len(parsed.choices or []):
+            return parsed2, raw2, "retry"
+        if len(parsed.choices or []) > len(parsed2.choices or []):
+            return parsed, raw, "first"
+        return parsed2, raw2, "retry"
+    if soft2:
+        return parsed2, raw2, "retry"
+    if soft1:
+        return parsed, raw, "first"
+    return None
 
 
 async def _generate_validated_turn(
@@ -2746,6 +3042,10 @@ async def _generate_validated_turn(
 
     Returns ``(parsed, raw, meta)`` where meta aggregates model_used,
     fallback_events across both attempts, telemetry, and validation diagnostics.
+
+    Soft validation failures may still return best-available model output after
+    the single retry. Hard creation/scenario/state failures never commit invalid
+    model facts: a deterministic fail-forward turn preserves authoritative state.
     """
     early_game_stage = pacing.get_early_game_stage(session.get("turn_count", 0))
     dev_on = "[DEV_MODE: ON]" in user_text
@@ -2907,27 +3207,73 @@ async def _generate_validated_turn(
             attempt="retry",
             dev_on=dev_on,
         )
+
+        soft_pick = _select_soft_best_available(
+            parsed, raw, parsed2, raw2, kind, reason, kind2, reason2
+        )
+        if soft_pick is not None:
+            picked, picked_raw, which = soft_pick
+            logger.warning(
+                "Retry still invalid (%s/%s) — using best-available soft output (%s)",
+                kind2,
+                reason2,
+                which,
+            )
+            if which == "retry":
+                return _finalize_validated_turn(picked, picked_raw, combined_meta)
+            first_with_retry = dict(meta)
+            first_with_retry["validation_retried"] = True
+            first_with_retry["validation_first_fail"] = reason
+            first_with_retry["validation_second_fail"] = reason2
+            first_with_retry["fallback_events"] = combined_meta["fallback_events"]
+            first_with_retry["validation_soft_best_available"] = which
+            return _finalize_validated_turn(picked, picked_raw, first_with_retry)
+
         logger.warning(
-            "Retry still invalid (%s/%s) — using best-available output",
+            "Retry still invalid (%s/%s) — hard fail-forward fallback (state preserved)",
             kind2,
             reason2,
         )
-        if len(parsed2.choices or []) > len(parsed.choices or []):
-            return _finalize_validated_turn(parsed2, raw2, combined_meta)
-
-        first_with_retry = dict(meta)
-        first_with_retry["validation_retried"] = True
-        first_with_retry["validation_first_fail"] = reason
-        first_with_retry["validation_second_fail"] = reason2
-        first_with_retry["fallback_events"] = combined_meta["fallback_events"]
-        return _finalize_validated_turn(parsed, raw, first_with_retry)
+        fb_parsed, fb_raw, receipt = _build_fail_forward_parsed_turn(
+            session,
+            player_action,
+            first_kind=kind,
+            first_reason=reason,
+            second_kind=kind2,
+            second_reason=reason2,
+        )
+        hard_meta = dict(combined_meta)
+        hard_meta.update(
+            {
+                "validation_hard_fallback": True,
+                "validation_fallback_mode": "fail_forward_preserved_state",
+                "validation_first_kind": kind,
+                "validation_second_kind": kind2,
+                "validation_discarded_invalid_model_output": True,
+            }
+        )
+        hard_meta["validation_receipt"] = receipt
+        return _finalize_validated_turn(fb_parsed, fb_raw, hard_meta)
     except Exception as exc:
-        logger.warning("Retry call raised %s — falling back to first attempt", exc)
+        logger.warning("Retry call raised %s — recovering without hard-invalid commit", exc)
         recovered = dict(meta)
         recovered["validation_retried"] = True
         recovered["validation_first_fail"] = reason
         recovered["retry_exception"] = str(exc)[:240]
-        return _finalize_validated_turn(parsed, raw, recovered)
+        if not _validation_failure_is_hard(kind, reason):
+            return _finalize_validated_turn(parsed, raw, recovered)
+        fb_parsed, fb_raw, receipt = _build_fail_forward_parsed_turn(
+            session,
+            player_action,
+            first_kind=kind,
+            first_reason=reason,
+            retry_exception=str(exc)[:240],
+        )
+        recovered["validation_hard_fallback"] = True
+        recovered["validation_fallback_mode"] = "fail_forward_preserved_state"
+        recovered["validation_discarded_invalid_model_output"] = True
+        recovered["validation_receipt"] = receipt
+        return _finalize_validated_turn(fb_parsed, fb_raw, recovered)
 
 
 # ======================================================================
@@ -2978,6 +3324,20 @@ def _meta_into_debug(
         debug["validation_first_fail"] = str(meta["validation_first_fail"])
     if meta.get("validation_second_fail"):
         debug["validation_second_fail"] = str(meta["validation_second_fail"])
+    if meta.get("validation_hard_fallback"):
+        debug["validation_hard_fallback"] = "yes"
+    if meta.get("validation_fallback_mode"):
+        debug["validation_fallback_mode"] = str(meta["validation_fallback_mode"])
+    if meta.get("validation_first_kind"):
+        debug["validation_first_kind"] = str(meta["validation_first_kind"])
+    if meta.get("validation_second_kind"):
+        debug["validation_second_kind"] = str(meta["validation_second_kind"])
+    if meta.get("validation_discarded_invalid_model_output"):
+        debug["validation_discarded_invalid_model_output"] = "yes"
+    if meta.get("validation_soft_best_available"):
+        debug["validation_soft_best_available"] = str(
+            meta["validation_soft_best_available"]
+        )
     if meta.get("pacing_stage3_no_engine_development"):
         debug["pacing_stage3_no_engine_development"] = "true"
     if meta.get("secret_reveal_occurred"):
@@ -3025,6 +3385,16 @@ def _meta_into_debug(
             continue
         debug[key] = str(value)
     return debug
+
+
+async def _apply_presentation_rendering(
+    session: Dict[str, Any],
+    parsed: ParsedTurn,
+    authoritative_rolling: Optional[Dict[str, Any]],
+    player_action: Optional[str],
+) -> Tuple[ParsedTurn, Dict[str, Any]]:
+    """Presentation seam; mature renderer is intentionally out of this commit."""
+    return parsed, dict(session.get("rendering_policy") or {})
 
 
 async def _persist_model_lock(
@@ -3163,6 +3533,8 @@ async def admin_session_diagnostics(
 @api_router.get("/scenarios")
 async def list_scenarios():
     return {"scenarios": get_scenarios()}
+
+
 
 
 # -------- Admin: AI settings ------------------------------------------------
@@ -3320,6 +3692,7 @@ async def _rollback_story_action_persist(
                 "rolling_state_updated_at",
                 "active_model",
                 "model_switches",
+                "rendering_policy",
             )
             if key in session_snapshot
         }
@@ -3433,13 +3806,43 @@ async def _persist_story_action_turn(
 
 async def _create_new_story(req: NewStoryRequest):
     settings = await get_ai_settings()
-    scenario = get_scenario(req.scenario_id) if req.scenario_id else None
-    custom_setup = req.custom_world_setup if not scenario else None
+    creation_request_id = _normalize_creation_request_id(req.creation_request_id)
+    try:
+        resolved_scenario_id, scenario = resolve_new_story_scenario(
+            scenario_id=req.scenario_id,
+            quick_start_key=req.quick_start_key,
+            creation_request_id=creation_request_id,
+        )
+    except ScenarioResolutionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    # Scenario overrides win unless the client explicitly sent a different value
+    # Stage 2A: normalize Guided/Advanced setup for persistence (dead controls
+    # stripped, archetypes normalized, empties omitted). Quick Start keeps
+    # custom_setup=None when a scenario is selected.
+    raw_custom = req.custom_world_setup if not scenario else None
+    secret_raw = (
+        raw_custom.get("secret")
+        if isinstance(raw_custom, dict) and raw_custom.get("secret")
+        else None
+    )
+    custom_setup = (
+        creation_contract.normalize_custom_world_setup(raw_custom)
+        if isinstance(raw_custom, dict)
+        else None
+    )
+    # Secret remains engine-only: reattach for secret_registry seeding only;
+    # never project into creation contract / prompt bag via normalize.
+    if secret_raw and isinstance(custom_setup, dict):
+        custom_setup = dict(custom_setup)
+        custom_setup["secret"] = secret_raw
+    elif secret_raw and custom_setup is None:
+        custom_setup = {"secret": secret_raw}
+
+    # Scenario seed is authority for role/location coherence. Client genre/tone/difficulty
+    # may refine presentation; role prefers the selected scenario so Quick Start pools stick.
     if scenario:
         effective_genre = req.genre or scenario["genre"]
-        effective_role = req.role or scenario.get("role")
+        effective_role = scenario.get("role") or req.role
         effective_tone = req.tone or scenario.get("tone")
         effective_difficulty = req.difficulty if req.difficulty != "standard" else scenario.get("difficulty", "standard")
         effective_premise = req.custom_premise or scenario.get("pitch")
@@ -3465,7 +3868,7 @@ async def _create_new_story(req: NewStoryRequest):
         role=effective_role,
         tone=effective_tone,
         difficulty=effective_difficulty,
-        scenario_id=req.scenario_id,
+        scenario_id=resolved_scenario_id,
         custom_premise=effective_premise,
         custom_world_setup=custom_setup,
         scenario=scenario,
@@ -3485,8 +3888,8 @@ async def _create_new_story(req: NewStoryRequest):
         title=title,
         mode=effective_mode,
         prose_mode=prose_modes.resolve_prose_mode_name(req.prose_mode),
-        scenario_id=req.scenario_id,
-        creation_request_id=_normalize_creation_request_id(req.creation_request_id),
+        scenario_id=resolved_scenario_id,
+        creation_request_id=creation_request_id,
         replayability_state=replayability_state,
         # ---- session-locked AI routing snapshot ----
         active_model=primary_model,
@@ -3505,6 +3908,18 @@ async def _create_new_story(req: NewStoryRequest):
     ]
     if effective_premise:
         setup_lines.append(f"Premise hook: {effective_premise}")
+
+    # Stage 2A: structured opening lines from creation contract (not prompt-only).
+    if custom_setup:
+        opening_contract = creation_contract.build_creation_contract(
+            genre=effective_genre,
+            role=effective_role,
+            tone=effective_tone,
+            difficulty=effective_difficulty,
+            scenario_id=resolved_scenario_id,
+            custom_world_setup=custom_setup,
+        )
+        setup_lines.extend(creation_contract.build_opening_setup_lines(opening_contract))
 
     custom_setup_block = _build_custom_world_setup_block(custom_setup)
     if custom_setup_block:
@@ -3525,6 +3940,17 @@ async def _create_new_story(req: NewStoryRequest):
             f"  Hidden threat (do NOT reveal yet, store as latent trigger): {scenario['hidden_threat']}"
         )
         setup_lines.append(f"  Opening seed: {scenario['seed']}")
+        frame = scenario.get("world_frame") if isinstance(scenario.get("world_frame"), dict) else {}
+        if frame:
+            setup_lines.append(
+                f"  World frame: era={frame.get('era', '')}; "
+                f"setting={frame.get('setting', '')}; technology={frame.get('technology', '')}."
+            )
+            if frame.get("forbidden_opening_frames"):
+                setup_lines.append(
+                    "  Forbidden dominant frames: "
+                    + ", ".join(str(x) for x in frame["forbidden_opening_frames"][:8])
+                )
 
     setup_text = "\n".join(setup_lines)
     settings = await get_ai_settings()
@@ -3539,7 +3965,12 @@ async def _create_new_story(req: NewStoryRequest):
         f"{mode_marker}\n\n"
         f"Begin the story now. Use the following setup:\n{setup_text}\n\n"
         f"Open in medias res with a specific immediate situation — not pure setup, routine, or generic exploration. "
+        f"Before any choices, establish: where the player is, why they are there or how they arrived, "
+        f"the dominant active pressure from the scenario, important visible objects, and introduce every "
+        f"named person in narrative prose before any choice may reference them. "
         f"Give the player a reason to decide now and connect first choices to that situation. "
+        f"Choices must express one intention each (short, scannable) and must not invent people, "
+        f"contracts, debt claims, or objects absent from the scenario seed and this turn's narrative. "
         f"Populate state Pressure and at least one objectives or unresolved stake. "
         f"Preserve hidden-threat secrecy; do not reveal latent threats merely to create pace. "
         f"Populate the inventory ledger with the starting kit. "
@@ -3580,6 +4011,10 @@ async def _create_new_story(req: NewStoryRequest):
     # Turn 1: no prior to merge from. Compression metrics for diagnostics only.
     merged_rolling = consolidate_rolling_state(None, parsed.rolling_state)
     merged_rolling = _seed_custom_setup_into_rolling(merged_rolling, custom_setup)
+    # Stage 2B: re-assert world_frame / character_hooks from durable session.
+    merged_rolling = creation_contract.restore_creation_surfaces(
+        merged_rolling, session.model_dump() if hasattr(session, "model_dump") else session
+    )
     # Re-canonicalize after setup seeding so seeded inventory rows can't
     # collide with model-emitted rows that share identity.
     canonicalize_object_registry(merged_rolling)
@@ -3631,11 +4066,24 @@ async def _create_new_story(req: NewStoryRequest):
         }
     )
 
+    canonical_narrative = parsed.narrative
+    parsed, rendering_policy = await _apply_presentation_rendering(
+        session.model_dump(),
+        parsed,
+        merged_rolling or parsed.rolling_state,
+        None,
+    )
+    session.rendering_policy = rendering_policy
+    enriched_debug["rendering_status"] = str(
+        rendering_policy.get("last_status") or "standard"
+    )
+
     turn = TurnRecord(
         session_id=session.id,
         turn_number=1,
         player_action=None,
         narrative=parsed.narrative,
+        canonical_narrative=canonical_narrative,
         paragraphs=parsed.paragraphs,
         choices=parsed.choices,
         state=parsed.state,
@@ -3657,6 +4105,7 @@ async def _create_new_story(req: NewStoryRequest):
                 "rolling_state": merged_rolling or parsed.rolling_state,
                 "rolling_state_updated_at": datetime.now(timezone.utc),
                 "replayability_state": replayability_state,
+                "rendering_policy": rendering_policy,
                 "updated_at": datetime.now(timezone.utc),
             }},
         )
@@ -3744,6 +4193,20 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
 
         # ---- Rolling Memory Compression v3.8 ----
         merged_rolling = consolidate_rolling_state(prior_rolling, parsed.rolling_state)
+        # Stage 2B: creation surfaces re-derive from durable session — prose cannot
+        # erase world_frame / character_hooks / knowledge_scope via omission.
+        if session.get("custom_world_setup"):
+            before_restore = {
+                "wf": bool((merged_rolling or {}).get("world_frame")),
+                "ch": bool((merged_rolling or {}).get("character_hooks")),
+            }
+            merged_rolling = creation_contract.restore_creation_surfaces(
+                merged_rolling, session
+            )
+            if (merged_rolling.get("world_frame") and not before_restore["wf"]) or (
+                merged_rolling.get("character_hooks") and not before_restore["ch"]
+            ):
+                guard_adjustments.append("restored creation surfaces from session contract")
         guard_adjustments.extend(
             secrets.enforce_authoritative_registry(
                 merged_rolling,
@@ -3856,11 +4319,23 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
             {f"compression_{k}": str(v) for k, v in compression.items()}
         )
 
+        canonical_narrative = parsed.narrative
+        parsed, rendering_policy = await _apply_presentation_rendering(
+            session,
+            parsed,
+            merged_rolling or parsed.rolling_state,
+            req.action_text,
+        )
+        enriched_debug["rendering_status"] = str(
+            rendering_policy.get("last_status") or "standard"
+        )
+
         turn = TurnRecord(
             session_id=session_id,
             turn_number=next_turn_number,
             player_action=req.action_text,
             narrative=parsed.narrative,
+            canonical_narrative=canonical_narrative,
             paragraphs=parsed.paragraphs,
             choices=parsed.choices,
             state=parsed.state,
@@ -3881,6 +4356,7 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
             "rolling_state_updated_at": session.get("rolling_state_updated_at"),
             "active_model": session.get("active_model"),
             "model_switches": copy.deepcopy(session.get("model_switches") or []),
+            "rendering_policy": copy.deepcopy(session.get("rendering_policy") or {}),
         }
 
         snippet = (parsed.paragraphs[0][:180] + "…") if parsed.paragraphs else ""
@@ -3890,6 +4366,7 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
             "last_state": parsed.state,
             "updated_at": datetime.now(timezone.utc),
             "debug_mode": req.debug_mode,
+            "rendering_policy": rendering_policy,
         }
         if merged_rolling:
             update_set["rolling_state"] = merged_rolling

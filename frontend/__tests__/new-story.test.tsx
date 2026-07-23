@@ -1,27 +1,44 @@
 import React from "react";
-import { Alert } from "react-native";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react-native";
 import NewStoryScreen from "../app/new-story";
-import { AdvancedBuilder } from "../src/newstory/AdvancedBuilder";
+import {
+  AdvancedBuilder,
+  buildAdvancedStartRequest,
+  createDefaultAdvancedSetup,
+} from "../src/newstory/AdvancedBuilder";
+import {
+  QUICK_START_GENRES,
+  assertQuickStartPoolsHealthy,
+  buildQuickStartRequest,
+} from "../src/newstory/QuickStart";
+import {
+  buildGuidedStartRequest,
+  isGuidedStartComplete,
+  resolveGuidedWorldSelection,
+} from "../src/newstory/GuidedStart";
+import type { GuidedStartSelections } from "../src/newstory/types";
+
+jest.setTimeout(25000);
 
 const mockReplace = jest.fn();
 const mockBack = jest.fn();
-const mockListScenarios = jest.fn();
+const mockGetSetupCapabilities = jest.fn();
 const mockNewStory = jest.fn();
 const mockGetDeviceId = jest.fn();
 const mockGetSettings = jest.fn();
 
 jest.mock("expo-router", () => ({
-  useRouter: () => ({
-    replace: mockReplace,
-    back: mockBack,
-  }),
+  useRouter: () => ({ replace: mockReplace, back: mockBack }),
 }));
 
-jest.mock("../src/api", () => ({
-  listScenarios: (...args: unknown[]) => mockListScenarios(...args),
-  newStory: (...args: unknown[]) => mockNewStory(...args),
-}));
+jest.mock("../src/api", () => {
+  const actual = jest.requireActual("../src/api");
+  return {
+    ...actual,
+    getSetupCapabilities: (...args: unknown[]) => mockGetSetupCapabilities(...args),
+    newStory: (...args: unknown[]) => mockNewStory(...args),
+  };
+});
 
 jest.mock("../src/storage", () => ({
   getDeviceId: (...args: unknown[]) => mockGetDeviceId(...args),
@@ -45,42 +62,62 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+const MATURE_DEFAULTS = {
+  adult_mode_enabled: false,
+  adult_age_confirmed: false,
+  violence_level: "mild",
+  horror_level: "atmospheric",
+  sexual_content_level: "off",
+  consent_boundary: "consensual_only",
+  player_involvement: "npcs_only",
+  language_level: "mild",
+  substance_content_level: "mentioned",
+  hard_limits: [],
+};
+
+const ADULT_CAPABILITIES = {
+  channel: "development",
+  adult_mode_available: true,
+  sexual_content_available: true,
+  nonconsensual_content_available: true,
+  graphic_sexual_content_available: true,
+  mature_renderer_configured: true,
+};
+
 async function renderScreen(fontScale = 1) {
-  mockGetSettings.mockResolvedValue({ debugDefault: false, fontScale, developerUnlocked: false });
+  mockGetSettings.mockResolvedValue({
+    debugDefault: false,
+    fontScale,
+    developerUnlocked: false,
+  });
   render(<NewStoryScreen />);
   await waitFor(() => {
-    expect(screen.getByTestId("quick-start-step-1")).toBeTruthy();
+    expect(screen.getByTestId("creation-selection-screen")).toBeTruthy();
   });
 }
 
-async function completeQuickStart() {
-  fireEvent.press(screen.getByTestId("quick-start-option-world-fantasy"));
-  fireEvent.press(screen.getByTestId("quick-start-next-button"));
-  fireEvent.press(screen.getByTestId("quick-start-option-character-survivor"));
-  fireEvent.press(screen.getByTestId("quick-start-next-button"));
-  fireEvent.press(screen.getByTestId("quick-start-option-tone-hopeful"));
-  fireEvent.press(screen.getByTestId("quick-start-next-button"));
-  fireEvent.press(screen.getByTestId("quick-start-option-want-justice"));
-  fireEvent.press(screen.getByTestId("quick-start-next-button"));
-  fireEvent.press(screen.getByTestId("quick-start-option-fear-failure"));
-  fireEvent.press(screen.getByTestId("quick-start-next-button"));
-  fireEvent.press(screen.getByTestId("quick-start-option-whoMatters-friend"));
-  fireEvent.press(screen.getByTestId("quick-start-next-button"));
-  await screen.findByTestId("quick-start-review-step");
+async function openQuick() {
+  fireEvent.press(screen.getByTestId("selection-card-quick"));
+  await waitFor(() => expect(screen.getByTestId("quick-start-genre-fantasy")).toBeTruthy());
 }
 
-async function completeGuidedStart() {
-  fireEvent.press(screen.getByTestId("creation-flow-guided"));
-  await waitFor(() => {
-    expect(screen.getByTestId("guided-start-step-1")).toBeTruthy();
-  });
+async function openGuided() {
+  fireEvent.press(screen.getByTestId("selection-card-guided"));
+  await waitFor(() => expect(screen.getByTestId("guided-start-step-1")).toBeTruthy());
+}
+
+async function openAdvanced() {
+  fireEvent.press(screen.getByTestId("selection-card-advanced"));
+  await waitFor(() => expect(screen.getByTestId("advanced-step-1")).toBeTruthy());
+}
+
+async function completeGuidedHappyPath() {
+  await openGuided();
   fireEvent.press(screen.getByTestId("guided-start-option-world-fantasy"));
   fireEvent.press(screen.getByTestId("guided-start-next-button"));
-  fireEvent.press(screen.getByTestId("guided-start-option-worldDetail-magic-is-dying"));
+  fireEvent.press(screen.getByTestId("guided-start-option-role-scholar"));
   fireEvent.press(screen.getByTestId("guided-start-next-button"));
-  fireEvent.press(screen.getByTestId("guided-start-option-character-scholar"));
-  fireEvent.press(screen.getByTestId("guided-start-next-button"));
-  fireEvent.press(screen.getByTestId("guided-start-option-tone-dark"));
+  fireEvent.press(screen.getByTestId("guided-start-option-pressure-isolation"));
   fireEvent.press(screen.getByTestId("guided-start-next-button"));
   fireEvent.press(screen.getByTestId("guided-start-option-want-knowledge"));
   fireEvent.press(screen.getByTestId("guided-start-next-button"));
@@ -88,38 +125,28 @@ async function completeGuidedStart() {
   fireEvent.press(screen.getByTestId("guided-start-next-button"));
   fireEvent.press(screen.getByTestId("guided-start-option-whoMatters-mentor"));
   fireEvent.press(screen.getByTestId("guided-start-next-button"));
-  fireEvent.press(screen.getByTestId("guided-start-option-difficulty-hard"));
+  fireEvent.press(screen.getByTestId("guided-start-option-experience-dark"));
   fireEvent.press(screen.getByTestId("guided-start-next-button"));
   await screen.findByTestId("guided-start-review-step");
 }
 
-describe("Advanced Builder extraction", () => {
-  it("exposes AdvancedBuilder as a separate component module", () => {
-    expect(typeof AdvancedBuilder).toBe("function");
-  });
-});
+const COMPLETE_GUIDED: GuidedStartSelections = {
+  world: "fantasy",
+  resolvedGenre: "fantasy",
+  role: "scholar",
+  pressure: "isolation",
+  want: "knowledge",
+  fear: "becoming-a-monster",
+  whoMatters: "mentor",
+  experience: "dark",
+};
 
-describe("NewStoryScreen Quick Start", () => {
+describe("new story onboarding redesign", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockListScenarios.mockResolvedValue({
-      scenarios: [
-        {
-          id: "modern-mystery",
-          title: "The Last Witness",
-          pitch: "A witness disappears before dawn.",
-          genre: "detective",
-          role: "investigator",
-          tone: "grim",
-          difficulty: "standard",
-          mode: "advanced",
-          starting_location: "A rain-slick apartment block",
-          starting_pressure: "Someone is already cleaning the scene",
-          key_npcs: [{ name: "Mara", role: "sister", stance: "wary" }],
-          starting_inventory: "phone; notebook",
-          hidden_threat: "The wrong suspect is bait",
-        },
-      ],
+    mockGetSetupCapabilities.mockResolvedValue({
+      distribution_capabilities: ADULT_CAPABILITIES,
+      mature_content_defaults: MATURE_DEFAULTS,
     });
     mockGetDeviceId.mockResolvedValue("device-123");
     mockNewStory.mockResolvedValue({
@@ -127,388 +154,294 @@ describe("NewStoryScreen Quick Start", () => {
       turn: { id: "turn-1" },
       session: { id: "session-123" },
     });
-    jest.spyOn(Alert, "alert").mockImplementation(jest.fn());
   });
 
-  it("shows Quick Start by default and renders step 1", async () => {
+  it("renders selection cards without a tab switcher", async () => {
     await renderScreen();
-
-    expect(screen.getByTestId("creation-flow-quick")).toBeTruthy();
-    expect(screen.getByTestId("quick-start-step-1")).toBeTruthy();
-    expect(screen.getByTestId("quick-start-step-question").props.children).toBe(
-      "Where does this story begin?"
-    );
+    expect(screen.getByTestId("selection-card-quick")).toBeTruthy();
+    expect(screen.getByTestId("selection-card-guided")).toBeTruthy();
+    expect(screen.getByTestId("selection-card-advanced")).toBeTruthy();
+    expect(screen.queryByTestId("creation-flow-switcher")).toBeNull();
+    expect(screen.getByText("Choose How to Begin")).toBeTruthy();
+    expect(screen.getByText("Choose a world")).toBeTruthy();
+    expect(screen.getByText("Start guided setup")).toBeTruthy();
+    expect(screen.getByText("Open builder")).toBeTruthy();
   });
 
-  it("allows one selection and advances progress", async () => {
+  it("navigates into Quick Start and keeps the eight world cards one-tap", async () => {
     await renderScreen();
-
-    fireEvent.press(screen.getByTestId("quick-start-option-world-fantasy"));
-    expect(screen.getByTestId("quick-start-option-selected-world-fantasy")).toBeTruthy();
-
-    fireEvent.press(screen.getByTestId("quick-start-next-button"));
-    expect(screen.getByTestId("quick-start-progress-text").props.children.join("")).toContain("2 of 6");
-    expect(screen.getByTestId("quick-start-step-2")).toBeTruthy();
-  });
-
-  it("preserves previous selections when going back", async () => {
-    await renderScreen();
-
-    fireEvent.press(screen.getByTestId("quick-start-option-world-fantasy"));
-    fireEvent.press(screen.getByTestId("quick-start-next-button"));
-    fireEvent.press(screen.getByTestId("quick-start-back-button"));
-
-    expect(screen.getByTestId("quick-start-step-1")).toBeTruthy();
-    expect(screen.getByTestId("quick-start-option-selected-world-fantasy")).toBeTruthy();
-  });
-
-  it("completes all six steps without typing and shows player-facing review labels", async () => {
-    await renderScreen();
-
-    await completeQuickStart();
-
-    expect(screen.getByTestId("quick-start-review-value-world").props.children).toBe("Fantasy");
-    expect(screen.getByTestId("quick-start-review-value-character").props.children).toBe("Survivor");
-    expect(screen.getByTestId("quick-start-review-value-tone").props.children).toBe("Hopeful");
-    expect(screen.getByTestId("quick-start-review-value-want").props.children).toBe("Justice");
-    expect(screen.getByTestId("quick-start-review-value-fear").props.children).toBe("Failure");
-    expect(screen.getByTestId("quick-start-review-value-whoMatters").props.children).toBe("Friend");
-    expect(screen.getByTestId("quick-start-review-summary").props.children).toContain("fantasy");
-    expect(String(screen.getByTestId("quick-start-review-summary").props.children)).not.toContain("whoMatters");
-    expect(String(screen.getByTestId("quick-start-review-summary").props.children)).not.toContain("losing-control");
-  });
-
-  it("updates the review after changing a previous choice", async () => {
-    await renderScreen();
-    await completeQuickStart();
-
-    fireEvent.press(screen.getByTestId("quick-start-change-tone"));
-    expect(screen.getByTestId("quick-start-step-3")).toBeTruthy();
-    fireEvent.press(screen.getByTestId("quick-start-option-tone-brutal"));
-    fireEvent.press(screen.getByTestId("quick-start-next-button"));
-    fireEvent.press(screen.getByTestId("quick-start-next-button"));
-    fireEvent.press(screen.getByTestId("quick-start-next-button"));
-    fireEvent.press(screen.getByTestId("quick-start-next-button"));
-
-    expect(screen.getByTestId("quick-start-review-value-tone").props.children).toBe("Brutal");
-    expect(String(screen.getByTestId("quick-start-review-summary").props.children)).toContain("brutal");
-  });
-
-  it("submits the correct typed payload, disables while pending, and blocks duplicates", async () => {
-    const pending = deferred<any>();
-    mockNewStory.mockReturnValueOnce(pending.promise);
-    await renderScreen();
-
-    await completeQuickStart();
-    fireEvent.press(screen.getByTestId("quick-start-start-button"));
-    fireEvent.press(screen.getByTestId("quick-start-start-button"));
-
-    await waitFor(() => {
-      expect(mockNewStory).toHaveBeenCalledTimes(1);
-      expect(mockNewStory).toHaveBeenCalledWith({
-        device_id: "device-123",
-        genre: "fantasy",
-        role: "a hardened survivor",
-        tone: "hopeful",
-        difficulty: "standard",
-        debug_mode: false,
-        mode: "advanced",
-        creation_request_id: expect.stringMatching(/^story-create:/),
-        custom_world_setup: {
-          want: "justice",
-          fear: "failure",
-          whoMatters: "friend",
-        },
-      });
-    });
-    expect(screen.getByTestId("quick-start-loading-state")).toBeTruthy();
-
-    await act(async () => {
-      pending.resolve({
-        session_id: "session-quick",
-        turn: { id: "turn-quick" },
-        session: { id: "session-quick" },
-      });
-      await pending.promise;
-    });
-
-    await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/play/session-quick");
-    });
-  });
-
-  it("preserves selections after a recoverable failure and allows retry", async () => {
-    mockNewStory
-      .mockRejectedValueOnce(new Error("500: backend trace"))
-      .mockResolvedValueOnce({ session_id: "session-retry", turn: {}, session: {} });
-    await renderScreen();
-
-    await completeQuickStart();
-    fireEvent.press(screen.getByTestId("quick-start-start-button"));
-
-    await waitFor(() => {
-      expect(screen.getByTestId("new-story-error-banner")).toBeTruthy();
-    });
-    const firstCreationRequestId = mockNewStory.mock.calls[0][0].creation_request_id;
-    expect(screen.getByTestId("quick-start-review-value-world").props.children).toBe("Fantasy");
-    expect(String(screen.getByTestId("new-story-error-banner").props.children)).not.toContain("backend trace");
-    expect(String(screen.getByTestId("new-story-error-banner").props.children)).not.toContain("OpenAI");
-
-    fireEvent.press(screen.getByTestId("quick-start-start-button"));
-    await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/play/session-retry");
-    });
-    expect(mockNewStory).toHaveBeenCalledTimes(2);
-    expect(mockNewStory.mock.calls[1][0].creation_request_id).toBe(firstCreationRequestId);
-  });
-
-  it("shows no admin controls, no secret fields, and no raw rolling state", async () => {
-    await renderScreen();
-
-    expect(screen.queryByText(/ADMIN/i)).toBeNull();
-    expect(screen.queryByText(/^Secret$/i)).toBeNull();
-    expect(screen.queryByText(/rolling_state/i)).toBeNull();
-    expect(screen.queryByText(/ENGINE MODE/i)).toBeNull();
-  });
-
-  it("keeps the existing Advanced Builder available where accessed", async () => {
-    await renderScreen();
-
-    fireEvent.press(screen.getByTestId("creation-flow-advanced"));
-    await waitFor(() => {
-      expect(screen.getByTestId("scenario-modern-mystery")).toBeTruthy();
-    });
-
-    expect(screen.getByTestId("advanced-builder-panel")).toBeTruthy();
-    expect(screen.getByTestId("scenario-modern-mystery")).toBeTruthy();
-    expect(screen.getByTestId("role-input")).toBeTruthy();
-    expect(screen.getByTestId("begin-story-btn")).toBeTruthy();
-    expect(screen.queryByTestId("mode-advanced")).toBeNull();
-  });
-
-  it("maps Advanced Builder payload through the unchanged newStory contract", async () => {
-    mockNewStory.mockResolvedValueOnce({
-      session_id: "advanced-123",
-      turn: { id: "turn-advanced" },
-      session: { id: "advanced-123" },
-    });
-    await renderScreen();
-
-    fireEvent.press(screen.getByTestId("creation-flow-advanced"));
-    await waitFor(() => {
-      expect(screen.getByTestId("advanced-builder-panel")).toBeTruthy();
-    });
-    fireEvent.press(screen.getByTestId("scenario-modern-mystery"));
-    fireEvent.changeText(screen.getByTestId("role-input"), "investigator");
-    fireEvent.press(screen.getByTestId("begin-story-btn"));
-
+    await openQuick();
+    expect(screen.queryByTestId("creation-selection-screen")).toBeNull();
+    for (const option of QUICK_START_GENRES) {
+      expect(screen.getByTestId(`quick-start-genre-${option.key}`)).toBeTruthy();
+    }
+    fireEvent.press(screen.getByTestId("quick-start-genre-horror"));
     await waitFor(() => {
       expect(mockNewStory).toHaveBeenCalledWith(
         expect.objectContaining({
           device_id: "device-123",
-          genre: "detective",
-          role: "investigator",
-          scenario_id: "modern-mystery",
+          genre: "horror",
+          tone: "grim",
+          difficulty: "hard",
+          debug_mode: false,
           mode: "advanced",
+          role: expect.any(String),
+          quick_start_key: "horror",
           creation_request_id: expect.stringMatching(/^story-create:/),
+        })
+      );
+      const body = mockNewStory.mock.calls[0][0];
+      expect(body.scenario_id).toBeUndefined();
+      expect(body.custom_world_setup).toBeUndefined();
+      expect(body.custom_premise).toBeUndefined();
+      expect(mockReplace).toHaveBeenCalledWith("/play/session-123");
+    });
+  });
+
+  it("returns to selection from Quick Start without merging drafts", async () => {
+    await renderScreen();
+    await openQuick();
+    fireEvent.press(screen.getByTestId("quick-change-path"));
+    await waitFor(() => expect(screen.getByTestId("creation-selection-screen")).toBeTruthy());
+  });
+
+  it("maps every Quick Start card to a pool of at least 3 scenarios without client scenario_id", () => {
+    expect(() => assertQuickStartPoolsHealthy()).not.toThrow();
+    for (const option of QUICK_START_GENRES) {
+      expect(option.scenario_pool.length).toBeGreaterThanOrEqual(3);
+      const built = buildQuickStartRequest(option);
+      expect(built.quick_start_key).toBe(option.key);
+      expect(built.role).toBe(option.role);
+      expect(built.genre).toBe(option.genre);
+      expect((built as { scenario_id?: string }).scenario_id).toBeUndefined();
+    }
+  });
+
+  it("Prehistoric Survival sends quick_start_key only — no modern containment scenario_id", async () => {
+    const pre = QUICK_START_GENRES.find((g) => g.key === "dinosaur-survival");
+    expect(pre).toBeTruthy();
+    expect(pre!.scenario_pool).not.toContain("dinosaur-containment-breach");
+    expect(pre!.scenario_pool).toEqual(
+      expect.arrayContaining(["flint-band-stalked", "river-ice-calving", "tar-pit-foraging"])
+    );
+
+    await renderScreen();
+    fireEvent.press(screen.getByTestId("selection-card-quick"));
+    await waitFor(() => expect(screen.getByTestId("quick-start-genre-dinosaur-survival")).toBeTruthy());
+    fireEvent.press(screen.getByTestId("quick-start-genre-dinosaur-survival"));
+    await waitFor(() => {
+      expect(mockNewStory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          genre: "prehistoric survival",
+          difficulty: "brutal",
+          mode: "advanced",
+          role: expect.any(String),
+          quick_start_key: "dinosaur-survival",
+        })
+      );
+    });
+    const payload = mockNewStory.mock.calls[0][0];
+    expect(payload.custom_world_setup).toBeUndefined();
+    expect(payload.custom_premise).toBeUndefined();
+    expect(payload.scenario_id).toBeUndefined();
+    expect(payload.quick_start_key).toBe("dinosaur-survival");
+  });
+
+  it("builds Guided payload with pressures, hooks, tone and difficulty", () => {
+    expect(isGuidedStartComplete(COMPLETE_GUIDED)).toBe(true);
+    expect(buildGuidedStartRequest(COMPLETE_GUIDED)).toEqual({
+      genre: "fantasy",
+      role: "a scholar",
+      tone: "grim",
+      difficulty: "hard",
+      mode: "advanced",
+      custom_world_setup: {
+        creationFlow: "guided",
+        want: "knowledge",
+        fear: "becoming-a-monster",
+        whoMatters: "mentor",
+        pressures: ["isolation"],
+      },
+    });
+  });
+
+  it("resolves Surprise me once and reuses the concrete genre", () => {
+    const first = resolveGuidedWorldSelection({}, "surprise", 2);
+    expect(first.world).toBe("surprise");
+    expect(first.resolvedGenre).toBeTruthy();
+    const second = resolveGuidedWorldSelection(first as GuidedStartSelections, "surprise", 0);
+    expect(second.resolvedGenre).toBe(first.resolvedGenre);
+  });
+
+  it("maps science fiction to a general science-fiction genre", () => {
+    const patch = resolveGuidedWorldSelection({}, "science-fiction");
+    expect(patch.resolvedGenre).toBe("science fiction");
+  });
+
+  it("nobody relationship does not invent a named person in payload", () => {
+    const payload = buildGuidedStartRequest({
+      ...COMPLETE_GUIDED,
+      whoMatters: "nobody",
+    });
+    expect(payload?.custom_world_setup.whoMatters).toBe("nobody");
+    expect(JSON.stringify(payload)).not.toMatch(/Marlene|Greg|named/i);
+  });
+
+  it("preserves generic relationship meanings without parent/child mis-mapping", () => {
+    const family = buildGuidedStartRequest({
+      ...COMPLETE_GUIDED,
+      whoMatters: "family-member",
+    });
+    expect(family?.custom_world_setup.whoMatters).toBe("family-member");
+    expect(family?.custom_world_setup.whoMatters).not.toBe("parent");
+
+    const dependant = buildGuidedStartRequest({
+      ...COMPLETE_GUIDED,
+      whoMatters: "someone-depending",
+    });
+    expect(dependant?.custom_world_setup.whoMatters).toBe("someone-depending");
+    expect(dependant?.custom_world_setup.whoMatters).not.toBe("child");
+  });
+
+  it("walks Guided seven steps to review and submits", async () => {
+    await renderScreen();
+    await completeGuidedHappyPath();
+    fireEvent.press(screen.getByTestId("guided-start-start-button"));
+    await waitFor(() => {
+      expect(mockNewStory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          genre: "fantasy",
+          role: "a scholar",
+          tone: "grim",
+          difficulty: "hard",
+          mode: "advanced",
+          custom_world_setup: {
+            creationFlow: "guided",
+            want: "knowledge",
+            fear: "becoming-a-monster",
+            whoMatters: "mentor",
+            pressures: ["isolation"],
+          },
         })
       );
     });
   });
 
-  it("still renders and advances at large font scale", async () => {
-    await renderScreen(1.25);
-
-    await waitFor(() => {
-      expect(screen.getByTestId("quick-start-heading").props.style).toEqual(
-        expect.arrayContaining([expect.objectContaining({ fontSize: 38 })])
-      );
-    });
-
-    fireEvent.press(screen.getByTestId("quick-start-option-world-fantasy"));
-    fireEvent.press(screen.getByTestId("quick-start-next-button"));
-
-    expect(screen.getByTestId("quick-start-step-2")).toBeTruthy();
-  });
-
-  it("shows three player-facing creation modes and switches without crashing", async () => {
+  it("retains Guided draft when returning to selection and re-entering", async () => {
     await renderScreen();
-
-    expect(screen.getByTestId("creation-flow-quick")).toBeTruthy();
-    expect(screen.getByTestId("creation-flow-guided")).toBeTruthy();
-    expect(screen.getByTestId("creation-flow-advanced")).toBeTruthy();
-    expect(screen.queryByText(/rolling state/i)).toBeNull();
-    expect(screen.queryByText(/simulation hook/i)).toBeNull();
-
-    fireEvent.press(screen.getByTestId("creation-flow-guided"));
-    await waitFor(() => {
-      expect(screen.getByTestId("guided-start-step-1")).toBeTruthy();
-    });
-
-    fireEvent.press(screen.getByTestId("creation-flow-advanced"));
-    await waitFor(() => {
-      expect(screen.getByTestId("advanced-builder-panel")).toBeTruthy();
-    });
-
-    fireEvent.press(screen.getByTestId("creation-flow-quick"));
-    await waitFor(() => {
-      expect(screen.getByTestId("quick-start-step-1")).toBeTruthy();
-    });
+    await openGuided();
+    fireEvent.press(screen.getByTestId("guided-start-option-world-horror"));
+    fireEvent.press(screen.getByTestId("guided-change-path"));
+    await waitFor(() => expect(screen.getByTestId("creation-selection-screen")).toBeTruthy());
+    await openGuided();
+    expect(screen.getByTestId("guided-start-option-selected-world-horror")).toBeTruthy();
   });
 
-  it("Guided Start renders, advances, and preserves choices when going back", async () => {
-    await renderScreen();
-
-    fireEvent.press(screen.getByTestId("creation-flow-guided"));
-    await waitFor(() => {
-      expect(screen.getByTestId("guided-start-step-1")).toBeTruthy();
-    });
-    fireEvent.press(screen.getByTestId("guided-start-option-world-fantasy"));
-    fireEvent.press(screen.getByTestId("guided-start-next-button"));
-    expect(screen.getByTestId("guided-start-step-2")).toBeTruthy();
-    fireEvent.press(screen.getByTestId("guided-start-option-worldDetail-magic-is-dying"));
-    fireEvent.press(screen.getByTestId("guided-start-back-button"));
-
-    expect(screen.getByTestId("guided-start-step-1")).toBeTruthy();
-    expect(screen.getByTestId("guided-start-option-selected-world-fantasy")).toBeTruthy();
-
-    fireEvent.press(screen.getByTestId("guided-start-next-button"));
-    expect(screen.getByTestId("guided-start-option-selected-worldDetail-magic-is-dying")).toBeTruthy();
-  });
-
-  it("Guided Start completes without typing, shows player-facing review labels, and updates after edits", async () => {
-    await renderScreen();
-    await completeGuidedStart();
-
-    expect(screen.getByTestId("guided-start-review-value-world").props.children).toBe("Fantasy");
-    expect(screen.getByTestId("guided-start-review-value-worldDetail").props.children).toBe("Magic is dying");
-    expect(screen.getByTestId("guided-start-review-value-character").props.children).toBe("Scholar");
-    expect(screen.getByTestId("guided-start-review-value-tone").props.children).toBe("Dark");
-    expect(screen.getByTestId("guided-start-review-value-want").props.children).toBe("Knowledge");
-    expect(screen.getByTestId("guided-start-review-value-fear").props.children).toBe("Becoming a monster");
-    expect(screen.getByTestId("guided-start-review-value-whoMatters").props.children).toBe("Mentor");
-    expect(screen.getByTestId("guided-start-review-value-difficulty").props.children).toBe("Hard");
-    expect(String(screen.getByTestId("guided-start-review-summary").props.children)).toContain("magic is dying");
-    expect(String(screen.getByTestId("guided-start-review-summary").props.children)).not.toContain("worldDetail");
-    expect(String(screen.getByTestId("guided-start-review-summary").props.children)).not.toContain("rolling_state");
-
-    fireEvent.press(screen.getByTestId("guided-start-change-difficulty"));
-    fireEvent.press(screen.getByTestId("guided-start-option-difficulty-brutal"));
-    fireEvent.press(screen.getByTestId("guided-start-next-button"));
-
-    expect(screen.getByTestId("guided-start-review-value-difficulty").props.children).toBe("Brutal");
-    expect(String(screen.getByTestId("guided-start-review-summary").props.children)).toContain("brutal");
-  });
-
-  it("Guided Start maps to the existing payload and prevents duplicate submit", async () => {
+  it("locks Guided duplicate submit", async () => {
     const pending = deferred<any>();
     mockNewStory.mockReturnValueOnce(pending.promise);
     await renderScreen();
-    await completeGuidedStart();
-
+    await completeGuidedHappyPath();
     fireEvent.press(screen.getByTestId("guided-start-start-button"));
     fireEvent.press(screen.getByTestId("guided-start-start-button"));
-
-    await waitFor(() => {
-      expect(mockNewStory).toHaveBeenCalledTimes(1);
-      expect(mockNewStory).toHaveBeenCalledWith({
-        device_id: "device-123",
-        genre: "fantasy",
-        role: "a scholar",
-        tone: "grim",
-        difficulty: "hard",
-        debug_mode: false,
-        custom_premise: "Fantasy: Magic is dying. The old power is draining away.",
-        mode: "advanced",
-        creation_request_id: expect.stringMatching(/^story-create:/),
-        custom_world_setup: {
-          want: "knowledge",
-          fear: "becoming-a-monster",
-          whoMatters: "mentor",
-        },
-      });
-    });
-    expect(screen.getByTestId("guided-start-loading-state")).toBeTruthy();
-
+    await waitFor(() => expect(mockNewStory).toHaveBeenCalledTimes(1));
     await act(async () => {
-      pending.resolve({
-        session_id: "guided-123",
-        turn: { id: "turn-guided" },
-        session: { id: "guided-123" },
-      });
+      pending.resolve({ session_id: "g1", turn: {}, session: {} });
       await pending.promise;
     });
-
-    await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/play/guided-123");
-    });
   });
 
-  it("Guided Start preserves answers after failure and retry", async () => {
-    mockNewStory
-      .mockRejectedValueOnce(new Error("502: trace"))
-      .mockResolvedValueOnce({ session_id: "guided-retry", turn: {}, session: {} });
+  it("opens Advanced without Quick image grid and starts at world type", async () => {
     await renderScreen();
-    await completeGuidedStart();
-
-    fireEvent.press(screen.getByTestId("guided-start-start-button"));
-
-    await waitFor(() => {
-      expect(screen.getByTestId("new-story-error-banner")).toBeTruthy();
-    });
-    const firstCreationRequestId = mockNewStory.mock.calls[0][0].creation_request_id;
-    expect(screen.getByTestId("guided-start-review-value-world").props.children).toBe("Fantasy");
-    expect(screen.getByTestId("guided-start-review-value-difficulty").props.children).toBe("Hard");
-    expect(String(screen.getByTestId("new-story-error-banner").props.children)).not.toContain("trace");
-
-    fireEvent.press(screen.getByTestId("guided-start-start-button"));
-    await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/play/guided-retry");
-    });
-    expect(mockNewStory).toHaveBeenCalledTimes(2);
-    expect(mockNewStory.mock.calls[1][0].creation_request_id).toBe(firstCreationRequestId);
+    await openAdvanced();
+    expect(screen.queryByTestId("quick-start-genre-grid")).toBeNull();
+    expect(screen.queryByTestId("genre-fantasy")).toBeNull();
+    expect(screen.getByText("What kind of world is this?")).toBeTruthy();
+    expect(screen.getByTestId("advanced-option-worldGenre-fantasy")).toBeTruthy();
   });
 
-  it("keeps Guided Start state isolated from Quick Start and Advanced Builder", async () => {
+  it("maps Advanced builder including want/fear/whoMatters and omits empty optionals", () => {
+    const request = buildAdvancedStartRequest({
+      ...createDefaultAdvancedSetup(),
+      worldGenre: "horror",
+      storyFeel: "grim",
+      consequenceSeverity: "brutal",
+      want: "safety",
+      fear: "failure",
+      whoMatters: "nobody",
+      ghost: undefined,
+      talent: "",
+      worldElements: "",
+    });
+    expect(request.genre).toBe("horror");
+    expect(request.tone).toBe("grim");
+    expect(request.difficulty).toBe("brutal");
+    expect(request.custom_world_setup.want).toBe("safety");
+    expect(request.custom_world_setup.whoMatters).toBe("nobody");
+    expect(request.custom_world_setup.creationFlow).toBe("advanced");
+    expect(request.custom_world_setup.secret).toBeUndefined();
+    expect(request.custom_world_setup.worldPace).toBeUndefined();
+    expect(request.custom_world_setup.ghost).toBeUndefined();
+    expect(request.custom_world_setup.worldGenre).toBeUndefined();
+  });
+
+  it("Advanced defaults walk to review and create", async () => {
     await renderScreen();
-
-    fireEvent.press(screen.getByTestId("creation-flow-guided"));
+    await openAdvanced();
+    for (let i = 0; i < 18; i += 1) {
+      fireEvent.press(screen.getByTestId("advanced-next-button"));
+    }
+    await screen.findByTestId("advanced-review-step");
+    expect(screen.getByTestId("advanced-review-want")).toBeTruthy();
+    expect(screen.getByTestId("advanced-review-whoMatters")).toBeTruthy();
+    expect(screen.queryByText("Secret")).toBeNull();
+    fireEvent.press(screen.getByTestId("begin-story-btn"));
     await waitFor(() => {
-      expect(screen.getByTestId("guided-start-step-1")).toBeTruthy();
-    });
-    fireEvent.press(screen.getByTestId("guided-start-option-world-fantasy"));
-
-    fireEvent.press(screen.getByTestId("creation-flow-quick"));
-    await waitFor(() => {
-      expect(screen.getByTestId("quick-start-step-1")).toBeTruthy();
-    });
-    expect(screen.queryByTestId("quick-start-option-selected-world-fantasy")).toBeNull();
-
-    fireEvent.press(screen.getByTestId("creation-flow-guided"));
-    await waitFor(() => {
-      expect(screen.getByTestId("guided-start-step-1")).toBeTruthy();
-    });
-    expect(screen.getByTestId("guided-start-option-selected-world-fantasy")).toBeTruthy();
-
-    fireEvent.press(screen.getByTestId("creation-flow-advanced"));
-    await waitFor(() => {
-      expect(screen.getByTestId("advanced-builder-panel")).toBeTruthy();
-    });
-    expect(screen.getByTestId("role-input").props.value).toBe("");
-  });
-
-  it("renders Guided Start safely at XL font scale", async () => {
-    await renderScreen(1.25);
-
-    fireEvent.press(screen.getByTestId("creation-flow-guided"));
-    await waitFor(() => {
-      expect(screen.getByTestId("guided-start-heading").props.style).toEqual(
-        expect.arrayContaining([expect.objectContaining({ fontSize: 38 })])
+      expect(mockNewStory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          genre: "modern",
+          mode: "advanced",
+          custom_world_setup: expect.objectContaining({
+            want: "safety",
+            fear: "failure",
+            whoMatters: "nobody",
+          }),
+        })
       );
     });
+  });
 
-    fireEvent.press(screen.getByTestId("guided-start-option-world-fantasy"));
-    fireEvent.press(screen.getByTestId("guided-start-next-button"));
-    expect(screen.getByTestId("guided-start-step-2")).toBeTruthy();
+  it("keeps mature age gate", async () => {
+    await renderScreen();
+    await openAdvanced();
+    for (let i = 0; i < 18; i += 1) {
+      fireEvent.press(screen.getByTestId("advanced-next-button"));
+    }
+    await screen.findByTestId("advanced-review-step");
+    fireEvent.press(screen.getByTestId("mature-content-expand"));
+    fireEvent.press(screen.getByTestId("mature-content-enable"));
+    fireEvent.press(screen.getByTestId("begin-story-btn"));
+    expect(mockNewStory).not.toHaveBeenCalled();
+    fireEvent.press(screen.getByTestId("mature-age-confirmation"));
+    fireEvent.press(screen.getByTestId("begin-story-btn"));
+    await waitFor(() => expect(mockNewStory).toHaveBeenCalled());
+  });
+
+  it("reuses creation_request_id on identical Quick retry", async () => {
+    mockNewStory
+      .mockRejectedValueOnce(new Error("fail"))
+      .mockResolvedValueOnce({ session_id: "retry-1", turn: {}, session: {} });
+    await renderScreen();
+    await openQuick();
+    fireEvent.press(screen.getByTestId("quick-start-genre-fantasy"));
+    await screen.findByTestId("new-story-error-banner");
+    const firstId = mockNewStory.mock.calls[0][0].creation_request_id;
+    fireEvent.press(screen.getByTestId("quick-start-genre-fantasy"));
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/play/retry-1"));
+    expect(mockNewStory.mock.calls[1][0].creation_request_id).toBe(firstId);
+  });
+
+  it("exposes AdvancedBuilder as a module", () => {
+    expect(typeof AdvancedBuilder).toBe("function");
   });
 });

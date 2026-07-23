@@ -255,14 +255,54 @@ export const HOOK_FEAR = [
 ] as const;
 export type FearValue = (typeof HOOK_FEAR)[number]["value"];
 
-/** "Who matters most to you?" */
+/**
+ * "Who matters most to you?" — archetypes only; never named cast.
+ * Slugs are generic (family-member, someone-depending) so labels keep their
+ * meaning; never silently map "family"→parent or "depending"→child.
+ */
 export const HOOK_WHO_MATTERS = [
-  { value: "child", label: "Child", explanation: "A child you must protect.", consequence: "Expect: an NPC whose safety drives stakes." },
-  { value: "partner", label: "Partner", explanation: "A romantic or life partner.", consequence: "Expect: a bond that can be leveraged or lost." },
-  { value: "friend", label: "Friend", explanation: "A close, trusted friend.", consequence: "Expect: loyalty arcs and shared history." },
-  { value: "parent", label: "Parent", explanation: "A parent or guardian figure.", consequence: "Expect: obligation, debt, and old wounds." },
-  { value: "mentor", label: "Mentor", explanation: "Someone who shaped you.", consequence: "Expect: guidance, expectations, betrayal risk." },
-  { value: "nobody", label: "Nobody", explanation: "You stand alone.", consequence: "Expect: self-reliance and few social anchors." },
+  {
+    value: "family-member",
+    label: "A family member",
+    explanation: "A kin bond of any kind—not a specific relative role.",
+    consequence: "Expect: obligation and old wounds.",
+  },
+  {
+    value: "friend",
+    label: "A close friend",
+    explanation: "Someone you trust.",
+    consequence: "Expect: loyalty arcs and shared history.",
+  },
+  {
+    value: "partner",
+    label: "A partner",
+    explanation: "A romantic or life partner.",
+    consequence: "Expect: a bond that can be leveraged or lost.",
+  },
+  {
+    value: "mentor",
+    label: "A mentor",
+    explanation: "Someone who shaped you.",
+    consequence: "Expect: guidance, expectations, betrayal risk.",
+  },
+  {
+    value: "someone-depending",
+    label: "Someone depending on me",
+    explanation: "Someone who relies on you—not necessarily a child.",
+    consequence: "Expect: their safety or welfare to matter.",
+  },
+  {
+    value: "someone-failed",
+    label: "Someone I failed",
+    explanation: "A bond marked by failure—not a named person yet.",
+    consequence: "Expect: guilt and unfinished business.",
+  },
+  {
+    value: "nobody",
+    label: "No one yet",
+    explanation: "You stand alone for now.",
+    consequence: "Expect: self-reliance and few social anchors.",
+  },
 ] as const;
 export type WhoMattersValue = (typeof HOOK_WHO_MATTERS)[number]["value"];
 

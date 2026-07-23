@@ -1,505 +1,386 @@
-import { useMemo, useState } from "react";
+import React from "react";
 import {
-  View,
-  Text,
+  ActivityIndicator,
+  Image,
   StyleSheet,
+  Text,
   TouchableOpacity,
+  View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONTS } from "../theme";
-import type { CustomWorldSetup } from "../api";
-import { ReviewSummary } from "./ReviewSummary";
-import {
-  QUICK_WORLDS,
-  QUICK_CHARACTERS,
-  QUICK_TONES,
-  HOOK_WANT,
-  HOOK_FEAR,
-  HOOK_WHO_MATTERS,
-  type QuickWorldValue,
-  type QuickCharacterValue,
-  type QuickToneValue,
-  type WantValue,
-  type FearValue,
-  type WhoMattersValue,
-} from "./options";
-import type { QuickStartSelections } from "./types";
 
-type QuickOption = {
-  value: string;
+/**
+ * Quick Start world cards — one tap creates a chronicle.
+ *
+ * Each card maps to a curated scenario_pool (documented mirror of the backend
+ * registry). Live scenario_id selection is backend-only:
+ *   POST /story/new with quick_start_key + creation_request_id
+ *   → SHA256("quick-scenario:" + creation_request_id) pick from pool.
+ * Client must not send a client-selected scenario_id on the Quick Start path.
+ */
+export type QuickStartGenre = {
+  key: string;
   label: string;
-  explanation: string;
-  consequence: string;
-};
-
-type QuickStartRequest = {
+  tagline: string;
+  image: string;
+  /** Top-level `genre` sent to POST /story/new */
   genre: string;
-  role?: string;
+  /** Card default role; session role is overwritten by selected scenario on server. */
+  role: string;
   tone: string;
-  difficulty: string;
+  difficulty: "soft" | "standard" | "hard" | "brutal";
   mode: "advanced";
-  custom_world_setup: CustomWorldSetup;
+  /**
+   * Documented mirror of backend QUICK_START_SCENARIO_POOLS[key].
+   * Not used for live selection — backend is sole authority.
+   * Must never include dinosaur-containment-breach under prehistoric.
+   */
+  scenario_pool: readonly string[];
 };
 
-type QuickStartProps = {
-  selections: QuickStartSelections;
-  loading: boolean;
-  fontScale: number;
-  onChange: (patch: Partial<QuickStartSelections>) => void;
-  onStart: () => void;
-};
-
-type StepDefinition = {
-  key: keyof Pick<
-    QuickStartSelections,
-    "world" | "character" | "tone" | "want" | "fear" | "whoMatters"
-  >;
-  label: string;
-  question: string;
-  helper: string;
-  options: readonly QuickOption[];
-};
-
-const STEP_DEFINITIONS: StepDefinition[] = [
+export const QUICK_START_GENRES: readonly QuickStartGenre[] = [
   {
-    key: "world",
-    label: "World",
-    question: "Where does this story begin?",
-    helper: "Choose the kind of world you want to step into.",
-    options: QUICK_WORLDS,
+    key: "fantasy",
+    label: "Fantasy",
+    tagline: "Oaths, relics, and kingdoms in slow collapse.",
+    image:
+      "https://static.prod-images.emergentagent.com/jobs/1f4993bf-965b-40a7-8797-1d8bc205019e/images/3faa0f0bf91c735e5727f826cce85e16076fff278b6a93a826f43d2fd235c453.png",
+    genre: "fantasy",
+    role: "oathbound steward",
+    tone: "mythic",
+    difficulty: "standard",
+    mode: "advanced",
+    scenario_pool: ["oath-broken-keep", "relic-road-toll", "kingdom-border-curse"],
   },
   {
-    key: "character",
-    label: "Character",
-    question: "Who are you at the start?",
-    helper: "Pick the kind of protagonist you want to inhabit.",
-    options: QUICK_CHARACTERS,
+    key: "post-apocalyptic",
+    label: "Post-Apocalyptic",
+    tagline: "Scarcity, salvage, trust as currency.",
+    image:
+      "https://static.prod-images.emergentagent.com/jobs/1f4993bf-965b-40a7-8797-1d8bc205019e/images/a077cabe987d3d5beec7cd3580f9cfd394a20bd25c13cc9aaed8a7e7ca462cbb.png",
+    genre: "post-apocalyptic",
+    role: "ordinary resident",
+    tone: "grim",
+    difficulty: "hard",
+    mode: "advanced",
+    scenario_pool: ["suburban-collapse", "ash-caravan-ambush", "dry-reservoir-claim"],
   },
   {
-    key: "tone",
-    label: "Tone",
-    question: "How should this opening feel?",
-    helper: "This shapes the emotional pressure of the story.",
-    options: QUICK_TONES,
+    key: "cosmic-horror",
+    label: "Cosmic Horror",
+    tagline: "Doomed curiosity, perception unraveling.",
+    image:
+      "https://static.prod-images.emergentagent.com/jobs/1f4993bf-965b-40a7-8797-1d8bc205019e/images/1871295a9e304d75675d6744ab08139cbbe71471bb4262e6baab1ddfbba19836.png",
+    genre: "cosmic horror",
+    role: "passing traveller",
+    tone: "bleak",
+    difficulty: "hard",
+    mode: "advanced",
+    scenario_pool: [
+      "cosmic-horror-road-town",
+      "lighthouse-signal-loop",
+      "library-that-rewrites",
+    ],
   },
   {
-    key: "want",
-    label: "Want",
-    question: "What do you want most?",
-    helper: "A strong want gives the opening an immediate pull.",
-    options: HOOK_WANT,
+    key: "detective",
+    label: "Detective / Noir",
+    tagline: "Clues, lies, and a timeline that won't hold.",
+    image:
+      "https://images.unsplash.com/photo-1764536602389-07ee8e0b4f55?crop=entropy&cs=srgb&fm=jpg&q=85&w=900",
+    genre: "detective",
+    role: "private investigator",
+    tone: "grounded",
+    difficulty: "standard",
+    mode: "advanced",
+    scenario_pool: [
+      "rain-district-alibi",
+      "warehouse-shift-murder",
+      "jazz-club-blackmail",
+    ],
   },
   {
-    key: "fear",
-    label: "Fear",
-    question: "What are you most afraid of?",
-    helper: "Fear sharpens what every scene can threaten.",
-    options: HOOK_FEAR,
+    key: "dinosaur-survival",
+    label: "Prehistoric Survival",
+    tagline: "Tracks, scent, and the food chain.",
+    image:
+      "https://images.pexels.com/photos/1671324/pexels-photo-1671324.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+    genre: "prehistoric survival",
+    role: "hunt leader",
+    tone: "tense, sweat-and-rain procedural",
+    difficulty: "brutal",
+    mode: "advanced",
+    // Literal prehistoric only — never dinosaur-containment-breach (modern research).
+    scenario_pool: ["flint-band-stalked", "river-ice-calving", "tar-pit-foraging"],
   },
   {
-    key: "whoMatters",
-    label: "Who matters most",
-    question: "Who is at the centre of it all?",
-    helper: "This gives the opening a personal stake right away.",
-    options: HOOK_WHO_MATTERS,
+    key: "horror",
+    label: "Horror",
+    tagline: "Isolation, dread, false safety.",
+    image:
+      "https://images.unsplash.com/photo-1712777691122-8a10db0a78a2?crop=entropy&cs=srgb&fm=jpg&q=85&w=900",
+    genre: "horror",
+    role: "stranded traveller",
+    tone: "grim",
+    difficulty: "hard",
+    mode: "advanced",
+    scenario_pool: [
+      "farmhouse-false-safety",
+      "mine-elevator-stuck",
+      "fog-boarding-house",
+    ],
+  },
+  {
+    key: "urban-crime",
+    label: "Urban Crime",
+    tagline: "Heat, money, loyalty as leverage.",
+    image:
+      "https://images.unsplash.com/photo-1764536602389-07ee8e0b4f55?crop=entropy&cs=srgb&fm=jpg&q=85&w=900",
+    genre: "urban crime",
+    role: "courier",
+    tone: "grounded",
+    difficulty: "standard",
+    mode: "advanced",
+    scenario_pool: ["dockside-cut", "rooftop-debt-run", "precinct-leak"],
+  },
+  {
+    key: "war-survival",
+    label: "War & Attrition",
+    tagline: "Morale, supply lines, command pressure.",
+    image:
+      "https://images.unsplash.com/photo-1712777691122-8a10db0a78a2?crop=entropy&cs=srgb&fm=jpg&q=85&w=900",
+    genre: "war survival",
+    role: "section leader",
+    tone: "grim",
+    difficulty: "hard",
+    mode: "advanced",
+    scenario_pool: [
+      "trench-supply-gap",
+      "convoy-bridge-hold",
+      "occupied-quarter-curfew",
+    ],
   },
 ] as const;
 
-const REVIEW_ORDER = STEP_DEFINITIONS.map((step) => step.key);
+export type QuickStartRequest = {
+  genre: string;
+  tone: string;
+  difficulty: string;
+  mode: "advanced";
+  role: string;
+  /** Backend selects scenario_id from this card's pool. */
+  quick_start_key: string;
+};
 
-function getOption(options: readonly QuickOption[], value?: string) {
-  return options.find((option) => option.value === value) ?? null;
-}
-
-function getWorldOption(value?: QuickWorldValue) {
-  return QUICK_WORLDS.find((option) => option.value === value) ?? null;
-}
-
-function getCharacterOption(value?: QuickCharacterValue) {
-  return QUICK_CHARACTERS.find((option) => option.value === value) ?? null;
-}
-
-function getToneOption(value?: QuickToneValue) {
-  return QUICK_TONES.find((option) => option.value === value) ?? null;
-}
-
-function toLowerPhrase(label?: string | null) {
-  if (!label) return "";
-  return label.charAt(0).toLowerCase() + label.slice(1);
-}
-
-export function isQuickStartComplete(selections: QuickStartSelections) {
-  return REVIEW_ORDER.every((key) => Boolean(selections[key]));
-}
-
-export function buildQuickStartSummary(selections: QuickStartSelections) {
-  if (!isQuickStartComplete(selections)) return "";
-
-  const world = getWorldOption(selections.world);
-  const character = getCharacterOption(selections.character);
-  const tone = getToneOption(selections.tone);
-  const want = getOption(HOOK_WANT, selections.want);
-  const fear = getOption(HOOK_FEAR, selections.fear);
-  const whoMatters = getOption(HOOK_WHO_MATTERS, selections.whoMatters);
-
-  if (!world || !character || !tone || !want || !fear || !whoMatters) return "";
-
-  const whoLine =
-    whoMatters.value === "nobody"
-      ? "with Nobody at the centre of everything but yourself"
-      : `with your ${toLowerPhrase(whoMatters.label)} at the centre of everything`;
-
-  return `${character.label} in a ${toLowerPhrase(world.label)} story with a ${toLowerPhrase(
-    tone.label
-  )} edge, driven by ${toLowerPhrase(want.label)}, haunted by ${toLowerPhrase(
-    fear.label
-  )}, ${whoLine}.`;
-}
-
-export function buildQuickStartRequest(
-  selections: QuickStartSelections
-): QuickStartRequest | null {
-  if (!isQuickStartComplete(selections)) return null;
-
-  const world = getWorldOption(selections.world);
-  const character = getCharacterOption(selections.character);
-  const tone = getToneOption(selections.tone);
-
-  if (!world || !character || !tone) return null;
-
-  const resolvedGenre =
-    world.value === "random"
-      ? selections.resolvedWorldGenre || "modern"
-      : world.genre;
-
+/**
+ * Build the POST /story/new body for a Quick Start card.
+ * Does not select scenario_id — backend resolves from quick_start_key + creation_request_id.
+ */
+export function buildQuickStartRequest(option: QuickStartGenre): QuickStartRequest {
   return {
-    genre: resolvedGenre,
-    role: character.role || undefined,
-    tone: tone.tone,
-    difficulty: tone.difficulty,
-    mode: "advanced",
-    custom_world_setup: {
-      want: selections.want,
-      fear: selections.fear,
-      whoMatters: selections.whoMatters,
-    },
+    genre: option.genre,
+    tone: option.tone,
+    difficulty: option.difficulty,
+    mode: option.mode,
+    role: option.role,
+    quick_start_key: option.key,
   };
 }
+
+export function getQuickStartGenre(key: string): QuickStartGenre | undefined {
+  return QUICK_START_GENRES.find((option) => option.key === key);
+}
+
+/** Every Quick card has a non-empty pool; prehistoric excludes modern containment. */
+export function assertQuickStartPoolsHealthy(): void {
+  for (const card of QUICK_START_GENRES) {
+    if (card.scenario_pool.length < 3) {
+      throw new Error(`${card.key} pool must have at least 3 scenarios`);
+    }
+    if (card.key === "dinosaur-survival") {
+      if (card.scenario_pool.includes("dinosaur-containment-breach")) {
+        throw new Error("Prehistoric Survival must not use dinosaur-containment-breach");
+      }
+    }
+  }
+}
+
+type QuickStartProps = {
+  creationLoading: boolean;
+  launchingGenreKey: string | null;
+  fontScale: number;
+  onStart: (option: QuickStartGenre) => void;
+};
 
 export function QuickStart({
-  selections,
-  loading,
+  creationLoading,
+  launchingGenreKey,
   fontScale,
-  onChange,
   onStart,
 }: QuickStartProps) {
-  const [stepIndex, setStepIndex] = useState(0);
-
   const safeFontScale = fontScale > 0 ? fontScale : 1;
-  const boundedStepIndex = Math.min(stepIndex, STEP_DEFINITIONS.length - 1);
-  const currentStep = STEP_DEFINITIONS[boundedStepIndex];
-  const currentValue = selections[currentStep.key];
-  const reviewVisible = stepIndex >= STEP_DEFINITIONS.length;
-  const progressStep = reviewVisible ? STEP_DEFINITIONS.length : stepIndex + 1;
-  const summary = useMemo(() => buildQuickStartSummary(selections), [selections]);
-
   const titleSize = Math.round(30 * safeFontScale);
-  const bodySize = Math.round(16 * safeFontScale);
-  const helperSize = Math.round(14 * safeFontScale);
-  const optionTitleSize = Math.round(20 * safeFontScale);
-  const optionTextSize = Math.round(14 * safeFontScale);
-
-  const goBack = () => {
-    if (reviewVisible) {
-      setStepIndex(STEP_DEFINITIONS.length - 1);
-      return;
-    }
-    setStepIndex((prev) => Math.max(0, prev - 1));
-  };
-
-  const goForward = () => {
-    if (!currentValue) return;
-    setStepIndex((prev) => Math.min(STEP_DEFINITIONS.length, prev + 1));
-  };
-
-  const selectOption = (step: StepDefinition, value: string) => {
-    onChange({ [step.key]: value } as Partial<QuickStartSelections>);
-  };
+  const bodySize = Math.round(15 * safeFontScale);
 
   return (
     <View testID="quick-start-panel">
+      <Text style={styles.label}>QUICK START</Text>
       <Text
-        style={[styles.storyLabel, { fontSize: Math.max(11, Math.round(11 * safeFontScale)) }]}
-        testID="quick-start-story-label"
+        style={[styles.heading, { fontSize: titleSize }]}
+        testID="quick-start-heading"
       >
-        QUICK START
+        Choose a world. Start immediately.
       </Text>
-      <Text style={[styles.heading, { fontSize: titleSize }]} testID="quick-start-heading">
-        Start with a story, not a settings form.
-      </Text>
-      <Text style={[styles.subheading, { fontSize: helperSize }]} testID="quick-start-subheading">
-        Choose a world, a protagonist, and the pressure that follows them.
+      <Text style={[styles.help, { fontSize: bodySize }]}>
+        One broad setting. No questionnaire. Tap a world and the chronicle opens.
       </Text>
 
-      <View style={styles.progressWrap} testID="quick-start-progress">
-        <Text style={[styles.progressText, { fontSize: Math.max(12, Math.round(12 * safeFontScale)) }]} testID="quick-start-progress-text">
-          {progressStep} of {STEP_DEFINITIONS.length}
-        </Text>
-        <View style={styles.progressMarks}>
-          {STEP_DEFINITIONS.map((step, index) => {
-            const active = index < progressStep;
-            return (
-              <View
-                key={step.key}
-                style={[styles.progressMark, active && styles.progressMarkActive]}
-                testID={`quick-start-progress-mark-${index + 1}`}
-              />
-            );
-          })}
-        </View>
+      <View style={styles.grid} testID="quick-start-genre-grid">
+        {QUICK_START_GENRES.map((option) => {
+          const launching = launchingGenreKey === option.key;
+          return (
+            <TouchableOpacity
+              key={option.key}
+              style={[styles.genreCard, creationLoading && styles.cardDisabled]}
+              onPress={() => onStart(option)}
+              disabled={creationLoading}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel={`Start ${option.label} chronicle`}
+              accessibilityHint={option.tagline}
+              accessibilityState={{ disabled: creationLoading, busy: launching }}
+              testID={`quick-start-genre-${option.key}`}
+            >
+              {option.image ? (
+                <Image source={{ uri: option.image }} style={styles.genreImage} />
+              ) : (
+                <View style={[styles.genreImage, styles.genreImageFallback]}>
+                  <Ionicons name="planet-outline" size={30} color={COLORS.textMuted} />
+                </View>
+              )}
+              <View style={styles.genreOverlay} />
+              {launching ? (
+                <View style={styles.launchingOverlay} testID={`quick-start-launching-${option.key}`}>
+                  <ActivityIndicator color={COLORS.primary} />
+                </View>
+              ) : null}
+              <View style={styles.genreTextWrap}>
+                <Text style={styles.genreTitle} numberOfLines={1}>
+                  {option.label}
+                </Text>
+                <Text style={styles.genreTag} numberOfLines={2}>
+                  {option.tagline}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
-      {!reviewVisible ? (
-        <View testID={`quick-start-step-${stepIndex + 1}`}>
-          <Text style={[styles.stepText, { fontSize: Math.max(12, Math.round(12 * safeFontScale)) }]} testID="quick-start-step-label">
-            {currentStep.label}
-          </Text>
-          <Text style={[styles.stepQuestion, { fontSize: Math.round(24 * safeFontScale) }]} testID="quick-start-step-question">
-            {currentStep.question}
-          </Text>
-          <Text style={[styles.stepHelper, { fontSize: helperSize }]} testID="quick-start-step-helper">
-            {currentStep.helper}
-          </Text>
-
-          <View style={styles.optionList}>
-            {currentStep.options.map((option) => {
-              const active = currentValue === option.value;
-              return (
-                <TouchableOpacity
-                  key={option.value}
-                  style={[
-                    styles.optionCard,
-                    active && styles.optionCardActive,
-                    { minHeight: Math.max(120, Math.round(120 * safeFontScale)) },
-                  ]}
-                  activeOpacity={0.85}
-                  onPress={() => selectOption(currentStep, option.value)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${currentStep.label}: ${option.label}`}
-                  accessibilityState={{ selected: active, disabled: loading }}
-                  disabled={loading}
-                  testID={`quick-start-option-${currentStep.key}-${option.value}`}
-                >
-                  <View style={styles.optionHeader}>
-                    <Text style={[styles.optionTitle, { fontSize: optionTitleSize }]}>
-                      {option.label}
-                    </Text>
-                    {active ? (
-                      <View style={styles.selectedBadge} testID={`quick-start-option-selected-${currentStep.key}-${option.value}`}>
-                        <Ionicons name="checkmark-circle" size={16} color={COLORS.primary} />
-                        <Text style={[styles.selectedBadgeText, { fontSize: Math.max(12, Math.round(12 * safeFontScale)) }]}>Selected</Text>
-                      </View>
-                    ) : null}
-                  </View>
-                  <Text style={[styles.optionBody, { fontSize: optionTextSize }]}>{option.explanation}</Text>
-                  <Text style={[styles.optionConsequence, { fontSize: Math.max(13, Math.round(13 * safeFontScale)) }]}>
-                    {option.consequence}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          <View style={styles.navRow}>
-            <TouchableOpacity
-              style={[styles.secondaryButton, stepIndex === 0 && styles.secondaryButtonHidden]}
-              onPress={goBack}
-              disabled={stepIndex === 0 || loading}
-              testID="quick-start-back-button"
-            >
-              <Text style={[styles.secondaryButtonText, { fontSize: bodySize }]}>Back</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.primaryButton, !currentValue && styles.primaryButtonDisabled]}
-              onPress={goForward}
-              disabled={!currentValue || loading}
-              accessibilityState={{ disabled: !currentValue || loading }}
-              testID="quick-start-next-button"
-            >
-              <Text style={[styles.primaryButtonText, { fontSize: bodySize }]}>
-                {stepIndex === STEP_DEFINITIONS.length - 1 ? "Review your start" : "Continue"}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      ) : (
-        <ReviewSummary
-          testIdPrefix="quick-start"
-          heading="Here’s the opening you’ve set up."
-          summary={summary}
-          rows={STEP_DEFINITIONS.map((step, index) => ({
-            key: step.key,
-            label: step.label,
-            value: getOption(step.options, selections[step.key])?.label,
-            onChange: () => setStepIndex(index),
-          }))}
-          fontScale={safeFontScale}
-          loading={loading}
-          onBack={goBack}
-          onStart={onStart}
-        />
-      )}
+      {creationLoading ? (
+        <Text style={styles.creatingHint} testID="quick-start-creating-hint">
+          Creating chronicle…
+        </Text>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  storyLabel: {
+  label: {
     fontFamily: FONTS.monoBold,
     color: COLORS.primary,
+    fontSize: 11,
     letterSpacing: 3,
-    marginBottom: 10,
+    marginBottom: 8,
   },
   heading: {
     fontFamily: FONTS.headingBold,
     color: COLORS.textPrimary,
-    lineHeight: 34,
+    lineHeight: 36,
   },
-  subheading: {
-    marginTop: 8,
-    marginBottom: 24,
+  help: {
+    marginTop: 10,
+    marginBottom: 20,
     fontFamily: FONTS.bodyItalic,
     color: COLORS.textSecondary,
     lineHeight: 22,
   },
-  progressWrap: {
-    marginBottom: 22,
+  grid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
     gap: 10,
   },
-  progressText: {
-    fontFamily: FONTS.monoBold,
-    color: COLORS.textSecondary,
-    letterSpacing: 2,
-  },
-  progressMarks: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  progressMark: {
-    flex: 1,
-    height: 6,
-    borderRadius: 999,
-    backgroundColor: COLORS.borderDim,
-  },
-  progressMarkActive: {
-    backgroundColor: COLORS.primary,
-  },
-  stepText: {
-    fontFamily: FONTS.monoBold,
-    color: COLORS.textSecondary,
-    letterSpacing: 2,
-    marginBottom: 8,
-  },
-  stepQuestion: {
-    fontFamily: FONTS.headingBold,
-    color: COLORS.textPrimary,
-    lineHeight: 30,
-  },
-  stepHelper: {
-    marginTop: 8,
-    marginBottom: 18,
-    fontFamily: FONTS.bodyItalic,
-    color: COLORS.textMuted,
-    lineHeight: 20,
-  },
-  optionList: {
-    gap: 12,
-  },
-  optionCard: {
+  genreCard: {
+    width: "48.5%",
+    aspectRatio: 0.95,
     borderWidth: 1,
     borderColor: COLORS.border,
     backgroundColor: COLORS.surface,
-    padding: 16,
+    overflow: "hidden",
+    minHeight: 140,
   },
-  optionCardActive: {
-    borderColor: COLORS.primary,
-    backgroundColor: COLORS.primarySoft,
+  cardDisabled: {
+    opacity: 0.62,
   },
-  optionHeader: {
-    flexDirection: "row",
+  genreImage: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: "100%",
+    height: "100%",
+  },
+  genreImageFallback: {
     alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
+    justifyContent: "center",
+    backgroundColor: COLORS.surfaceDeep,
   },
-  optionTitle: {
-    flex: 1,
+  genreOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(5, 5, 5, 0.55)",
+  },
+  launchingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(5, 5, 5, 0.45)",
+    zIndex: 2,
+  },
+  genreTextWrap: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: 12,
+    zIndex: 1,
+  },
+  genreTitle: {
     fontFamily: FONTS.headingBold,
     color: COLORS.textPrimary,
+    fontSize: 18,
+    lineHeight: 22,
   },
-  selectedBadge: {
-    minHeight: 28,
-    paddingHorizontal: 10,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: COLORS.primary,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  selectedBadgeText: {
-    fontFamily: FONTS.monoBold,
-    color: COLORS.primary,
-    letterSpacing: 1,
-  },
-  optionBody: {
-    marginTop: 10,
-    fontFamily: FONTS.bodyMed,
-    color: COLORS.textProse,
-    lineHeight: 20,
-  },
-  optionConsequence: {
-    marginTop: 12,
+  genreTag: {
+    marginTop: 4,
     fontFamily: FONTS.bodyItalic,
     color: COLORS.textSecondary,
-    lineHeight: 20,
+    fontSize: 12,
+    lineHeight: 16,
   },
-  navRow: {
-    marginTop: 22,
-    flexDirection: "row",
-    gap: 12,
-  },
-  secondaryButton: {
-    flex: 1,
-    minHeight: 54,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.surfaceDeep,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 12,
-  },
-  secondaryButtonHidden: {
-    opacity: 0.25,
-  },
-  secondaryButtonText: {
-    fontFamily: FONTS.monoBold,
-    color: COLORS.textSecondary,
+  creatingHint: {
+    marginTop: 16,
+    fontFamily: FONTS.mono,
+    color: COLORS.primary,
+    fontSize: 11,
     letterSpacing: 1.5,
-  },
-  primaryButton: {
-    flex: 1.4,
-    minHeight: 54,
-    backgroundColor: COLORS.primary,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 12,
-  },
-  primaryButtonDisabled: {
-    opacity: 0.45,
-  },
-  primaryButtonText: {
-    fontFamily: FONTS.monoBold,
-    color: COLORS.background,
-    letterSpacing: 1.5,
+    textAlign: "center",
   },
 });

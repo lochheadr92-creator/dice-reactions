@@ -111,7 +111,11 @@ def test_init_new_story_seeds_pressure_from_structured_setup_only():
     nodes = state["pressure_graph"]["nodes"]
     custom_nodes = [node for node in nodes if node.get("origin_type") == "custom_setup"]
     assert any(node.get("origin_id") == "danger" for node in custom_nodes)
-    assert any(node.get("origin_id") == "pressure:0" for node in custom_nodes)
+    # Stage 2A provenance: origin_id is pressure:<label>, not pressure:<index>.
+    pressure_ids = [str(node.get("origin_id") or "") for node in custom_nodes]
+    assert any(pid.startswith("pressure:") for pid in pressure_ids)
+    assert any("scarcity" in pid for pid in pressure_ids)
+    assert any("civil" in pid or "unrest" in pid for pid in pressure_ids)
     assert all(node.get("evidence_refs") for node in custom_nodes)
 
 

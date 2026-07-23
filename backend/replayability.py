@@ -421,6 +421,27 @@ def _seed_structured_pressure_inputs(
         pressure_graph.cap_pressure_graph(graph)
         return
 
+    # Stage 2A: seed from creation_contract so Guided pressure reaches the graph
+    # with mapped kinds and traceable provenance (not free-text only).
+    import creation_contract  # local import avoids module cycle at load
+
+    contract = creation_contract.build_creation_contract(custom_world_setup=custom_world_setup)
+    for spec in creation_contract.pressure_seed_specs(contract):
+        pressure_graph.upsert_pressure_node(
+            graph,
+            run_seed=run_seed,
+            kind=spec["kind"],
+            origin_type=spec["origin_type"],
+            origin_id=spec["origin_id"],
+            scope=spec.get("scope") or "local",
+            magnitude=int(spec.get("magnitude") or 36),
+            trend=int(spec.get("trend") or 0),
+            turn_number=created_turn,
+            tags=list(spec.get("tags") or []),
+            evidence_refs=list(spec.get("evidence_refs") or []),
+            label=str(spec.get("label") or "")[:80],
+        )
+
     danger = custom_world_setup.get("danger")
     if danger:
         pressure_graph.upsert_pressure_node(
@@ -438,25 +459,6 @@ def _seed_structured_pressure_inputs(
             label=str(danger)[:80],
         )
 
-    pressures = custom_world_setup.get("pressures")
-    if isinstance(pressures, list):
-        for idx, item in enumerate(pressures[:3]):
-            if not item:
-                continue
-            pressure_graph.upsert_pressure_node(
-                graph,
-                run_seed=run_seed,
-                kind="unresolved_thread",
-                origin_type="custom_setup",
-                origin_id=f"pressure:{idx}",
-                scope="local",
-                magnitude=34 + idx * 3,
-                trend=0,
-                turn_number=created_turn,
-                tags=["custom_setup", "pressure"],
-                evidence_refs=[f"custom_setup:pressures:{idx}"],
-                label=str(item)[:80],
-            )
     pressure_graph.cap_pressure_graph(graph)
 
 

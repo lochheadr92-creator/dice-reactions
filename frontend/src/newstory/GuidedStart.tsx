@@ -5,44 +5,32 @@ import {
   StyleSheet,
   TouchableOpacity,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONTS } from "../theme";
 import type { CustomWorldSetup } from "../api";
 import { ReviewSummary } from "./ReviewSummary";
-import {
-  GUIDED_WORLDS,
-  GUIDED_QUESTIONS,
-  QUICK_CHARACTERS,
-  QUICK_TONES,
-  HOOK_WANT,
-  HOOK_FEAR,
-  HOOK_WHO_MATTERS,
-  STORY_DIFFICULTIES,
-  type GuidedWorldValue,
-  type QuickCharacterValue,
-  type QuickToneValue,
-  type WantValue,
-  type FearValue,
-  type WhoMattersValue,
-  type StoryDifficultyValue,
-  type GuidedQuestion,
-} from "./options";
-import type { GuidedStartSelections } from "./types";
+import { HOOK_FEAR } from "./options";
+import type {
+  GuidedDesireValue,
+  GuidedExperienceValue,
+  GuidedPressureValue,
+  GuidedRoleValue,
+  GuidedStartSelections,
+  GuidedWhoMattersValue,
+  GuidedWorldValue,
+} from "./types";
 
 type GuidedOption = {
   value: string;
   label: string;
-  explanation: string;
-  consequence: string;
+  explanation?: string;
 };
 
 type GuidedStartRequest = {
   genre: string;
-  role?: string;
+  role: string;
   tone: string;
-  difficulty: StoryDifficultyValue;
+  difficulty: string;
   mode: "advanced";
-  custom_premise?: string;
   custom_world_setup: CustomWorldSetup;
 };
 
@@ -52,203 +40,246 @@ type GuidedStartProps = {
   fontScale: number;
   onChange: (patch: Partial<GuidedStartSelections>) => void;
   onStart: () => void;
+  onChangePath: () => void;
 };
 
 type GuidedStepKey =
   | "world"
-  | "worldDetail"
-  | "character"
-  | "tone"
+  | "role"
+  | "pressure"
   | "want"
   | "fear"
   | "whoMatters"
-  | "difficulty";
+  | "experience";
 
-type GuidedStepDefinition = {
+const GUIDED_WORLDS: { value: GuidedWorldValue; label: string; genre: string }[] = [
+  { value: "fantasy", label: "Fantasy", genre: "fantasy" },
+  { value: "horror", label: "Horror", genre: "horror" },
+  { value: "science-fiction", label: "Science fiction", genre: "science fiction" },
+  { value: "post-apocalyptic", label: "Post-apocalyptic", genre: "post-apocalyptic" },
+  { value: "mystery-crime", label: "Mystery or crime", genre: "detective" },
+  { value: "modern", label: "Modern and grounded", genre: "modern" },
+  { value: "surprise", label: "Surprise me", genre: "" },
+];
+
+const CONCRETE_GENRES = GUIDED_WORLDS.filter((w) => w.value !== "surprise").map((w) => w.genre);
+
+const GUIDED_ROLES: { value: GuidedRoleValue; label: string; role: string }[] = [
+  { value: "survivor", label: "Survivor", role: "a hardened survivor" },
+  { value: "wanderer", label: "Wanderer", role: "a rootless wanderer" },
+  { value: "investigator", label: "Investigator", role: "an investigator" },
+  { value: "soldier", label: "Soldier", role: "a soldier" },
+  { value: "outcast", label: "Outcast", role: "an outcast" },
+  { value: "scholar", label: "Scholar", role: "a scholar" },
+  { value: "worker", label: "Worker", role: "a practical worker" },
+  { value: "local", label: "Local resident", role: "a local resident" },
+];
+
+const GUIDED_PRESSURES: { value: GuidedPressureValue; label: string }[] = [
+  { value: "scarcity", label: "Scarcity" },
+  { value: "violence", label: "Violence" },
+  { value: "isolation", label: "Isolation" },
+  { value: "betrayal", label: "Betrayal" },
+  { value: "illness", label: "Illness or injury" },
+  { value: "authority", label: "Authority tightening" },
+  { value: "unknown", label: "The unknown closing in" },
+];
+
+const GUIDED_DESIRES: { value: GuidedDesireValue; label: string }[] = [
+  { value: "safety", label: "Safety" },
+  { value: "freedom", label: "Freedom" },
+  { value: "redemption", label: "Redemption" },
+  { value: "knowledge", label: "Knowledge" },
+  { value: "revenge", label: "Revenge" },
+  { value: "justice", label: "Justice" },
+];
+
+const GUIDED_WHO: { value: GuidedWhoMattersValue; label: string }[] = [
+  { value: "family-member", label: "A family member" },
+  { value: "friend", label: "A close friend" },
+  { value: "partner", label: "A partner" },
+  { value: "mentor", label: "A mentor" },
+  { value: "someone-depending", label: "Someone depending on me" },
+  { value: "someone-failed", label: "Someone I failed" },
+  { value: "nobody", label: "No one yet" },
+];
+
+const GUIDED_EXPERIENCE: {
+  value: GuidedExperienceValue;
+  label: string;
+  tone: string;
+  difficulty: string;
+  explanation: string;
+}[] = [
+  { value: "hopeful", label: "Hopeful", tone: "hopeful", difficulty: "soft", explanation: "More room to recover." },
+  { value: "balanced", label: "Balanced", tone: "grounded", difficulty: "standard", explanation: "Fair pressure and cost." },
+  { value: "dark", label: "Dark", tone: "grim", difficulty: "hard", explanation: "Colder world, sharper setbacks." },
+  { value: "brutal", label: "Brutal", tone: "bleak", difficulty: "brutal", explanation: "Little mercy; damage lasts." },
+];
+
+const STEPS: {
   key: GuidedStepKey;
   label: string;
   question: string;
   helper: string;
-  options: readonly GuidedOption[];
-};
-
-const BASE_STEPS: GuidedStepDefinition[] = [
+  options: GuidedOption[];
+}[] = [
   {
     key: "world",
     label: "World",
-    question: "What kind of story world are you stepping into?",
-    helper: "Pick the setting first. Guided Start will shape the opening around it.",
-    options: GUIDED_WORLDS,
+    question: "What kind of world is this?",
+    helper: "Choose the broad setting. Local details and people emerge during play.",
+    options: GUIDED_WORLDS.map((o) => ({ value: o.value, label: o.label })),
   },
   {
-    key: "character",
-    label: "Character",
-    question: "Who do you begin as?",
-    helper: "Choose the role you want to carry into the first scene.",
-    options: QUICK_CHARACTERS,
+    key: "role",
+    label: "Role",
+    question: "Who are you in this world?",
+    helper: "Your practical position when the story begins, not a promised destiny.",
+    options: GUIDED_ROLES.map((o) => ({ value: o.value, label: o.label })),
   },
   {
-    key: "tone",
-    label: "Tone",
-    question: "What kind of emotional atmosphere do you want?",
-    helper: "This sets how harsh, hopeful, or grim the opening feels.",
-    options: QUICK_TONES,
+    key: "pressure",
+    label: "Pressure",
+    question: "What pressure is closest to you?",
+    helper: "Instability already near you. This establishes a condition, not a guaranteed scene.",
+    options: GUIDED_PRESSURES.map((o) => ({ value: o.value, label: o.label })),
   },
   {
     key: "want",
-    label: "Want",
-    question: "What is pulling you forward?",
-    helper: "Choose the thing your character wants badly enough to chase.",
-    options: HOOK_WANT,
+    label: "Desire",
+    question: "What do you want most right now?",
+    helper: "What you are willing to spend effort, safety or trust to gain.",
+    options: GUIDED_DESIRES.map((o) => ({ value: o.value, label: o.label })),
   },
   {
     key: "fear",
     label: "Fear",
-    question: "What could break you if it came true?",
-    helper: "Fear shapes what every scene can threaten.",
-    options: HOOK_FEAR,
+    question: "What are you most afraid of?",
+    helper: "What the world can use against you.",
+    options: HOOK_FEAR.map((o) => ({ value: o.value, label: o.label, explanation: o.explanation })),
   },
   {
     key: "whoMatters",
-    label: "Who matters most",
-    question: "Who keeps this personal?",
-    helper: "Pick the person who gives the stakes a human centre.",
-    options: HOOK_WHO_MATTERS,
+    label: "Relationship",
+    question: "Who matters most to you?",
+    helper: "A kind of bond—or no one yet. The story will name people only when you meet them.",
+    options: GUIDED_WHO.map((o) => ({ value: o.value, label: o.label })),
   },
   {
-    key: "difficulty",
-    label: "Intensity",
-    question: "How unforgiving should this chronicle feel?",
-    helper: "Choose how much mercy the world gives you.",
-    options: STORY_DIFFICULTIES,
+    key: "experience",
+    label: "Experience",
+    question: "What kind of experience do you want?",
+    helper: "How merciful the world is, and how it feels.",
+    options: GUIDED_EXPERIENCE.map((o) => ({
+      value: o.value,
+      label: o.label,
+      explanation: o.explanation,
+    })),
   },
-] as const;
-
-const REVIEW_ORDER: GuidedStepKey[] = [
-  "world",
-  "worldDetail",
-  "character",
-  "tone",
-  "want",
-  "fear",
-  "whoMatters",
-  "difficulty",
 ];
 
-function getOption(options: readonly GuidedOption[], value?: string) {
-  return options.find((option) => option.value === value) ?? null;
+function labelFor(key: GuidedStepKey, value?: string): string {
+  const step = STEPS.find((s) => s.key === key);
+  return step?.options.find((o) => o.value === value)?.label || value || "Not set";
 }
 
-function getWorldOption(value?: GuidedWorldValue) {
-  return GUIDED_WORLDS.find((option) => option.value === value) ?? null;
+function resolveGenre(selections: GuidedStartSelections): string | undefined {
+  if (selections.resolvedGenre) return selections.resolvedGenre;
+  if (!selections.world) return undefined;
+  if (selections.world === "surprise") return undefined;
+  return GUIDED_WORLDS.find((w) => w.value === selections.world)?.genre;
 }
 
-function getCharacterOption(value?: QuickCharacterValue) {
-  return QUICK_CHARACTERS.find((option) => option.value === value) ?? null;
-}
-
-function getToneOption(value?: QuickToneValue) {
-  return QUICK_TONES.find((option) => option.value === value) ?? null;
-}
-
-function getWorldDetailQuestion(world?: GuidedWorldValue): GuidedQuestion | null {
-  if (!world) return null;
-  return GUIDED_QUESTIONS[world] ?? null;
-}
-
-function toLowerPhrase(label?: string | null) {
-  if (!label) return "";
-  return label.charAt(0).toLowerCase() + label.slice(1);
-}
-
-function buildGuidedSteps(selections: GuidedStartSelections): GuidedStepDefinition[] {
-  const detailQuestion = getWorldDetailQuestion(selections.world);
-  const detailStep = detailQuestion
-    ? {
-        key: "worldDetail" as const,
-        label: "World turning point",
-        question: detailQuestion.question,
-        helper: "This choice gives your opening a sharper source of pressure.",
-        options: detailQuestion.options,
-      }
-    : null;
-
-  return detailStep ? [BASE_STEPS[0], detailStep, ...BASE_STEPS.slice(1)] : [...BASE_STEPS];
-}
-
-function isValueSelected(stepKey: GuidedStepKey, selections: GuidedStartSelections) {
-  return Boolean(selections[stepKey]);
-}
-
-export function isGuidedStartComplete(selections: GuidedStartSelections) {
-  return REVIEW_ORDER.every((key) => isValueSelected(key, selections));
-}
-
-function buildGuidedPremise(selections: GuidedStartSelections) {
-  const world = getWorldOption(selections.world);
-  const detailQuestion = getWorldDetailQuestion(selections.world);
-  const detail = detailQuestion
-    ? getOption(detailQuestion.options, selections.worldDetail)
-    : null;
-
-  if (!world || !detailQuestion || !detail) return undefined;
-
-  return `${world.label}: ${detail.label}. ${detail.explanation}`;
-}
-
-export function buildGuidedStartSummary(selections: GuidedStartSelections) {
-  if (!isGuidedStartComplete(selections)) return "";
-
-  const world = getWorldOption(selections.world);
-  const detail = getOption(getWorldDetailQuestion(selections.world)?.options || [], selections.worldDetail);
-  const character = getCharacterOption(selections.character);
-  const tone = getToneOption(selections.tone);
-  const want = getOption(HOOK_WANT, selections.want);
-  const fear = getOption(HOOK_FEAR, selections.fear);
-  const whoMatters = getOption(HOOK_WHO_MATTERS, selections.whoMatters);
-  const difficulty = getOption(STORY_DIFFICULTIES, selections.difficulty);
-
-  if (!world || !detail || !character || !tone || !want || !fear || !whoMatters || !difficulty) {
-    return "";
+/** Resolve Surprise me once; returns patch to merge into draft. */
+export function resolveGuidedWorldSelection(
+  selections: GuidedStartSelections,
+  world: GuidedWorldValue,
+  randomIndex?: number
+): Partial<GuidedStartSelections> {
+  if (world !== "surprise") {
+    const genre = GUIDED_WORLDS.find((w) => w.value === world)?.genre;
+    return { world, resolvedGenre: genre };
   }
+  // Keep existing resolution if surprise already resolved for this draft.
+  if (selections.world === "surprise" && selections.resolvedGenre) {
+    return { world: "surprise", resolvedGenre: selections.resolvedGenre };
+  }
+  const idx =
+    typeof randomIndex === "number" && Number.isFinite(randomIndex)
+      ? Math.abs(Math.floor(randomIndex)) % CONCRETE_GENRES.length
+      : Math.floor(Math.random() * CONCRETE_GENRES.length);
+  return { world: "surprise", resolvedGenre: CONCRETE_GENRES[idx] };
+}
 
-  const whoLine =
-    whoMatters.value === "nobody"
-      ? "with no one left to lean on"
-      : `with your ${toLowerPhrase(whoMatters.label)} bound up in what happens next`;
+export function isGuidedStartComplete(selections: GuidedStartSelections): boolean {
+  const genre = resolveGenre(selections);
+  return Boolean(
+    selections.world &&
+      genre &&
+      selections.role &&
+      selections.pressure &&
+      selections.want &&
+      selections.fear &&
+      selections.whoMatters &&
+      selections.experience
+  );
+}
 
-  return `${character.label} in a ${toLowerPhrase(world.label)} chronicle where ${toLowerPhrase(
-    detail.label
-  )}, carrying a ${toLowerPhrase(tone.label)} mood, chasing ${toLowerPhrase(
-    want.label
-  )}, dreading ${toLowerPhrase(fear.label)}, ${whoLine}. The world will feel ${toLowerPhrase(
-    difficulty.label
-  )}.`;
+export function buildGuidedStartSummary(selections: GuidedStartSelections): string {
+  if (!isGuidedStartComplete(selections)) return "";
+  const worldLabel =
+    selections.world === "surprise"
+      ? `Surprise (${labelForGenre(selections.resolvedGenre)})`
+      : labelFor("world", selections.world);
+  const who =
+    selections.whoMatters === "nobody"
+      ? "no one yet binding the stakes"
+      : labelFor("whoMatters", selections.whoMatters).toLowerCase();
+  return `${labelFor("role", selections.role)} in a ${worldLabel.toLowerCase()} world, under ${labelFor(
+    "pressure",
+    selections.pressure
+  ).toLowerCase()} pressure, chasing ${labelFor("want", selections.want).toLowerCase()}, fearing ${labelFor(
+    "fear",
+    selections.fear
+  ).toLowerCase()}, with ${who}. Experience: ${labelFor("experience", selections.experience)}.`;
+}
+
+function labelForGenre(genre?: string): string {
+  if (!genre) return "Unknown";
+  const hit = GUIDED_WORLDS.find((w) => w.genre === genre);
+  return hit?.label || genre;
 }
 
 export function buildGuidedStartRequest(
   selections: GuidedStartSelections
 ): GuidedStartRequest | null {
   if (!isGuidedStartComplete(selections)) return null;
+  const genre = resolveGenre(selections);
+  const roleRow = GUIDED_ROLES.find((r) => r.value === selections.role);
+  const exp = GUIDED_EXPERIENCE.find((e) => e.value === selections.experience);
+  if (!genre || !roleRow || !exp || !selections.pressure || !selections.want || !selections.fear || !selections.whoMatters) {
+    return null;
+  }
 
-  const world = getWorldOption(selections.world);
-  const character = getCharacterOption(selections.character);
-  const tone = getToneOption(selections.tone);
-
-  if (!world || !character || !tone || !selections.difficulty) return null;
+  const setup: CustomWorldSetup = {
+    creationFlow: "guided",
+    want: selections.want,
+    fear: selections.fear,
+    whoMatters: selections.whoMatters,
+    // Exactly one selected pressure — seeds pressure_graph on the backend.
+    pressures: [selections.pressure],
+  };
 
   return {
-    genre: world.genre,
-    role: character.role || undefined,
-    tone: tone.tone,
-    difficulty: selections.difficulty,
+    // Concrete genre (Surprise me is frozen in resolvedGenre before submit).
+    genre,
+    role: roleRow.role,
+    // Experience splits into presentation (tone) vs consequence policy (difficulty).
+    tone: exp.tone,
+    difficulty: exp.difficulty,
     mode: "advanced",
-    custom_premise: buildGuidedPremise(selections),
-    custom_world_setup: {
-      want: selections.want,
-      fear: selections.fear,
-      whoMatters: selections.whoMatters,
-    },
+    custom_world_setup: setup,
   };
 }
 
@@ -258,340 +289,265 @@ export function GuidedStart({
   fontScale,
   onChange,
   onStart,
+  onChangePath,
 }: GuidedStartProps) {
   const [stepIndex, setStepIndex] = useState(0);
-
   const safeFontScale = fontScale > 0 ? fontScale : 1;
-  const steps = useMemo(() => buildGuidedSteps(selections), [selections]);
-  const boundedStepIndex = Math.min(stepIndex, steps.length - 1);
-  const currentStep = steps[boundedStepIndex];
-  const currentValue = selections[currentStep.key];
-  const reviewVisible = stepIndex >= steps.length;
-  const progressStep = reviewVisible ? steps.length : stepIndex + 1;
+  const reviewVisible = stepIndex >= STEPS.length;
+  const bounded = Math.min(stepIndex, STEPS.length - 1);
+  const current = STEPS[bounded];
+  const currentValue = selections[current.key];
+  const titleSize = Math.round(28 * safeFontScale);
+  const bodySize = Math.round(15 * safeFontScale);
+
   const summary = useMemo(() => buildGuidedStartSummary(selections), [selections]);
 
-  const titleSize = Math.round(30 * safeFontScale);
-  const bodySize = Math.round(16 * safeFontScale);
-  const helperSize = Math.round(14 * safeFontScale);
-  const optionTitleSize = Math.round(20 * safeFontScale);
-  const optionTextSize = Math.round(14 * safeFontScale);
+  const reviewRows = useMemo(() => {
+    const genre = resolveGenre(selections);
+    const worldDisplay =
+      selections.world === "surprise"
+        ? `Surprise me → ${labelForGenre(genre)}`
+        : labelFor("world", selections.world);
+    return [
+      { key: "world", label: "World", value: worldDisplay, step: 0 },
+      { key: "role", label: "Role", value: labelFor("role", selections.role), step: 1 },
+      { key: "pressure", label: "Pressure", value: labelFor("pressure", selections.pressure), step: 2 },
+      { key: "want", label: "Desire", value: labelFor("want", selections.want), step: 3 },
+      { key: "fear", label: "Fear", value: labelFor("fear", selections.fear), step: 4 },
+      { key: "whoMatters", label: "Who matters", value: labelFor("whoMatters", selections.whoMatters), step: 5 },
+      { key: "experience", label: "Experience", value: labelFor("experience", selections.experience), step: 6 },
+    ];
+  }, [selections]);
 
-  const goBack = () => {
-    if (reviewVisible) {
-      setStepIndex(steps.length - 1);
+  const selectOption = (stepKey: GuidedStepKey, value: string) => {
+    if (stepKey === "world") {
+      onChange(resolveGuidedWorldSelection(selections, value as GuidedWorldValue));
       return;
     }
-    setStepIndex((prev) => Math.max(0, prev - 1));
+    onChange({ [stepKey]: value } as Partial<GuidedStartSelections>);
   };
 
-  const goForward = () => {
-    if (!currentValue) return;
-    setStepIndex((prev) => Math.min(steps.length, prev + 1));
-  };
+  const canContinue = Boolean(currentValue) && (current.key !== "world" || resolveGenre(selections));
 
-  const selectOption = (step: GuidedStepDefinition, value: string) => {
-    onChange({ [step.key]: value } as Partial<GuidedStartSelections>);
-  };
+  if (reviewVisible) {
+    return (
+      <View testID="guided-start-panel">
+        <Text style={styles.pathLink} onPress={onChangePath} testID="guided-change-path">
+          ← Change path
+        </Text>
+        <ReviewSummary
+          testIdPrefix="guided-start"
+          heading="Review your chronicle."
+          summary={summary}
+          fontScale={fontScale}
+          loading={loading}
+          onBack={() => setStepIndex(STEPS.length - 1)}
+          onStart={onStart}
+          startLabel="Begin Chronicle"
+          rows={reviewRows.map((row) => ({
+            key: row.key,
+            label: row.label,
+            value: row.value,
+            onChange: () => setStepIndex(row.step),
+          }))}
+        />
+      </View>
+    );
+  }
 
   return (
     <View testID="guided-start-panel">
-      <Text
-        style={[styles.storyLabel, { fontSize: Math.max(11, Math.round(11 * safeFontScale)) }]}
-        testID="guided-start-story-label"
-      >
+      <Text style={styles.pathLink} onPress={onChangePath} testID="guided-change-path">
+        ← Change path
+      </Text>
+      <Text style={[styles.label, { fontSize: Math.max(11, Math.round(11 * safeFontScale)) }]}>
         GUIDED START
       </Text>
       <Text style={[styles.heading, { fontSize: titleSize }]} testID="guided-start-heading">
-        Shape a richer opening, one clear choice at a time.
-      </Text>
-      <Text style={[styles.subheading, { fontSize: helperSize }]} testID="guided-start-subheading">
-        Guided Start keeps everything curated, but lets you define the pressure more precisely.
+        Shape a clear opening, one choice at a time.
       </Text>
 
       <View style={styles.progressWrap} testID="guided-start-progress">
-        <Text
-          style={[styles.progressText, { fontSize: Math.max(12, Math.round(12 * safeFontScale)) }]}
-          testID="guided-start-progress-text"
-        >
-          {progressStep} of {steps.length}
+        <Text style={styles.progressText} testID="guided-start-progress-text">
+          {stepIndex + 1} of {STEPS.length}
         </Text>
-        <View style={styles.progressMarks}>
-          {steps.map((step, index) => {
-            const active = index < progressStep;
-            return (
-              <View
-                key={step.key}
-                style={[styles.progressMark, active && styles.progressMarkActive]}
-                testID={`guided-start-progress-mark-${index + 1}`}
-              />
-            );
-          })}
+        <View style={styles.progressTrack}>
+          <View
+            style={[styles.progressFill, { width: `${((stepIndex + 1) / STEPS.length) * 100}%` }]}
+          />
         </View>
       </View>
 
-      {!reviewVisible ? (
-        <View testID={`guided-start-step-${boundedStepIndex + 1}`}>
-          <Text
-            style={[styles.stepText, { fontSize: Math.max(12, Math.round(12 * safeFontScale)) }]}
-            testID="guided-start-step-label"
-          >
-            {currentStep.label}
-          </Text>
-          <Text
-            style={[styles.stepQuestion, { fontSize: Math.round(24 * safeFontScale) }]}
-            testID="guided-start-step-question"
-          >
-            {currentStep.question}
-          </Text>
-          <Text
-            style={[styles.stepHelper, { fontSize: helperSize }]}
-            testID="guided-start-step-helper"
-          >
-            {currentStep.helper}
-          </Text>
+      <View testID={`guided-start-step-${stepIndex + 1}`}>
+        <Text style={styles.stepLabel} testID="guided-start-step-label">
+          {current.label}
+        </Text>
+        <Text
+          style={[styles.question, { fontSize: Math.round(24 * safeFontScale) }]}
+          testID="guided-start-step-question"
+        >
+          {current.question}
+        </Text>
+        <Text style={[styles.helper, { fontSize: bodySize }]} testID="guided-start-step-helper">
+          {current.helper}
+        </Text>
 
-          <View style={styles.optionList}>
-            {currentStep.options.map((option) => {
-              const active = currentValue === option.value;
-              return (
-                <TouchableOpacity
-                  key={option.value}
-                  style={[
-                    styles.optionCard,
-                    active && styles.optionCardActive,
-                    { minHeight: Math.max(120, Math.round(120 * safeFontScale)) },
-                  ]}
-                  activeOpacity={0.85}
-                  onPress={() => selectOption(currentStep, option.value)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${currentStep.label}: ${option.label}`}
-                  accessibilityState={{ selected: active, disabled: loading }}
-                  disabled={loading}
-                  testID={`guided-start-option-${currentStep.key}-${option.value}`}
-                >
-                  <View style={styles.optionHeader}>
-                    <Text style={[styles.optionTitle, { fontSize: optionTitleSize }]}>
-                      {option.label}
-                    </Text>
-                    {active ? (
-                      <View
-                        style={styles.selectedBadge}
-                        testID={`guided-start-option-selected-${currentStep.key}-${option.value}`}
-                      >
-                        <Ionicons name="checkmark-circle" size={16} color={COLORS.primary} />
-                        <Text
-                          style={[
-                            styles.selectedBadgeText,
-                            { fontSize: Math.max(12, Math.round(12 * safeFontScale)) },
-                          ]}
-                        >
-                          Selected
-                        </Text>
-                      </View>
-                    ) : null}
-                  </View>
-                  <Text style={[styles.optionBody, { fontSize: optionTextSize }]}>{option.explanation}</Text>
-                  <Text
-                    style={[
-                      styles.optionConsequence,
-                      { fontSize: Math.max(13, Math.round(13 * safeFontScale)) },
-                    ]}
-                  >
-                    {option.consequence}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          <View style={styles.navRow}>
-            <TouchableOpacity
-              style={[styles.secondaryButton, stepIndex === 0 && styles.secondaryButtonHidden]}
-              onPress={goBack}
-              disabled={stepIndex === 0 || loading}
-              testID="guided-start-back-button"
-            >
-              <Text style={[styles.secondaryButtonText, { fontSize: bodySize }]}>Back</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.primaryButton, !currentValue && styles.primaryButtonDisabled]}
-              onPress={goForward}
-              disabled={!currentValue || loading}
-              accessibilityState={{ disabled: !currentValue || loading }}
-              testID="guided-start-next-button"
-            >
-              <Text style={[styles.primaryButtonText, { fontSize: bodySize }]}>Continue</Text>
-            </TouchableOpacity>
-          </View>
+        <View style={styles.optionList}>
+          {current.options.map((option) => {
+            const selected = currentValue === option.value;
+            return (
+              <TouchableOpacity
+                key={option.value}
+                style={[styles.optionCard, selected && styles.optionCardSelected]}
+                onPress={() => selectOption(current.key, option.value)}
+                disabled={loading}
+                accessibilityRole="button"
+                accessibilityState={{ selected, disabled: loading }}
+                testID={
+                  selected
+                    ? `guided-start-option-selected-${current.key}-${option.value}`
+                    : `guided-start-option-${current.key}-${option.value}`
+                }
+              >
+                <Text style={[styles.optionTitle, selected && styles.optionTitleSelected]}>
+                  {option.label}
+                </Text>
+                {option.explanation ? (
+                  <Text style={styles.optionHelp}>{option.explanation}</Text>
+                ) : null}
+              </TouchableOpacity>
+            );
+          })}
         </View>
-      ) : (
-        <ReviewSummary
-          testIdPrefix="guided-start"
-          heading="Here’s the chronicle you’ve set in motion."
-          summary={summary}
-          rows={steps.map((step, index) => ({
-            key: step.key,
-            label: step.label,
-            value: getOption(step.options, selections[step.key])?.label,
-            onChange: () => setStepIndex(index),
-          }))}
-          fontScale={safeFontScale}
-          loading={loading}
-          onBack={goBack}
-          onStart={onStart}
-        />
-      )}
+
+        <View style={styles.navRow}>
+          <TouchableOpacity
+            style={styles.secondaryButton}
+            onPress={() => {
+              if (stepIndex === 0) onChangePath();
+              else setStepIndex((v) => Math.max(0, v - 1));
+            }}
+            disabled={loading}
+            testID="guided-start-back-button"
+          >
+            <Text style={styles.secondaryText}>BACK</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.primaryButton, !canContinue && styles.disabledButton]}
+            onPress={() => canContinue && setStepIndex((v) => Math.min(STEPS.length, v + 1))}
+            disabled={!canContinue || loading}
+            testID="guided-start-next-button"
+          >
+            <Text style={styles.primaryText}>
+              {stepIndex === STEPS.length - 1 ? "REVIEW" : "CONTINUE"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  storyLabel: {
+  pathLink: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.primary,
+    fontSize: 12,
+    letterSpacing: 1,
+    marginBottom: 14,
+  },
+  label: {
     fontFamily: FONTS.monoBold,
     color: COLORS.primary,
     letterSpacing: 3,
-    marginBottom: 10,
+    marginBottom: 8,
   },
   heading: {
     fontFamily: FONTS.headingBold,
     color: COLORS.textPrimary,
     lineHeight: 34,
+    marginBottom: 16,
   },
-  subheading: {
-    marginTop: 8,
-    marginBottom: 24,
-    fontFamily: FONTS.bodyItalic,
-    color: COLORS.textSecondary,
-    lineHeight: 22,
-  },
-  progressWrap: {
-    marginBottom: 22,
-    gap: 10,
-  },
+  progressWrap: { marginBottom: 20 },
   progressText: {
     fontFamily: FONTS.monoBold,
-    color: COLORS.textSecondary,
-    letterSpacing: 2,
+    color: COLORS.primary,
+    fontSize: 11,
+    letterSpacing: 1.5,
+    marginBottom: 8,
   },
-  progressMarks: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  progressMark: {
-    flex: 1,
-    height: 6,
-    borderRadius: 999,
-    backgroundColor: COLORS.borderDim,
-  },
-  progressMarkActive: {
-    backgroundColor: COLORS.primary,
-  },
-  stepText: {
+  progressTrack: { height: 3, backgroundColor: COLORS.border },
+  progressFill: { height: 3, backgroundColor: COLORS.primary },
+  stepLabel: {
     fontFamily: FONTS.monoBold,
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
+    fontSize: 11,
     letterSpacing: 2,
     marginBottom: 8,
   },
-  stepQuestion: {
+  question: {
     fontFamily: FONTS.headingBold,
     color: COLORS.textPrimary,
     lineHeight: 30,
   },
-  stepHelper: {
+  helper: {
     marginTop: 8,
-    marginBottom: 18,
-    fontFamily: FONTS.bodyItalic,
-    color: COLORS.textMuted,
-    lineHeight: 20,
+    marginBottom: 16,
+    fontFamily: FONTS.body,
+    color: COLORS.textSecondary,
+    lineHeight: 22,
   },
-  optionList: {
-    gap: 12,
-  },
+  optionList: { gap: 10 },
   optionCard: {
+    minHeight: 56,
     borderWidth: 1,
     borderColor: COLORS.border,
     backgroundColor: COLORS.surface,
-    padding: 16,
+    padding: 14,
   },
-  optionCardActive: {
+  optionCardSelected: {
     borderColor: COLORS.primary,
     backgroundColor: COLORS.primarySoft,
   },
-  optionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-  },
   optionTitle: {
-    flex: 1,
     fontFamily: FONTS.headingBold,
     color: COLORS.textPrimary,
+    fontSize: 18,
   },
-  selectedBadge: {
-    minHeight: 28,
-    paddingHorizontal: 10,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: COLORS.primary,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  selectedBadgeText: {
-    fontFamily: FONTS.monoBold,
-    color: COLORS.primary,
-    letterSpacing: 1,
-  },
-  optionBody: {
-    marginTop: 10,
-    fontFamily: FONTS.bodyMed,
-    color: COLORS.textProse,
-    lineHeight: 20,
-  },
-  optionConsequence: {
-    marginTop: 12,
-    fontFamily: FONTS.bodyItalic,
+  optionTitleSelected: { color: COLORS.primary },
+  optionHelp: {
+    marginTop: 6,
+    fontFamily: FONTS.body,
     color: COLORS.textSecondary,
-    lineHeight: 20,
+    fontSize: 14,
+    lineHeight: 19,
   },
-  navRow: {
-    marginTop: 22,
-    flexDirection: "row",
-    gap: 12,
-  },
+  navRow: { marginTop: 22, flexDirection: "row", gap: 12 },
   secondaryButton: {
     flex: 1,
-    minHeight: 54,
+    minHeight: 52,
     borderWidth: 1,
     borderColor: COLORS.border,
     backgroundColor: COLORS.surfaceDeep,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 12,
   },
-  secondaryButtonHidden: {
-    opacity: 0.25,
-  },
-  secondaryButtonText: {
+  secondaryText: {
     fontFamily: FONTS.monoBold,
     color: COLORS.textSecondary,
-    letterSpacing: 1.5,
+    letterSpacing: 1.4,
   },
   primaryButton: {
     flex: 1.4,
-    minHeight: 54,
+    minHeight: 52,
     backgroundColor: COLORS.primary,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 12,
   },
-  primaryButtonDisabled: {
-    opacity: 0.45,
-  },
-  primaryButtonText: {
+  disabledButton: { opacity: 0.42 },
+  primaryText: {
     fontFamily: FONTS.monoBold,
     color: COLORS.background,
-    letterSpacing: 1.5,
+    letterSpacing: 1.4,
   },
 });

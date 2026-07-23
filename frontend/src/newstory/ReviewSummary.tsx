@@ -24,6 +24,8 @@ type ReviewSummaryProps = {
   loading: boolean;
   onBack: () => void;
   onStart: () => void;
+  /** Primary CTA on review (default: Start chronicle). */
+  startLabel?: string;
 };
 
 export function ReviewSummary({
@@ -35,6 +37,7 @@ export function ReviewSummary({
   loading,
   onBack,
   onStart,
+  startLabel = "Start chronicle",
 }: ReviewSummaryProps) {
   const safeFontScale = fontScale > 0 ? fontScale : 1;
   const bodySize = Math.round(16 * safeFontScale);
@@ -113,7 +116,7 @@ export function ReviewSummary({
           disabled={loading}
           accessibilityRole="button"
           accessibilityState={{ disabled: loading, busy: loading }}
-          accessibilityLabel={loading ? "Starting your chronicle" : "Start chronicle"}
+          accessibilityLabel={loading ? "Starting your chronicle" : startLabel}
           testID={`${testIdPrefix}-start-button`}
         >
           {loading ? (
@@ -129,7 +132,7 @@ export function ReviewSummary({
               </Text>
             </View>
           ) : (
-            <Text style={[styles.primaryButtonText, { fontSize: bodySize }]}>Start chronicle</Text>
+            <Text style={[styles.primaryButtonText, { fontSize: bodySize }]}>{startLabel}</Text>
           )}
         </TouchableOpacity>
       </View>

@@ -130,6 +130,7 @@ CLOSED_ENUM_FIELDS = {**NARRATIVE_ENUM_FIELDS, **CAUSAL_ENUM_FIELDS}
 
 DIFFICULTY_SEVERITY = {
     "easy": 0.85,
+    "soft": 0.85,  # Guided/Advanced forgiving band (alias of easy)
     "standard": 1.0,
     "hard": 1.15,
     "brutal": 1.3,

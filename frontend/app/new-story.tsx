@@ -13,24 +13,35 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONTS } from "../src/theme";
 import { getDeviceId, getSettings } from "../src/storage";
-import { newStory, listScenarios } from "../src/api";
-import type { Scenario, CustomWorldSetup, NewStoryPayload } from "../src/api";
+import {
+  getSetupCapabilities,
+  newStory,
+  SAFE_SETUP_CAPABILITIES,
+} from "../src/api";
+import type {
+  CustomWorldSetup,
+  MatureContentPreferences,
+  NewStoryPayload,
+} from "../src/api";
 import { friendlyError } from "../src/errors";
-import { clampIndex } from "../src/sanitize";
-import { AdvancedBuilder } from "../src/newstory/AdvancedBuilder";
+import {
+  AdvancedBuilder,
+  buildAdvancedStartRequest,
+  createDefaultAdvancedSetup,
+} from "../src/newstory/AdvancedBuilder";
 import {
   QuickStart,
   buildQuickStartRequest,
+  type QuickStartGenre,
 } from "../src/newstory/QuickStart";
 import {
   GuidedStart,
   buildGuidedStartRequest,
 } from "../src/newstory/GuidedStart";
-import type {
-  AdvancedDifficulty,
-  QuickStartSelections,
-  GuidedStartSelections,
-} from "../src/newstory/types";
+import type { GuidedStartSelections } from "../src/newstory/types";
+
+type CreationFlow = "quick" | "guided" | "advanced";
+type ScreenMode = "select" | CreationFlow;
 
 function createCreationRequestId(): string {
   const cryptoApi = globalThis.crypto;
@@ -48,126 +59,94 @@ function createCreationRequestId(): string {
   return `story-create:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+const SELECTION_CARDS: {
+  flow: CreationFlow;
+  title: string;
+  body: string;
+  expectation: string;
+  cta: string;
+  testId: string;
+}[] = [
+  {
+    flow: "quick",
+    title: "Quick Start",
+    body: "Choose a world and begin immediately.",
+    expectation: "Instant",
+    cta: "Choose a world",
+    testId: "selection-card-quick",
+  },
+  {
+    flow: "guided",
+    title: "Guided Start",
+    body: "Answer a few simple questions to shape your world, character and starting pressure.",
+    expectation: "About 1 minute",
+    cta: "Start guided setup",
+    testId: "selection-card-guided",
+  },
+  {
+    flow: "advanced",
+    title: "Advanced Builder",
+    body: "Define your world, character, relationships and experience in greater detail.",
+    expectation: "Full control",
+    cta: "Open builder",
+    testId: "selection-card-advanced",
+  },
+];
+
 export default function NewStoryScreen() {
   const router = useRouter();
   const submitLockRef = useRef(false);
   const creationRequestRef = useRef<{ fingerprint: string; id: string } | null>(null);
-  const [creationFlow, setCreationFlow] = useState<"quick" | "guided" | "advanced">("quick");
-  const [genre, setGenre] = useState<string>("");
-  const [customGenre, setCustomGenre] = useState("");
-  const [role, setRole] = useState("");
-  const [tone, setTone] = useState("cinematic");
-  const [difficulty, setDifficulty] = useState<AdvancedDifficulty>("standard");
-  const [debugMode, setDebugMode] = useState(false);
-  const [premise, setPremise] = useState("");
+  /** Sticky Quick Start attempt: same card retry keeps seed → same scenario_id. */
+  const quickAttemptRef = useRef<{
+    key: string;
+    seed: string;
+  } | null>(null);
+  const [screen, setScreen] = useState<ScreenMode>("select");
   const [loading, setLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [fontScale, setFontScale] = useState(1);
-  const [developerUnlocked, setDeveloperUnlocked] = useState(false);
-  const [mode, setMode] = useState<"basic" | "advanced">("advanced");
-  const [scenarios, setScenarios] = useState<Scenario[]>([]);
-  const [scenarioId, setScenarioId] = useState<string | null>(null);
-  const [quickSelections, setQuickSelections] = useState<QuickStartSelections>({});
+  const [launchingGenreKey, setLaunchingGenreKey] = useState<string | null>(null);
   const [guidedSelections, setGuidedSelections] = useState<GuidedStartSelections>({});
-  const [customSetup, setCustomSetup] = useState<CustomWorldSetup>({
-    pressures: [],
-    storyFocus: [],
-    contentSettings: {
-      gore: "low",
-      psychological_horror: "medium",
-      scarcity: "standard",
-      cruelty: "low",
-      moral_ambiguity: "medium",
-      relationships: "none",
-    },
-    seedAnswers: ["", "", ""],
-  });
+  const [customSetup, setCustomSetup] = useState<CustomWorldSetup>(createDefaultAdvancedSetup);
+  const [matureContent, setMatureContent] = useState<MatureContentPreferences>(
+    SAFE_SETUP_CAPABILITIES.mature_content_defaults
+  );
+  const [setupCapabilities, setSetupCapabilities] = useState(
+    SAFE_SETUP_CAPABILITIES.distribution_capabilities
+  );
 
   useEffect(() => {
     let active = true;
-    listScenarios().then((r) => {
-      if (active) setScenarios(r.scenarios);
-    }).catch(() => {});
-    getSettings().then((settings) => {
-      if (active) {
-        setFontScale(settings.fontScale || 1);
-        setDeveloperUnlocked(!!settings.developerUnlocked);
-      }
-    }).catch(() => {});
+    getSetupCapabilities()
+      .then((response) => {
+        if (!active) return;
+        setSetupCapabilities(response.distribution_capabilities);
+        setMatureContent(response.mature_content_defaults);
+      })
+      .catch(() => {
+        if (!active) return;
+        setSetupCapabilities(SAFE_SETUP_CAPABILITIES.distribution_capabilities);
+        setMatureContent(SAFE_SETUP_CAPABILITIES.mature_content_defaults);
+      });
+    getSettings()
+      .then((settings) => {
+        if (active) setFontScale(settings.fontScale || 1);
+      })
+      .catch(() => {});
     return () => {
       active = false;
     };
   }, []);
 
-  const selectScenario = (s: Scenario | null) => {
-    if (!s) {
-      setScenarioId(null);
-      return;
-    }
-    setScenarioId(s.id);
-    setGenre(s.genre);
-    setRole(s.role);
-    setTone(s.tone);
-    setDifficulty(s.difficulty as any);
-    setMode((s.mode as any) || "advanced");
-  };
-
   const setSetupField = (patch: Partial<CustomWorldSetup>) => {
     setCustomSetup((prev) => ({ ...prev, ...patch }));
   };
 
-  const toggleSetupList = (key: "pressures" | "storyFocus", value: string) => {
-    setCustomSetup((prev) => {
-      const current = prev[key] || [];
-      const next = current.includes(value)
-        ? current.filter((x) => x !== value)
-        : [...current, value];
-      return { ...prev, [key]: next };
-    });
-  };
-
-  const setContentSetting = (key: string, value: string) => {
-    setCustomSetup((prev) => ({
-      ...prev,
-      contentSettings: { ...(prev.contentSettings || {}), [key]: value },
-    }));
-  };
-
-  const updateSeedAnswer = (index: number, value: string) => {
-    const answers = [...(customSetup.seedAnswers || ["", "", ""] )];
-    const safeIndex = clampIndex(index, answers.length, 0);
-    answers[safeIndex] = value;
-    setSetupField({ seedAnswers: answers });
-  };
-
-  const testKey = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-
   const clearError = () => setSubmitError(null);
 
-  const setQuickSelection = (patch: Partial<QuickStartSelections>) => {
-    setQuickSelections((prev) => {
-      const next = { ...prev, ...patch };
-      if (patch.world === "random") {
-        const randomWorlds = ["fantasy", "horror", "post-apocalyptic", "modern", "detective", "cyberpunk"];
-        const randomGenre = randomWorlds[Math.floor(Math.random() * randomWorlds.length)] || "modern";
-        next.resolvedWorldGenre = randomGenre;
-      }
-      if (patch.world && patch.world !== "random") {
-        next.resolvedWorldGenre = undefined;
-      }
-      return next;
-    });
-    clearError();
-  };
-
   const setGuidedSelection = (patch: Partial<GuidedStartSelections>) => {
-    setGuidedSelections((prev) => {
-      const next = { ...prev, ...patch };
-      if (patch.world && patch.world !== prev.world) {
-        next.worldDetail = undefined;
-      }
-      return next;
-    });
+    setGuidedSelections((prev) => ({ ...prev, ...patch }));
     clearError();
   };
 
@@ -182,14 +161,20 @@ export default function NewStoryScreen() {
   const releaseSubmit = () => {
     submitLockRef.current = false;
     setLoading(false);
+    setLaunchingGenreKey(null);
   };
 
   const withCreationRequestId = (payload: NewStoryPayload): NewStoryPayload => {
     const fingerprintPayload = { ...payload, creation_request_id: undefined };
     const fingerprint = JSON.stringify(fingerprintPayload);
     let creationRequest = creationRequestRef.current;
+    // Honour an explicit sticky id (Quick Start) when fingerprint is new or matches.
+    const explicitId = payload.creation_request_id?.trim() || null;
     if (!creationRequest || creationRequest.fingerprint !== fingerprint) {
-      creationRequest = { fingerprint, id: createCreationRequestId() };
+      creationRequest = {
+        fingerprint,
+        id: explicitId || createCreationRequestId(),
+      };
       creationRequestRef.current = creationRequest;
     }
     return { ...payload, creation_request_id: creationRequest.id };
@@ -201,34 +186,40 @@ export default function NewStoryScreen() {
     releaseSubmit();
   };
 
-  const switchFlow = (nextFlow: "quick" | "guided" | "advanced") => {
+  const enterFlow = (flow: CreationFlow) => {
     if (loading) return;
-    setCreationFlow(nextFlow);
     clearError();
+    setScreen(flow);
   };
 
-  const resolvedGenre = genre === "custom"
-    ? (customGenre.trim() || customSetup.worldConcept?.trim() || "custom world")
-    : genre;
-  const customReady = genre !== "custom" || !!(customSetup.worldConcept?.trim() || customGenre.trim());
-  const canStartAdvanced = (!!resolvedGenre || !!scenarioId) && customReady && !loading;
+  const returnToSelection = () => {
+    if (loading) return;
+    clearError();
+    setScreen("select");
+  };
+
+  const handleBack = () => {
+    if (screen === "select") {
+      router.back();
+      return;
+    }
+    returnToSelection();
+  };
+
+  const canStartAdvanced =
+    (!matureContent.adult_mode_enabled || matureContent.adult_age_confirmed) && !loading;
 
   const handleAdvancedStart = async () => {
     if (!canStartAdvanced || !beginSubmit()) return;
     try {
       const device_id = await getDeviceId();
       const settings = await getSettings();
+      const payload = buildAdvancedStartRequest(customSetup);
       const requestPayload: NewStoryPayload = {
         device_id,
-        genre: resolvedGenre || (scenarios.find((s) => s.id === scenarioId)?.genre ?? ""),
-        role: role.trim() || customSetup.origin?.trim() || undefined,
-        tone,
-        difficulty,
-        debug_mode: debugMode || settings.debugDefault,
-        custom_premise: premise.trim() || undefined,
-        mode,
-        scenario_id: scenarioId || undefined,
-        custom_world_setup: genre === "custom" ? customSetup : undefined,
+        ...payload,
+        debug_mode: settings.debugDefault,
+        mature_content: matureContent,
       };
       const res = await newStory(withCreationRequestId(requestPayload));
       if (!res?.session_id) {
@@ -236,38 +227,48 @@ export default function NewStoryScreen() {
         return;
       }
       router.replace(`/play/${res.session_id}`);
-    } catch (e: any) {
+    } catch (e: unknown) {
       creationFailure(e);
     }
   };
 
-  const handleQuickStart = async () => {
+  const handleQuickStart = async (option: QuickStartGenre) => {
     if (!beginSubmit()) return;
-
-    const settings = await getSettings().catch(() => ({ debugDefault: false, fontScale: 1, developerUnlocked: false }));
-    const payload = buildQuickStartRequest(quickSelections);
-    if (!payload) {
-      creationFailure(new Error("incomplete-quick-start"));
-      return;
-    }
-
+    setLaunchingGenreKey(option.key);
     try {
+      const settings = await getSettings().catch(() => ({
+        debugDefault: false,
+        fontScale: 1,
+        developerUnlocked: false,
+      }));
       const device_id = await getDeviceId();
+      // Sticky creation_request_id per card so retries keep the same backend scenario pick.
+      let attempt = quickAttemptRef.current;
+      if (!attempt || attempt.key !== option.key) {
+        attempt = { key: option.key, seed: createCreationRequestId() };
+        quickAttemptRef.current = attempt;
+      }
+      const payload = buildQuickStartRequest(option);
+      // Quick Start isolation: genre/tone/difficulty/mode + quick_start_key + role.
+      // Backend alone selects scenario_id. Never send Guided/Advanced custom fields.
       const requestPayload: NewStoryPayload = {
         device_id,
         genre: payload.genre,
-        role: payload.role,
         tone: payload.tone,
         difficulty: payload.difficulty,
         debug_mode: settings.debugDefault,
         mode: payload.mode,
-        custom_world_setup: payload.custom_world_setup,
+        role: payload.role,
+        quick_start_key: payload.quick_start_key,
+        creation_request_id: attempt.seed,
       };
+      // Fingerprint excludes creation_request_id; sticky seed reused when payload matches.
       const res = await newStory(withCreationRequestId(requestPayload));
       if (!res?.session_id) {
         creationFailure(new Error("invalid-session"));
         return;
       }
+      quickAttemptRef.current = null;
       router.replace(`/play/${res.session_id}`);
     } catch (error) {
       creationFailure(error);
@@ -276,7 +277,6 @@ export default function NewStoryScreen() {
 
   const handleGuidedStart = async () => {
     if (!beginSubmit()) return;
-
     const settings = await getSettings().catch(() => ({
       debugDefault: false,
       fontScale: 1,
@@ -287,7 +287,6 @@ export default function NewStoryScreen() {
       creationFailure(new Error("incomplete-guided-start"));
       return;
     }
-
     try {
       const device_id = await getDeviceId();
       const requestPayload: NewStoryPayload = {
@@ -297,7 +296,6 @@ export default function NewStoryScreen() {
         tone: payload.tone,
         difficulty: payload.difficulty,
         debug_mode: settings.debugDefault,
-        custom_premise: payload.custom_premise,
         mode: payload.mode,
         custom_world_setup: payload.custom_world_setup,
       };
@@ -319,7 +317,7 @@ export default function NewStoryScreen() {
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         <View style={styles.topBar}>
-          <TouchableOpacity onPress={() => router.back()} hitSlop={12} testID="back-btn">
+          <TouchableOpacity onPress={handleBack} hitSlop={12} testID="back-btn">
             <Ionicons name="chevron-back" size={22} color={COLORS.textSecondary} />
           </TouchableOpacity>
           <Text style={styles.topTitle}>NEW · CHRONICLE</Text>
@@ -331,42 +329,6 @@ export default function NewStoryScreen() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          <Text style={styles.pageLabel} testID="new-story-page-label">NEW CHRONICLE</Text>
-          <Text style={styles.pageTitle} testID="new-story-page-title">Choose how your story begins.</Text>
-          <Text style={styles.pageHelp} testID="new-story-page-help">
-            Quick Start is fastest. Guided Start gives you more curated control. Advanced Builder keeps the full manual setup.
-          </Text>
-
-          <View style={styles.creationFlowRow} testID="creation-flow-switcher">
-            <TouchableOpacity
-              style={[styles.creationFlowButton, creationFlow === "quick" && styles.creationFlowButtonActive]}
-              onPress={() => switchFlow("quick")}
-              disabled={loading}
-              accessibilityState={{ selected: creationFlow === "quick", disabled: loading }}
-              testID="creation-flow-quick"
-            >
-              <Text style={[styles.creationFlowText, creationFlow === "quick" && styles.creationFlowTextActive]}>Quick Start</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.creationFlowButton, creationFlow === "guided" && styles.creationFlowButtonActive]}
-              onPress={() => switchFlow("guided")}
-              disabled={loading}
-              accessibilityState={{ selected: creationFlow === "guided", disabled: loading }}
-              testID="creation-flow-guided"
-            >
-              <Text style={[styles.creationFlowText, creationFlow === "guided" && styles.creationFlowTextActive]}>Guided Start</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.creationFlowButton, creationFlow === "advanced" && styles.creationFlowButtonActive]}
-              onPress={() => switchFlow("advanced")}
-              disabled={loading}
-              accessibilityState={{ selected: creationFlow === "advanced", disabled: loading }}
-              testID="creation-flow-advanced"
-            >
-              <Text style={[styles.creationFlowText, creationFlow === "advanced" && styles.creationFlowTextActive]}>Advanced Builder</Text>
-            </TouchableOpacity>
-          </View>
-
           {submitError ? (
             <View style={styles.errorBanner} testID="new-story-error-banner">
               <Ionicons name="alert-circle-outline" size={18} color={COLORS.primary} />
@@ -374,94 +336,97 @@ export default function NewStoryScreen() {
             </View>
           ) : null}
 
-          {creationFlow === "quick" ? (
+          {screen === "select" ? (
+            <View testID="creation-selection-screen">
+              <Text style={styles.pageLabel} testID="new-story-page-label">
+                NEW CHRONICLE
+              </Text>
+              <Text style={styles.pageTitle} testID="new-story-page-title">
+                Choose How to Begin
+              </Text>
+              <Text style={styles.pageHelp} testID="new-story-page-help">
+                Three ways into a world that remembers. Your answers set real starting conditions, not a
+                scripted plot.
+              </Text>
+
+              <View style={styles.selectionList} testID="creation-selection-cards">
+                {SELECTION_CARDS.map((card) => (
+                  <TouchableOpacity
+                    key={card.flow}
+                    style={styles.selectionCard}
+                    onPress={() => enterFlow(card.flow)}
+                    disabled={loading}
+                    activeOpacity={0.82}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${card.title}. ${card.body} Expectation: ${card.expectation}. ${card.cta}.`}
+                    accessibilityState={{ disabled: loading }}
+                    testID={card.testId}
+                  >
+                    <Text style={styles.selectionTitle}>{card.title}</Text>
+                    <Text style={styles.selectionBody}>{card.body}</Text>
+                    <View style={styles.selectionMeta}>
+                      <Text style={styles.selectionExpectation}>{card.expectation}</Text>
+                      <View style={styles.selectionCta}>
+                        <Text style={styles.selectionCtaText}>{card.cta}</Text>
+                        <Ionicons name="arrow-forward" size={16} color={COLORS.background} />
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          ) : null}
+
+          {screen === "quick" ? (
             <QuickStart
-              selections={quickSelections}
-              loading={loading}
+              creationLoading={loading}
+              launchingGenreKey={launchingGenreKey}
               fontScale={fontScale}
-              onChange={setQuickSelection}
               onStart={handleQuickStart}
             />
-          ) : creationFlow === "guided" ? (
+          ) : null}
+
+          {screen === "guided" ? (
             <GuidedStart
               selections={guidedSelections}
               loading={loading}
               fontScale={fontScale}
               onChange={setGuidedSelection}
               onStart={handleGuidedStart}
+              onChangePath={returnToSelection}
             />
-          ) : (
+          ) : null}
+
+          {screen === "advanced" ? (
             <AdvancedBuilder
               loading={loading}
-              developerUnlocked={developerUnlocked}
-              genre={genre}
-              customGenre={customGenre}
-              role={role}
-              tone={tone}
-              difficulty={difficulty}
-              debugMode={debugMode}
-              premise={premise}
-              mode={mode}
-              scenarios={scenarios}
-              scenarioId={scenarioId}
+              fontScale={fontScale}
               customSetup={customSetup}
-              onSelectScenario={(scenario) => {
-                clearError();
-                selectScenario(scenario);
-              }}
-              onSetGenre={(nextGenre) => {
-                clearError();
-                setGenre(nextGenre);
-              }}
-              onSetCustomGenre={(value) => {
-                clearError();
-                setCustomGenre(value);
-              }}
-              onSetRole={(value) => {
-                clearError();
-                setRole(value);
-              }}
-              onSetTone={(value) => {
-                clearError();
-                setTone(value);
-              }}
-              onSetDifficulty={(value) => {
-                clearError();
-                setDifficulty(value);
-              }}
-              onSetMode={(value) => {
-                clearError();
-                setMode(value);
-              }}
-              onSetPremise={(value) => {
-                clearError();
-                setPremise(value);
-              }}
-              onToggleDebug={() => {
-                clearError();
-                setDebugMode((v) => !v);
-              }}
+              matureContent={matureContent}
+              capabilities={setupCapabilities}
               onSetSetupField={(patch) => {
                 clearError();
                 setSetupField(patch);
               }}
-              onToggleSetupList={(key, value) => {
+              onSetMatureContent={(patch) => {
                 clearError();
-                toggleSetupList(key, value);
-              }}
-              onSetContentSetting={(key, value) => {
-                clearError();
-                setContentSetting(key, value);
-              }}
-              onUpdateSeedAnswer={(index, value) => {
-                clearError();
-                updateSeedAnswer(index, value);
+                setMatureContent((current) => ({ ...current, ...patch }));
               }}
               onStart={handleAdvancedStart}
-              canStart={canStartAdvanced}
-              testKey={testKey}
+              onChangePath={returnToSelection}
             />
-          )}
+          ) : null}
+
+          {screen === "quick" ? (
+            <TouchableOpacity
+              style={styles.changePathBtn}
+              onPress={returnToSelection}
+              disabled={loading}
+              testID="quick-change-path"
+            >
+              <Text style={styles.changePathText}>← Change path</Text>
+            </TouchableOpacity>
+          ) : null}
 
           <View style={{ height: 40 }} />
         </ScrollView>
@@ -487,7 +452,12 @@ const styles = StyleSheet.create({
     fontSize: 11,
     letterSpacing: 3,
   },
-  container: { padding: 20 },
+  container: {
+    padding: 20,
+    maxWidth: 720,
+    width: "100%",
+    alignSelf: "center",
+  },
   pageLabel: {
     fontFamily: FONTS.monoBold,
     color: COLORS.primary,
@@ -498,44 +468,63 @@ const styles = StyleSheet.create({
   pageTitle: {
     fontFamily: FONTS.headingBold,
     color: COLORS.textPrimary,
-    fontSize: 30,
-    lineHeight: 34,
+    fontSize: 32,
+    lineHeight: 38,
   },
   pageHelp: {
-    marginTop: 10,
-    marginBottom: 20,
+    marginTop: 12,
+    marginBottom: 24,
     fontFamily: FONTS.bodyItalic,
+    color: COLORS.textSecondary,
+    fontSize: 16,
+    lineHeight: 24,
+  },
+  selectionList: { gap: 14 },
+  selectionCard: {
+    minHeight: 148,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.surface,
+    padding: 18,
+  },
+  selectionTitle: {
+    fontFamily: FONTS.headingBold,
+    color: COLORS.textPrimary,
+    fontSize: 24,
+    marginBottom: 8,
+  },
+  selectionBody: {
+    fontFamily: FONTS.body,
     color: COLORS.textSecondary,
     fontSize: 15,
     lineHeight: 22,
+    marginBottom: 16,
   },
-  creationFlowRow: {
+  selectionMeta: {
     flexDirection: "row",
-    gap: 10,
-    marginBottom: 18,
-  },
-  creationFlowButton: {
-    flex: 1,
-    minHeight: 48,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.surfaceDeep,
     alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 12,
+    justifyContent: "space-between",
+    gap: 12,
   },
-  creationFlowButtonActive: {
-    borderColor: COLORS.primary,
-    backgroundColor: COLORS.primarySoft,
-  },
-  creationFlowText: {
+  selectionExpectation: {
     fontFamily: FONTS.monoBold,
-    color: COLORS.textSecondary,
-    fontSize: 12,
+    color: COLORS.textMuted,
+    fontSize: 11,
     letterSpacing: 1.5,
   },
-  creationFlowTextActive: {
-    color: COLORS.primary,
+  selectionCta: {
+    minHeight: 44,
+    paddingHorizontal: 14,
+    backgroundColor: COLORS.primary,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  selectionCtaText: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.background,
+    fontSize: 12,
+    letterSpacing: 1.2,
   },
   errorBanner: {
     marginBottom: 18,
@@ -554,5 +543,12 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     fontSize: 15,
     lineHeight: 20,
+  },
+  changePathBtn: { marginTop: 18 },
+  changePathText: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.primary,
+    fontSize: 12,
+    letterSpacing: 1,
   },
 });

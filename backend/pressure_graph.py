@@ -102,6 +102,7 @@ ORIGIN_TYPES = (
     "scenario_pressure",
     "structured_event",
     "pressure_genesis",
+    "custom_setup",  # Stage 2A Guided/Advanced creation pressures
 )
 
 TICK_MAGNITUDE_DELTA = 4
