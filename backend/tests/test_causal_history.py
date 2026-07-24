@@ -5,10 +5,10 @@ Deterministic, provider-free. Proves the player-safe history view:
   1. surfaces an autonomous NPC move (from the commit receipt + evidence keys),
   2. surfaces persistent player-caused relationship changes (from guard receipts),
   3. surfaces a consequence seeded on one turn and returning on a later turn,
-     traced back to the turn that caused it,
   4. surfaces a later NPC state consistent with the earlier event,
   5. NEVER exposes internal identifiers, engine field names, replayability /
      clock / lifecycle terminology, dice values, or probabilities.
+  6. Compact latest-outcome STATE SHIFT and RETURN are short and non-leaky.
 """
 from __future__ import annotations
 
@@ -138,16 +138,21 @@ def test_later_npc_state_reflects_earlier_event():
     assert any("Greg Stahl will no longer stand with you." == c for c in changes)
 
 
-def test_consequence_seeded_then_returns_with_origin_turn():
+def test_consequence_returns_with_player_safe_history_detail():
     history = build_causal_history(_demo_session(), _demo_turns())
     t4 = next(r for r in history if r["turn"] == 4)
     assert any(e["kind"] == "seed" for e in t4["events"])
     t6 = next(r for r in history if r["turn"] == 6)
     returns = [e["text"] for e in t6["events"] if e["kind"] == "return"]
     assert len(returns) == 1
-    assert "Set in motion on turn 4" in returns[0]
+    # Richer Why detail with known name is allowed.
     assert "Greg Stahl" in returns[0]
     assert "came due" in returns[0]
+    # Engine scheduling / speculative labels are not.
+    assert "set in motion" not in returns[0].lower()
+    assert "turn 4" not in returns[0].lower()
+    assert "blame" not in returns[0].lower()
+    assert "holds the key" not in returns[0].lower()
 
 
 def test_history_never_exposes_internal_fields_or_identifiers():
@@ -159,6 +164,7 @@ def test_history_never_exposes_internal_fields_or_identifiers():
         "agenda", "utility_ai", "heuristic", "lifecycle", "simulation_clock",
         "secret", "debug", "state_guard", "d20", "probability", "betrayal_risk",
         "relationship_fracture", "goal_kind", "npc_id", "display_name",
+        "set in motion on turn",
     ]
     for token in forbidden:
         assert token not in payload, f"internal token leaked: {token}"
@@ -181,14 +187,15 @@ def test_latest_outcome_is_bounded_and_qualitative():
         _turn(2, action="I press on.", state={"Pressure": "elevated", "Health": "bruised"}),
     ]
     outcome = build_latest_outcome({}, turns)
-    assert outcome == {
-        "turn": 2,
-        "events": [{"kind": "action", "text": "You: I press on."}],
-        "changes": [
-            {"label": "Health", "before": "stable", "after": "bruised"},
-            {"label": "Pressure", "before": "rising", "after": "elevated"},
-        ],
-    }
+    assert outcome is not None
+    assert outcome["turn"] == 2
+    assert {"kind": "action", "text": "You: I press on."} in outcome["events"]
+    labels = {c["label"]: c for c in outcome["changes"]}
+    assert labels["Health"]["before"] == "stable"
+    assert labels["Health"]["after"] == "bruised"
+    assert labels["Pressure"]["before"] == "rising"
+    assert labels["Pressure"]["after"] == "elevated"
+    assert len(outcome["changes"]) <= 4
 
 
 def test_latest_outcome_drops_internal_state_values():
@@ -197,3 +204,104 @@ def test_latest_outcome_drops_internal_state_values():
         _turn(2, state={"Pressure": "stable", "Danger": "secret_registry=true"}),
     ]
     assert build_latest_outcome({}, turns) is None
+
+
+def test_latest_outcome_compacts_long_state_and_leaves_raw_untouched():
+    before_conditions = (
+        "impaled left ankle, moderate-to-heavy bleeding, trapped, dusk freezing"
+    )
+    after_conditions = (
+        "impaled left ankle, moderate bleeding under fresh bandage, "
+        "trapped, dusk freezing, hands numbing"
+    )
+    before_supplies = (
+        "empty hunting rifle, dented canteen, half-full first-aid tin, unopened gauze"
+    )
+    after_supplies = (
+        "empty hunting rifle, dented canteen, opened first-aid tin, used gauze"
+    )
+    t1 = _turn(1, state={
+        "Conditions": before_conditions,
+        "Inventory Summary": before_supplies,
+        "Danger": "low",
+        "Stress": "tense",
+    })
+    t2 = _turn(2, action="I wrap the wound.", state={
+        "Conditions": after_conditions,
+        "Inventory Summary": after_supplies,
+        "Danger": "elevated",
+        "Stress": "overloaded",
+        "Momentum": "stalling",
+    })
+    # Mutating copies must not be written back — prove raw inputs survive.
+    raw_before = dict(t1["state"])
+    raw_after = dict(t2["state"])
+
+    outcome = build_latest_outcome({}, [t1, t2])
+    assert outcome is not None
+    assert t1["state"] == raw_before
+    assert t2["state"] == raw_after
+    # Full walls are gone.
+    joined = " | ".join(
+        f"{c.get('before','')} → {c['after']}" for c in outcome["changes"]
+    )
+    assert before_conditions not in joined
+    assert after_conditions not in joined
+    assert before_supplies not in joined
+    assert len(outcome["changes"]) <= 4
+    # Critical fields rank ahead of minor stress/momentum when present.
+    labels = [c["label"] for c in outcome["changes"]]
+    if "Danger" in labels and "Stress" in labels:
+        assert labels.index("Danger") < labels.index("Stress")
+    # Shared unchanged clauses like "trapped" are not dumped as rows.
+    assert not any(c.get("after") == "trapped" for c in outcome["changes"])
+    # Meaningful fragments appear.
+    blob = json.dumps(outcome["changes"]).lower()
+    assert "bleed" in blob or "gauze" in blob or "danger" in blob
+
+
+def test_compact_return_hides_scheduling_and_speculation():
+    session = {
+        "replayability_state": {
+            "consequence_echoes": {
+                "fired": [
+                    {
+                        "kind": "pressure_escalation",
+                        "label": "authority — someone may hold the key or blame",
+                        "source_event_id": "evt-1",
+                        "fired_turn": 2,
+                    }
+                ]
+            },
+            "transition_receipts": [
+                {"source_event_id": "evt-1", "receipt_type": "echo_scheduled", "turn": 1},
+            ],
+        }
+    }
+    turns = [
+        _turn(1, state={"Pressure": "rising"}),
+        _turn(2, action="I wait.", state={"Pressure": "worsening"}),
+    ]
+    outcome = build_latest_outcome(session, turns)
+    assert outcome is not None
+    returns = [e for e in outcome["events"] if e["kind"] == "return"]
+    assert returns
+    text = returns[0]["text"].lower()
+    assert "set in motion" not in text
+    assert "turn 1" not in text
+    assert "trigger" not in text
+    assert "pressure graph" not in text
+    assert "blame" not in text
+    assert "hold the key" not in text
+    assert "authority" not in text
+    # Immediate player-safe consequence remains.
+    assert "escalat" in text or "situation" in text
+
+    # Why history still has richer (but safe) causal detail for the same echo.
+    history = build_causal_history(session, turns)
+    t2 = next(r for r in history if r["turn"] == 2)
+    hist_returns = [e["text"] for e in t2["events"] if e["kind"] == "return"]
+    assert hist_returns
+    assert "pressure" in hist_returns[0].lower() or "building" in hist_returns[0].lower()
+    assert "set in motion" not in hist_returns[0].lower()
+    assert "blame" not in hist_returns[0].lower()
