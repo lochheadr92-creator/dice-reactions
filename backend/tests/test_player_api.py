@@ -21,6 +21,7 @@ from player_api import (  # noqa: E402
     build_player_session,
     build_player_state,
     build_player_turn,
+    repair_player_mojibake,
 )
 
 
@@ -177,6 +178,27 @@ def test_recursive_nested_internal_keys_stripped():
     assert "engine_dump" not in ledger_dump
     assert "rolling_state" not in ledger_dump
     assert "hidden_bucket" not in ledger_dump
+
+
+def test_repair_player_mojibake_known_sequences_only():
+    bad_ellipsis = "\u00e2\u20ac\u00a6"  # â€¦
+    bad_em = "\u00e2\u20ac\u201d"  # â€”
+    repaired = repair_player_mojibake(f"Wait{bad_ellipsis} then a break{bad_em} now.")
+    assert repaired == "Wait\u2026 then a break\u2014 now."
+    # Idempotent
+    assert repair_player_mojibake(repaired) == repaired
+    # Valid Unicode and ASCII unchanged
+    clean = "Wait… then a break— now. café"
+    assert repair_player_mojibake(clean) == clean
+
+
+def test_player_paragraphs_repair_historic_mojibake_without_claiming_storage_mutation():
+    bad = "The hall darkens\u00e2\u20ac\u00a6"
+    paragraphs = build_player_paragraphs([bad, "ASCII only."])
+    assert paragraphs[0] == "The hall darkens\u2026"
+    assert paragraphs[1] == "ASCII only."
+    # Input list is not required to be mutated; repair is projection-only.
+    assert bad == "The hall darkens\u00e2\u20ac\u00a6"
 
 
 def test_paragraphs_and_choices_recursive_scrub():

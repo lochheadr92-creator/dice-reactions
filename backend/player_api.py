@@ -114,12 +114,41 @@ def _iso(value: Any) -> Any:
     return value
 
 
+# Established UTF-8→cp1252 mojibake sequences only (presentation repair).
+# Used for historic turns already stored with corrupted punctuation. Does not
+# mutate Mongo documents — applied only when building player-facing strings.
+_MOJIBAKE_REPAIRS: tuple[tuple[str, str], ...] = (
+    ("\u00e2\u20ac\u00a6", "\u2026"),  # â€¦ → …
+    ("\u00e2\u20ac\u201d", "\u2014"),  # â€” → —
+    ("\u00e2\u20ac\u201c", "\u2013"),  # â€“ → –
+    ("\u00e2\u20ac\u2122", "\u2019"),  # â€™ → ’
+    ("\u00e2\u20ac\u0153", "\u201c"),  # â€œ → “
+    ("\u00e2\u0080\u009d", "\u201d"),  # â\x80\x9d → ”
+    ("\u00e2\u20ac\u00a2", "\u2022"),  # â€¢ → •
+)
+
+
+def repair_player_mojibake(text: str) -> str:
+    """Deterministic presentation repair for known mojibake sequences only.
+
+    Idempotent: running twice leaves already-correct text unchanged.
+    Valid Unicode and ordinary ASCII are never altered.
+    """
+    if not text or not isinstance(text, str):
+        return text if isinstance(text, str) else str(text or "")
+    out = text
+    for bad, good in _MOJIBAKE_REPAIRS:
+        if bad in out:
+            out = out.replace(bad, good)
+    return out
+
+
 def _scrub_player_string(value: Any) -> str:
     from server import _scrub_meta_from_text  # noqa: WPS433 — avoid circular import at load
 
     text = str(value or "")
     scrubbed, _hits = _scrub_meta_from_text(text)
-    return scrubbed
+    return repair_player_mojibake(scrubbed)
 
 
 def _state_key_allowed(key: str) -> bool:
