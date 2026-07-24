@@ -68,6 +68,8 @@ import story_secrets as secrets  # deterministic story secret engine
 import replayability  # noqa: E402  — Replayability Engine v1 (deterministic)
 import stress  # noqa: E402  — Ch 14 Stress substrate v1 (deterministic)
 import causal_history  # noqa: E402  — player-safe "Why this happened" projection
+import mature_content as mature_policy  # noqa: E402
+import mature_rendering  # noqa: E402
 from security import fetch_owned_session, require_admin, require_device_id  # noqa: E402
 from rate_limit import (  # noqa: E402
     _rollback_bucket_reservations,
@@ -563,6 +565,9 @@ class NewStoryRequest(BaseModel):
     # Quick Start category key — when set, backend is sole scenario-selection authority.
     quick_start_key: Optional[str] = Field(default=None, max_length=64)
     custom_world_setup: Optional[Dict[str, Any]] = None
+    # Presentation permissions only. These are intentionally separate from
+    # custom_world_setup so they never enter replay identity or simulation seed.
+    mature_content: Optional[Dict[str, Any]] = None
     # Client-generated idempotency key so a creation retry after a failed/lost
     # first attempt cannot create a duplicate completed session. Optional.
     # Also seeds deterministic Quick Start pool selection when quick_start_key is set.
@@ -611,6 +616,10 @@ class SessionRecord(BaseModel):
     debug_mode: bool = False
     custom_premise: Optional[str] = None
     custom_world_setup: Optional[Dict[str, Any]] = None
+    mature_content: Dict[str, Any] = Field(
+        default_factory=mature_policy.default_mature_content
+    )
+    distribution_capabilities: Dict[str, Any] = Field(default_factory=dict)
     rendering_policy: Dict[str, Any] = Field(default_factory=dict)
     title: str = "Untitled Chronicle"
     turn_count: int = 0
@@ -3393,8 +3402,54 @@ async def _apply_presentation_rendering(
     authoritative_rolling: Optional[Dict[str, Any]],
     player_action: Optional[str],
 ) -> Tuple[ParsedTurn, Dict[str, Any]]:
-    """Presentation seam; mature renderer is intentionally out of this commit."""
-    return parsed, dict(session.get("rendering_policy") or {})
+    """Apply a provider-isolated prose rerender after authoritative processing."""
+
+    try:
+        result = await mature_rendering.render_mature_presentation(
+            session,
+            parsed.narrative,
+            authoritative_rolling,
+        )
+    except Exception:
+        logger.exception("Mature presentation renderer failed closed")
+        policy = dict(session.get("rendering_policy") or {})
+        policy.update(
+            {
+                "failure_mode": "safe_standard",
+                "last_status": "safe_fallback_renderer_error",
+                "last_renderer": "standard",
+            }
+        )
+        return parsed, policy
+
+    if not result.rendered:
+        return parsed, result.rendering_policy
+
+    candidate = parsed.model_copy(
+        update={
+            "narrative": result.narrative,
+            "paragraphs": result.paragraphs,
+        }
+    )
+    validation_session = dict(session)
+    validation_session["rolling_state"] = authoritative_rolling
+    ok, reason, _kind = _full_validate(
+        candidate,
+        validation_session,
+        player_action,
+    )
+    if ok:
+        return candidate, result.rendering_policy
+
+    logger.warning("Mature presentation rejected by factual validator: %s", reason)
+    policy = dict(result.rendering_policy)
+    policy.update(
+        {
+            "last_status": "safe_fallback_validation_rejected",
+            "last_renderer": "standard",
+        }
+    )
+    return parsed, policy
 
 
 async def _persist_model_lock(
@@ -3535,6 +3590,15 @@ async def list_scenarios():
     return {"scenarios": get_scenarios()}
 
 
+@api_router.get("/setup/capabilities")
+async def setup_capabilities():
+    capabilities = mature_policy.get_distribution_capabilities(
+        renderer_configured=mature_rendering.mature_renderer_is_configured()
+    )
+    return {
+        "distribution_capabilities": capabilities,
+        "mature_content_defaults": mature_policy.default_mature_content(),
+    }
 
 
 # -------- Admin: AI settings ------------------------------------------------
@@ -3838,6 +3902,30 @@ async def _create_new_story(req: NewStoryRequest):
     elif secret_raw and custom_setup is None:
         custom_setup = {"secret": secret_raw}
 
+    distribution_capabilities = mature_policy.get_distribution_capabilities(
+        renderer_configured=mature_rendering.mature_renderer_is_configured()
+    )
+    custom_age_text = mature_policy.collect_setup_text(
+        {
+            "genre": req.genre,
+            "role": req.role,
+            "custom_premise": req.custom_premise,
+            "custom_world_setup": custom_setup,
+        },
+        excluded_keys={"worldExclusions", "hard_limits"},
+    )
+    try:
+        mature_content = mature_policy.normalize_mature_content(
+            req.mature_content,
+            distribution_capabilities,
+            custom_text=custom_age_text,
+        )
+    except mature_policy.MatureContentValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    rendering_policy = mature_policy.build_rendering_policy(
+        mature_content, distribution_capabilities
+    )
+
     # Scenario seed is authority for role/location coherence. Client genre/tone/difficulty
     # may refine presentation; role prefers the selected scenario so Quick Start pools stick.
     if scenario:
@@ -3885,6 +3973,9 @@ async def _create_new_story(req: NewStoryRequest):
         debug_mode=req.debug_mode,
         custom_premise=effective_premise,
         custom_world_setup=custom_setup,
+        mature_content=mature_content,
+        distribution_capabilities=distribution_capabilities,
+        rendering_policy=rendering_policy,
         title=title,
         mode=effective_mode,
         prose_mode=prose_modes.resolve_prose_mode_name(req.prose_mode),
@@ -3918,6 +4009,7 @@ async def _create_new_story(req: NewStoryRequest):
             difficulty=effective_difficulty,
             scenario_id=resolved_scenario_id,
             custom_world_setup=custom_setup,
+            mature_content=mature_content,
         )
         setup_lines.extend(creation_contract.build_opening_setup_lines(opening_contract))
 

@@ -35,6 +35,12 @@ LEGACY_HAIKU_MODEL_IDS = frozenset({"anthropic/claude-3-5-haiku", "anthropic/cla
 # Qwen2.5-72B fine-tune — explicit admin selection only; never auto-fallback.
 MODEL_QWEN_UNCENSORED: str = "anthracite-org/magnum-v4-72b"
 
+
+def get_mature_model_id() -> str:
+    """Return the explicitly configured pinned mature-rendering model id."""
+
+    return os.environ.get("MATURE_MODEL_ID", "").strip()
+
 DEPRECATED_AUTOMATIC_MODEL_IDS = frozenset({MODEL_HAIKU, *LEGACY_HAIKU_MODEL_IDS})
 
 

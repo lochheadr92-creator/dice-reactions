@@ -62,10 +62,13 @@ def test_session_allowlist_drops_internal_fields():
     assert "custom_world_setup" not in out
     assert "creation_request_id" not in out
     assert "future_internal_field" not in out
+    assert out["mature_content"]["adult_mode_enabled"] is False
+    assert out["rendering_policy"]["route"] == "standard"
 
     new_story_out = build_new_story_session_payload(raw)
     assert new_story_out["id"] == "sess-1"
     assert "creation_request_id" not in new_story_out
+    assert new_story_out["mature_content"]["adult_mode_enabled"] is False
 
 
 def test_turn_allowlist_drops_engine_payloads():

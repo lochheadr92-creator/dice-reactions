@@ -53,6 +53,12 @@ OPENROUTER_BASE_URL = os.environ.get(
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 # Base URL for the optional direct-OpenAI provider (OpenAI-compatible /chat/completions).
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+# Optional NVIDIA NIM key (also OpenAI-compatible). Used for openai-direct/* models
+# when OPENAI_API_KEY is empty, or as an explicit alternate credential.
+NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "").strip()
+NVIDIA_BASE_URL = os.environ.get(
+    "NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"
+).rstrip("/")
 # A model is routed to direct OpenAI ONLY when its id carries this explicit,
 # opt-in namespace (e.g. "openai-direct/gpt-4o"). Every other id stays on OpenRouter,
 # including OpenRouter's own "openai/..." catalogue ids.
@@ -117,13 +123,32 @@ def get_default_settings() -> Dict[str, Any]:
 
 
 def is_configured() -> bool:
-    return bool(OPENROUTER_API_KEY)
+    return bool(OPENROUTER_API_KEY or OPENAI_API_KEY or NVIDIA_API_KEY)
 
 
 def openai_is_configured() -> bool:
-    """Report whether a direct OpenAI key is present (boolean only — never returns
-    or logs the value)."""
-    return bool(OPENAI_API_KEY)
+    """Report whether a direct OpenAI-compatible key is present (boolean only —
+    never returns or logs the value). Includes NVIDIA NIM when configured."""
+    return bool(OPENAI_API_KEY or NVIDIA_API_KEY)
+
+
+def _direct_openai_compatible_credentials() -> Tuple[str, str, str]:
+    """Return (api_key, base_url, key_env) for openai-direct/* models.
+
+    Prefer NVIDIA_API_KEY when set (including over a local Ollama placeholder).
+    Otherwise use OPENAI_API_KEY + OPENAI_BASE_URL (Ollama or real OpenAI).
+    """
+    if NVIDIA_API_KEY:
+        return NVIDIA_API_KEY, NVIDIA_BASE_URL, "NVIDIA_API_KEY"
+    if OPENAI_API_KEY:
+        return OPENAI_API_KEY, OPENAI_BASE_URL, "OPENAI_API_KEY"
+    return "", OPENAI_BASE_URL, "OPENAI_API_KEY"
+
+
+def model_is_configured(model_id: str) -> bool:
+    """Boolean-only provider readiness check for one configured model route."""
+
+    return bool(model_id and resolve_provider_route(model_id).get("api_key"))
 
 
 def resolve_provider_route(model_id: str) -> Dict[str, Any]:
@@ -138,13 +163,16 @@ def resolve_provider_route(model_id: str) -> Dict[str, Any]:
     """
     mid = model_id or ""
     if mid.startswith(OPENAI_PROVIDER_PREFIX):
+        api_key, base_url, key_env = _direct_openai_compatible_credentials()
+        label = "NVIDIA NIM" if key_env == "NVIDIA_API_KEY" else "OpenAI"
+        provider = "nvidia" if key_env == "NVIDIA_API_KEY" else "openai"
         return {
-            "provider": "openai",
-            "label": "OpenAI",
-            "base_url": OPENAI_BASE_URL,
-            "api_key": OPENAI_API_KEY,
+            "provider": provider,
+            "label": label,
+            "base_url": base_url,
+            "api_key": api_key,
             "api_model": mid[len(OPENAI_PROVIDER_PREFIX):],
-            "key_env": "OPENAI_API_KEY",
+            "key_env": key_env,
             "extra_headers": {},
         }
     return {
@@ -309,6 +337,7 @@ async def chat_completion_with_meta(
     max_tokens: Optional[int] = None,
     max_retries_per_model: Optional[int] = None,
     extra_headers: Optional[Dict[str, str]] = None,
+    allow_fallback: bool = True,
 ) -> Dict[str, Any]:
     """Run a completion, retrying within a model then falling back to the next.
 
@@ -340,7 +369,9 @@ async def chat_completion_with_meta(
 
     requested = normalize_runtime_model(primary_model or DEFAULT_MODEL)
     # Build ordered chain: primary first, then automatic fallbacks (never uncensored).
-    if fallback_chain:
+    if not allow_fallback:
+        chain_source = []
+    elif fallback_chain:
         chain_source = [
             m for m in fallback_chain
             if m and m != MODEL_QWEN_UNCENSORED and m in AUTOMATIC_FALLBACK_MODELS
@@ -428,6 +459,26 @@ async def chat_completion_with_meta(
     raise AIServiceError(
         f"All models in fallback chain exhausted: {last_error}",
         kind=getattr(last_error, "kind", KIND_OTHER) if last_error else KIND_OTHER,
+    )
+
+
+async def chat_completion_strict_with_meta(
+    messages: List[Dict[str, str]],
+    model: str,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    max_retries: int = 1,
+) -> Dict[str, Any]:
+    """Call exactly one configured model; never step to an automatic fallback."""
+
+    return await chat_completion_with_meta(
+        messages=messages,
+        primary_model=model,
+        fallback_chain=[],
+        temperature=temperature,
+        max_tokens=max_tokens,
+        max_retries_per_model=max_retries,
+        allow_fallback=False,
     )
 
 

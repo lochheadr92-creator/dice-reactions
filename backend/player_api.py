@@ -11,6 +11,8 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
+from mature_content import default_mature_content
+
 # Session fields exposed to players (device_id and engine metadata excluded).
 PLAYER_SESSION_FIELDS = frozenset({
     "id",
@@ -25,6 +27,9 @@ PLAYER_SESSION_FIELDS = frozenset({
     "last_state",
     "mode",
     "scenario_id",
+    "mature_content",
+    "distribution_capabilities",
+    "rendering_policy",
     "created_at",
     "updated_at",
 })
@@ -308,6 +313,17 @@ def build_player_session(session: Dict[str, Any]) -> Dict[str, Any]:
             out[field] = _iso(value)
         else:
             out[field] = value
+    out.setdefault("mature_content", default_mature_content())
+    out.setdefault("distribution_capabilities", {})
+    out.setdefault(
+        "rendering_policy",
+        {
+            "route": "standard",
+            "failure_mode": "safe_standard",
+            "sexual_age_boundary": "explicit_18_plus_only",
+            "last_status": "standard",
+        },
+    )
     return out
 
 
@@ -323,5 +339,20 @@ def build_new_story_session_payload(session: Dict[str, Any]) -> Dict[str, Any]:
         "turn_count",
         "mode",
         "scenario_id",
+        "mature_content",
+        "distribution_capabilities",
+        "rendering_policy",
     }
-    return {k: session[k] for k in allowed if k in session}
+    out = {k: session[k] for k in allowed if k in session}
+    out.setdefault("mature_content", default_mature_content())
+    out.setdefault("distribution_capabilities", {})
+    out.setdefault(
+        "rendering_policy",
+        {
+            "route": "standard",
+            "failure_mode": "safe_standard",
+            "sexual_age_boundary": "explicit_18_plus_only",
+            "last_status": "standard",
+        },
+    )
+    return out
