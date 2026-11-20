@@ -352,3 +352,37 @@ def test_turn_generation_requests_rolling_state_prefill(monkeypatch):
     asyncio.run(server._generate_turn(session, "Continue"))
     assert captured["assistant_prefill"] == server.TURN_REPLY_PREFILL
     assert server.TURN_REPLY_PREFILL.startswith("<rolling_state>")
+
+
+# --------------------------------------------------------------------------- #
+# OS trust store for TLS (antivirus HTTPS inspection, e.g. Norton)
+# --------------------------------------------------------------------------- #
+def test_tls_verify_defaults_to_httpx_certifi():
+    assert ai_service._build_tls_verify(False) is True
+
+
+def test_tls_verify_uses_os_trust_store_when_enabled():
+    import ssl
+
+    pytest.importorskip("truststore")
+    ctx = ai_service._build_tls_verify(True)
+    assert isinstance(ctx, ssl.SSLContext)
+    assert type(ctx).__module__.startswith("truststore")
+
+
+def test_provider_client_receives_configured_tls_verify(monkeypatch):
+    seen = {}
+
+    class _Client(_CapturingClient):
+        def __init__(self, *args, **kwargs):
+            seen.update(kwargs)
+
+    sentinel = object()
+    monkeypatch.setattr(ai_service, "_TLS_VERIFY", sentinel)
+    _CapturingClient.sent = []
+    monkeypatch.setattr(ai_service.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(ai_service, "OPENAI_API_KEY", "test-key")
+    asyncio.run(
+        ai_service._call_model_once("openai-direct/gpt-4o", [{"role": "user", "content": "x"}], 0.5, 16)
+    )
+    assert seen["verify"] is sentinel

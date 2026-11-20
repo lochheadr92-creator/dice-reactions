@@ -75,6 +75,29 @@ OPENAI_DIRECT_REASONING_EFFORT = os.environ.get("OPENAI_DIRECT_REASONING_EFFORT"
 # a trailing assistant message that the server continues (Ollama does; real
 # OpenAI does not, so this stays off by default). The prefill is put back on
 # the front of the returned content.
+# Antivirus / corporate TLS inspection (e.g. Norton Web Shield) re-signs HTTPS
+# with a root certificate only the OS trust store holds, so certifi-based
+# verification fails with CERTIFICATE_VERIFY_FAILED. When on, provider calls
+# verify against the OS trust store (truststore). Off: httpx default (certifi).
+SSL_USE_SYSTEM_TRUST_STORE = os.environ.get(
+    "SSL_USE_SYSTEM_TRUST_STORE", ""
+).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _build_tls_verify(use_system_store: bool):
+    """httpx ``verify`` value. Raises ImportError if the store is requested
+    but truststore is missing, so a misconfiguration fails at startup."""
+    if not use_system_store:
+        return True
+    import ssl
+
+    import truststore
+
+    return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+
+_TLS_VERIFY = _build_tls_verify(SSL_USE_SYSTEM_TRUST_STORE)
+
 OPENAI_DIRECT_ASSISTANT_PREFILL = os.environ.get(
     "OPENAI_DIRECT_ASSISTANT_PREFILL", ""
 ).strip().lower() in ("1", "true", "yes", "on")
@@ -335,7 +358,7 @@ async def _call_model_once(
     if timeout_seconds is not None:
         timeout = max(1.0, min(float(DEFAULT_TIMEOUT_SECONDS), float(timeout_seconds)))
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with httpx.AsyncClient(timeout=timeout, verify=_TLS_VERIFY) as client:
         try:
             # httpx timeouts bound each wait between bytes, not the whole call:
             # a slow, steady response could outlive the generation deadline and
