@@ -87,7 +87,10 @@ PROSE_MODES: Dict[str, ProseMode] = {
             "(approx 1800-2400 characters). Build a continuous scene. Include "
             "atmosphere, character thoughts where appropriate, multiple "
             "interactions, dialogue, environment, action, reaction, and "
-            "consequence. End naturally. Do not summarise."
+            "consequence. Fill the length with the world and other people, "
+            "never with new actions or decisions by the player character. "
+            "End naturally at the next decision point and leave that decision "
+            "open. Do not summarise."
         ),
     ),
     "cinematic": ProseMode(
@@ -103,7 +106,10 @@ PROSE_MODES: Dict[str, ProseMode] = {
             "[PROSE MODE: CINEMATIC] Write 6-10 paragraphs (approx 3000-4000 "
             "characters). Compose a full scene: detailed description, multiple "
             "actors, dialogue, emotional pacing, environment, action, reaction, "
-            "and consequence. End naturally. Do not summarise."
+            "and consequence. Fill the length with the world and other people, "
+            "never with new actions or decisions by the player character. "
+            "End naturally at the next decision point and leave that decision "
+            "open. Do not summarise."
         ),
     ),
 }

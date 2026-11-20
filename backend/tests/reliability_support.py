@@ -36,6 +36,16 @@ ACTION_TURN = (
     "<ledger>\nCarried: torch\n</ledger>\n"
 )
 
+# A second, different scripted turn: the engine rejects a reply that repeats
+# the previous turn's choices (repetition_guard), so consecutive turns differ.
+ACTION_TURN_B = (
+    "<rolling_state>{}</rolling_state>\n"
+    "<narrative>The corridor bends left.</narrative>\n"
+    "<choices>\nA. Follow the bend\nB. Mark the wall\nC. Turn back\nD. Light the torch\n</choices>\n"
+    "<state>\nHealth: stable\nPressure: steady\nPosition: corridor\n</state>\n"
+    "<ledger>\nCarried: torch\n</ledger>\n"
+)
+
 
 def fake_llm_result(content: str) -> Dict[str, Any]:
     return {

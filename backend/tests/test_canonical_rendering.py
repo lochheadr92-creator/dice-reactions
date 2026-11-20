@@ -33,11 +33,17 @@ CANONICAL_ACTION = "Mara still waits outside the locked gate. The key stays in y
 ADVERSARIAL = "Mara opens the gate with your key and escapes into the forest."
 
 
-def _turn(narrative: str) -> str:
+_OPENING_CHOICES = "A. Wait\nB. Listen\nC. Speak to Mara\nD. Leave"
+# Different from the opening: a reply repeating the previous turn's choices is
+# rejected by the repetition guard.
+_ACTION_CHOICES = "A. Try the key\nB. Knock twice\nC. Ask Mara to step back\nD. Circle the wall"
+
+
+def _turn(narrative: str, choices: str = _OPENING_CHOICES) -> str:
     return (
         '<rolling_state>{"npcs": [{"name": "Mara", "age": 30}], "player_age": 30}</rolling_state>\n'
         f"<narrative>{narrative}</narrative>\n"
-        "<choices>\nA. Wait\nB. Listen\nC. Speak to Mara\nD. Leave\n</choices>\n"
+        f"<choices>\n{choices}\n</choices>\n"
         "<state>\nHealth: stable\nPressure: a locked gate\nPosition: outside the gate\n</state>\n"
         "<ledger>\nCarried: key\n</ledger>\n"
     )
@@ -91,7 +97,9 @@ def test_full_path_serves_canonical_narrative_and_never_calls_second_provider(en
     device = f"dev_{uuid.uuid4()}"
     def by_request(_n, kwargs):
         texts = " ".join(str(m.get("content", "")) for m in kwargs.get("messages", []))
-        return _turn(CANONICAL_ACTION) if "Player action:" in texts else _turn(CANONICAL_OPENING)
+        if "Player action:" in texts:
+            return _turn(CANONICAL_ACTION, _ACTION_CHOICES)
+        return _turn(CANONICAL_OPENING)
 
     fake = FakeGateway(_turn(CANONICAL_OPENING), on_request=by_request).install()
     try:

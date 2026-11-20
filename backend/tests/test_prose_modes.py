@@ -119,12 +119,23 @@ def test_prompt_directives_contain_structural_instructions():
     assert "4-6 paragraphs" in d_story and "10-18 sentences" in d_story
     assert "continuous scene" in d_story
     assert "End naturally" in d_story and "Do not summarise" in d_story
+    # Long modes must not pad with player moves (2026-11-21: Qwen wrote
+    # "You hesitated, then chose the light" and ended past the decision).
+    for name in ("story", "cinematic"):
+        d = prose_modes.PROSE_MODES[name].directive
+        assert "never with new actions or decisions by the player character" in d
+        assert "leave that decision open" in d
 
     d_cin = prose_modes.PROSE_MODES["cinematic"].directive
     assert "[PROSE MODE: CINEMATIC]" in d_cin
     assert "6-10 paragraphs" in d_cin
     assert "emotional pacing" in d_cin
     assert "Do not summarise" in d_cin
+
+
+def test_system_prompt_has_player_agency_rule():
+    assert "PLAYER AGENCY (hard rule)" in server.STORY_ENGINE_SYSTEM_PROMPT
+    assert "NEVER have the player character choose, decide" in server.STORY_ENGINE_SYSTEM_PROMPT
 
 
 def test_system_prompt_defers_to_prose_mode_directive():

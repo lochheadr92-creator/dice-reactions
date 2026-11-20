@@ -64,6 +64,7 @@ import gateway  # noqa: E402  — Anti-Hallucination Gateway (Ch 31)
 import relationships  # noqa: E402  — Relationship Calculus (Ch 29)
 import hud  # noqa: E402  — player-facing HUD shaping (status chips + Pressure)
 import pacing  # noqa: E402  — Early-Game Pacing Governor v1 (deterministic)
+import repetition_guard  # noqa: E402
 import prose_modes  # noqa: E402  — Prose Length System v2 (presentation-only)
 import story_secrets as secrets  # deterministic story secret engine
 import replayability  # noqa: E402  — Replayability Engine v1 (deterministic)
@@ -477,6 +478,7 @@ PARAGRAPH PRESERVATION RULE
 ============================
 Every turn MUST contain immersive prose paragraphs before Choices. Paragraph count, sentence count, and total character budget follow the [PROSE MODE: …] directive in the user message (default when absent: 2-3 paragraphs, 700-1200 characters).
 Each paragraph must include action progression, sensory detail, consequence or reaction, and forward pressure.
+PLAYER AGENCY (hard rule): the player's stated action is the ONLY thing the player character does this turn. Narrate how that action plays out and how the world and other people react. NEVER have the player character choose, decide, commit to a new course, or start a new action the player did not state — no "you decide to…", "you choose the light", "you head for the cabin", "you hesitated, then went left". Stop at the moment a new decision is needed and leave it open; the player makes it through <choices>. Longer prose modes add depth to the world, never extra player moves.
 Never collapse into one dense block. Never degrade into bullet narration. A blank line starts a new paragraph. Paragraph count is a style preference, not a limit — favour tight, concentrated prose and stay within the character budget rather than padding, but valid prose is never rejected merely for having more paragraphs.
 
 ============================
@@ -2839,7 +2841,7 @@ def _full_validate(
     """Format validation, optional Stage-1 pacing check, then prose contradiction.
 
     Returns ``(ok, reason, kind)`` where kind ∈
-    {"format", "pacing", "hallucination", "coherence", "ok"}.
+    {"format", "pacing", "repetition", "hallucination", "coherence", "ok"}.
     """
     ok, reason = _validate_parsed(parsed, player_action=player_action)
     if not ok:
@@ -2848,6 +2850,13 @@ def _full_validate(
         pacing_reason = pacing.validate_opening_structure(parsed)
         if pacing_reason:
             return False, pacing_reason, "pacing"
+
+    # A reply may not repeat the previous turn's opening, ending or choices.
+    repeat_reason = repetition_guard.repetition_reason(
+        session.get("last_turn_fingerprint"), parsed.paragraphs, parsed.choices
+    )
+    if repeat_reason:
+        return False, repeat_reason, "repetition"
 
     # Scenario / named-entity coherence (model-independent).
     is_opening = not player_action and int(session.get("turn_count") or 0) <= 0
@@ -4371,6 +4380,9 @@ async def _create_new_story_inner(req: NewStoryRequest, attempt: Dict[str, Any])
     opening_update = {
         "turn_count": 1,
         "last_narrative_snippet": snippet,
+        "last_turn_fingerprint": repetition_guard.turn_fingerprint(
+            parsed.paragraphs, parsed.choices
+        ),
         "last_state": parsed.state,
         "rolling_state": merged_rolling or parsed.rolling_state,
         "rolling_state_updated_at": datetime.now(timezone.utc),
@@ -4739,6 +4751,9 @@ async def _execute_story_action(
         update_set: Dict[str, Any] = {
             "turn_count": next_turn_number,
             "last_narrative_snippet": snippet,
+            "last_turn_fingerprint": repetition_guard.turn_fingerprint(
+                parsed.paragraphs, parsed.choices
+            ),
             "last_state": parsed.state,
             "updated_at": datetime.now(timezone.utc),
             "debug_mode": req.debug_mode,

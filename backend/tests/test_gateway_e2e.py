@@ -14,6 +14,7 @@ Runs against the local Mongo configured in backend/.env. Cleans up after itself.
 """
 
 import asyncio
+import itertools
 import json
 import sys
 import uuid
@@ -46,13 +47,26 @@ def _run(scenario):
     return asyncio.run(wrapper())
 
 
+# Each scripted reply gets the next choice set: the engine rejects a reply that
+# repeats the previous turn's choices (repetition_guard).
+_CHOICE_SETS = itertools.cycle(
+    [
+        "A. Go left\nB. Go right\nC. Wait\nD. Listen",
+        "A. Climb the rubble\nB. Shout a warning\nC. Search the floor\nD. Hold the door",
+        "A. Run for the stairs\nB. Brace the beam\nC. Call out\nD. Crawl under the slab",
+    ]
+)
+
+
 def _raw(
     narrative,
     rolling_state,
     ledger,
-    choices="A. Go left\nB. Go right\nC. Wait\nD. Listen",
+    choices=None,
     pressure="the chamber is collapsing",
 ):
+    if choices is None:
+        choices = next(_CHOICE_SETS)
     return (
         f"<narrative>\n{narrative}\n</narrative>\n"
         f"<choices>\n{choices}\n</choices>\n"

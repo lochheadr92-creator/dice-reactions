@@ -26,6 +26,7 @@ import turn_commit  # noqa: E402
 from security import DEVICE_ID_HEADER  # noqa: E402
 from reliability_support import (  # noqa: E402
     ACTION_TURN,
+    ACTION_TURN_B,
     FakeGateway,
     MongoEnv,
     insert_session,
@@ -107,6 +108,8 @@ def test_legacy_request_without_id_is_not_idempotent_and_documented(client, env,
     """Legacy clients (no action_request_id) keep the pre-release behaviour."""
     device = f"dev_{uuid.uuid4()}"
     sid = insert_session(env.sync_db, device)
+    # Two different scripted turns: a repeated reply is rejected as repetition.
+    fake_llm.on_call = lambda n: ACTION_TURN if n == 1 else ACTION_TURN_B
     first = _post(client, sid, device)
     second = _post(client, sid, device)
     assert first.status_code == 200 and second.status_code == 200
