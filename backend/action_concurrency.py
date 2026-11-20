@@ -7,7 +7,6 @@ rolling state, secret reveals, and provider calls across workers.
 
 from __future__ import annotations
 
-import hmac
 import logging
 import os
 import uuid
@@ -16,6 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 from pymongo import ReturnDocument
+
+from security import constant_time_equals
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,6 @@ ACTION_CONFLICT_DETAIL = "An action is already in progress for this chronicle"
 _SESSION_NOT_FOUND_DETAIL = "Session not found"
 _DEVICE_ID_REQUIRED_DETAIL = "device_id is required"
 
-DEFAULT_LEASE_SECONDS = 600
 MIN_LEASE_SECONDS = 60
 MAX_LEASE_SECONDS = 3600
 LEASE_ENV_VAR = "ACTION_LOCK_LEASE_SEC"
@@ -74,16 +74,54 @@ def _lease_floor_seconds() -> int:
 
 
 def resolve_lease_seconds() -> int:
+    """Lease (and request-claim) lifetime in seconds.
+
+    Default: the floor itself (generation deadline + 60s commit slack), so a
+    crashed worker blocks its chronicle no longer than needed. An explicit
+    ACTION_LOCK_LEASE_SEC may lengthen it, never shorten it below the floor.
+    """
+    floor = _lease_floor_seconds()
     raw = os.environ.get(LEASE_ENV_VAR)
     if raw is None or str(raw).strip() == "":
-        value = DEFAULT_LEASE_SECONDS
-    else:
-        try:
-            value = int(str(raw).strip())
-        except ValueError:
-            value = DEFAULT_LEASE_SECONDS
-        value = max(MIN_LEASE_SECONDS, min(MAX_LEASE_SECONDS, value))
-    return max(value, _lease_floor_seconds())
+        return floor
+    try:
+        value = int(str(raw).strip())
+    except ValueError:
+        return floor
+    value = max(MIN_LEASE_SECONDS, min(MAX_LEASE_SECONDS, value))
+    return max(value, floor)
+
+
+CLEAR_LEASES_ENV_VAR = "CLEAR_LEASES_ON_STARTUP"
+
+
+def clear_leases_on_startup_enabled() -> bool:
+    """Opt-in: only safe when this process is the ONLY backend worker."""
+    return str(os.environ.get(CLEAR_LEASES_ENV_VAR, "")).strip().lower() in ("1", "true", "yes")
+
+
+async def clear_session_leases_and_claims(db, *, now: Optional[datetime] = None) -> Dict[str, int]:
+    """Free every session lease and expire every in-progress request claim.
+
+    For single-process deployments at startup: any lease or claim that exists
+    belongs to a process that no longer runs. Claims are expired rather than
+    failed, so the next read resolves each one by looking for its committed
+    turn (completed) or marks it interrupted (retryable). No gameplay data is
+    changed.
+    """
+    moment = now or utc_now()
+    sessions = await db.sessions.update_many(
+        {ACTION_LOCK_TOKEN_FIELD: {"$exists": True}},
+        {"$unset": lease_release_unset()},
+    )
+    claims = await db["action_requests"].update_many(
+        {"status": "in_progress"},
+        {"$set": {"claim_expires_at": moment, "updated_at": moment}},
+    )
+    return {
+        "session_leases_cleared": int(sessions.modified_count),
+        "request_claims_expired": int(claims.modified_count),
+    }
 
 
 def _lease_available_filter(now: datetime) -> Dict[str, Any]:
@@ -108,7 +146,7 @@ async def _verify_session_owner(
         raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND_DETAIL)
     stored = str(session.get("device_id") or "")
     provided = str(device_id)
-    if not stored or not hmac.compare_digest(stored, provided):
+    if not stored or not constant_time_equals(stored, provided):
         raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND_DETAIL)
 
 

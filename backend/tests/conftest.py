@@ -1,14 +1,20 @@
 import os
+import sys
 import pytest
 import requests
-from dotenv import load_dotenv
 from pathlib import Path
 
-load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-# Safe defaults so server.py imports succeed in hermetic CI without a .env file.
-os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
-os.environ.setdefault("DB_NAME", "dice_reactions_test")
+from db_guard import apply_test_environment  # noqa: E402
+
+# Test safety (review 2026-11-20, finding 1). Several fixtures delete every
+# session and turn in the configured database. backend/.env names the real
+# local game database, and server.py loads that file on import, so this runs
+# BEFORE anything imports server: it forces a database whose name ends in
+# "_test", blanks provider keys unless the shell sets them, and refuses to
+# continue otherwise. backend/.env is deliberately not loaded here.
+apply_test_environment(os.environ)
 
 # Explicit admin key for security/raw-export tests — do not rely on import order.
 os.environ.setdefault("ADMIN_API_KEY", "test-admin-key-for-live-suite")

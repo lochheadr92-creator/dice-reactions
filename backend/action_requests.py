@@ -20,7 +20,6 @@ document through the current ownership check and player-safe serializers.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import logging
 import uuid
@@ -29,9 +28,10 @@ from datetime import timedelta
 from typing import Any, Dict, Optional
 
 from pymongo import ReturnDocument
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, OperationFailure
 
 from action_concurrency import resolve_lease_seconds, utc_now
+from security import constant_time_equals
 from turn_commit import ACTION_REQUESTS_COLLECTION, TURN_REQUEST_KEY_FIELD
 
 logger = logging.getLogger(__name__)
@@ -51,6 +51,7 @@ ERROR_SUPERSEDED = "superseded"
 ERROR_INTERRUPTED = "interrupted"
 
 REQUEST_ID_MAX_LENGTH = 128
+TURN_REQUEST_KEY_UNIQUE_INDEX = "turns_action_request_key_unique"
 RECORD_RETENTION_DAYS = 7
 
 REQUEST_MISMATCH_DETAIL = "action_request_id was already used for a different action"
@@ -108,16 +109,30 @@ async def ensure_action_request_indexes(db) -> None:
         expireAfterSeconds=0,
     )
     await coll.create_index([("session_id", 1)], name="action_requests_session")
-    await db.turns.create_index(
-        [(TURN_REQUEST_KEY_FIELD, 1)],
-        name="turns_action_request_key",
-        partialFilterExpression={TURN_REQUEST_KEY_FIELD: {"$type": "string"}},
-    )
+    # One request key => at most one turn, enforced by the database and not
+    # only by claim logic. Databases created by the first reliability build
+    # also hold a non-unique "turns_action_request_key" index; MongoDB allows
+    # both side by side, and dropping the old one is left to the operator.
+    try:
+        await db.turns.create_index(
+            [(TURN_REQUEST_KEY_FIELD, 1)],
+            name=TURN_REQUEST_KEY_UNIQUE_INDEX,
+            unique=True,
+            partialFilterExpression={TURN_REQUEST_KEY_FIELD: {"$type": "string"}},
+        )
+    except OperationFailure as exc:
+        # Existing duplicate keys block the unique index. Never delete data
+        # here: report it (GET /admin/consistency) and keep serving.
+        logger.error(
+            "unique index %s not created (%s); duplicate request keys need operator review",
+            TURN_REQUEST_KEY_UNIQUE_INDEX,
+            getattr(exc, "code", type(exc).__name__),
+        )
 
 
 def _owner_matches(record: Dict[str, Any], device_id: str) -> bool:
     stored = str(record.get("device_id") or "")
-    return bool(stored) and hmac.compare_digest(stored, str(device_id))
+    return bool(stored) and constant_time_equals(stored, device_id)
 
 
 async def _find_committed_turn(db, key: str) -> Optional[Dict[str, Any]]:

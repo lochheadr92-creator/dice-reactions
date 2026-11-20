@@ -52,7 +52,7 @@ other documents are not re-asserted here.
 ### Bounded paid provider usage (`backend/provider_budget.py`, `rate_limit.py`, `ai_service.py`, `gateway.py`)
 - `ai_service.chat_completion_with_meta` refuses to run without an active budget; every attempt (per-model retries, fallbacks, validation retry) reserves from one per-request attempt budget, honours one total deadline (also capping each HTTP timeout), reserves the global attempt quota, and writes a usage record (`started` → `ok`/`error`/`uncertain`, tokens or `telemetry_missing`).
 - Per-device action quota; global provider concurrency as an expiring, owner-released lease pool (atomic `$expr` reservation; crashed workers free their slot on expiry; stale tokens cannot release another worker's slot). Story-creation concurrency migrated to the same pool mechanism.
-- Input-size limits return 422 before any paid work. Limiter/usage storage failure fails closed (503).
+- Input-size limits return 422 before any paid work. Limiter/usage storage failure fails closed (503). **Corrected 2026-11-20:** the original limits counted string values only; see Corrections.
 - Routing intent unchanged (primary model, fallback chain, retries per model, cost mode).
 
 ### Canonical narration (`backend/mature_rendering.py`)
@@ -138,10 +138,10 @@ Performed after implementation: an own pass over transaction boundaries, identit
 |------|--------|
 | Transaction boundaries / commit uncertainty | PASS — provider work outside callbacks; ambiguity verified by turn id, never replayed |
 | Idempotency / payload identity | PASS — device + session + contents fingerprint; concurrent duplicates admit one |
-| Cancellation / interruption | PASS — checkpoint tests at every boundary; interrupted claims marked retryable; lease/claim expiry bounded |
+| Cancellation / interruption | PASS for actions. **Corrected 2026-11-20:** story creation left a provisional session that answered 409 forever after a crash, kill or post-generation error (see Corrections) |
 | Cross-worker races | PASS — lease + revision CAS; competing commits admit one |
 | Lease expiry / stale worker | PASS — stale token cannot release or commit |
-| Usage-limit bypasses | PASS — budget required at `chat_completion_with_meta`; renderer disabled; limiter failure 503 |
+| Usage-limit bypasses | **Corrected 2026-11-20:** budget required at `chat_completion_with_meta`, renderer disabled and limiter failure 503 held, but the creation input limits counted string values only and the deadline was not a wall-clock limit (see Corrections) |
 | Response privacy / ownership | PASS — allowlist serializers, owner-verified status, identifier-only diagnostics |
 | Legacy compatibility | PASS — no-id requests, sessions without `session_revision`, old concurrent-slot document |
 | Setup / CI | PASS — replica set init + transaction probe; constraints; lint and export gates |
@@ -153,3 +153,17 @@ Performed after implementation: an own pass over transaction boundaries, identit
 - **Mature renderer** is disabled, not redesigned; the wider content system is not independently validated here.
 - **Historical data** is only diagnosed (`GET /admin/consistency`), never repaired.
 - Deterministic suites assert behaviour with mocked provider responses; production readiness is not claimed from local tests alone.
+
+## Corrections (2026-11-20)
+
+An adversarial review on 2026-11-20 (`docs/reviews/2026-11-20-adversarial-review.md`) reproduced three faults in claims this report marked PASS. The rest of this report is unchanged and remains dated 2026-10-30 evidence.
+
+| Claim above | What the review reproduced | Fix |
+|-------------|----------------------------|-----|
+| Input-size limits return 422 before any paid work | `custom_world_setup` with 40,000 numeric keys returned 200 and grew the opening prompt from about 40,000 to about 778,000 characters; keys, numbers and empty strings were not counted | Serialized JSON caps (`CREATION_SETUP_JSON_MAX_CHARS`, `MATURE_CONTENT_JSON_MAX_CHARS`) and a request body limit (`MAX_REQUEST_BODY_BYTES`, 413) |
+| One total deadline, also capping each HTTP timeout | The httpx timeout bounds the gap between bytes; a response sent one byte every 0.5 s returned after 8.1 s under a 1 s cap | `asyncio.wait_for` makes the remaining deadline a wall-clock limit |
+| Cancellation / interruption | A crash, kill, cancellation or post-generation error during story creation left a provisional session; every retry with the same `creation_request_id` answered 409 and the session showed in the list | Cleanup on any failure before the commit is attempted; stale provisional sessions are taken over by a retry; provisional sessions are not listed |
+
+The test count above (1387 passed) also included a flaky test that depended on the wall-clock window boundary; the limiter windows are now frozen in tests.
+
+Other review fixes made the same day: a test database guard (a bare `pytest` run had deleted the game database named in `backend/.env`), the `X-Forwarded-For` chain length check, refunding creation quota on 4xx answers, byte-wise credential comparison (non-ASCII headers returned 500), a unique request-key index, a shorter default lease plus opt-in startup lease clearing, contract-owned creation hooks, reset semantics, and newest-first turn windows. Verification for these is recorded in the review file.

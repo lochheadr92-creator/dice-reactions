@@ -20,6 +20,8 @@ const mockGetActionRequestStatus = jest.fn();
 const mockGetDeviceId = jest.fn();
 const mockGetSettings = jest.fn();
 const mockSyncAfterActionConflict = jest.fn();
+const mockDeleteSession = jest.fn();
+const mockResetSession = jest.fn();
 let mockSessionId = "sess-1";
 
 jest.mock("expo-router", () => {
@@ -41,9 +43,9 @@ jest.mock("../src/api", () => ({
   getSession: (...args: unknown[]) => mockGetSession(...args),
   sendAction: (...args: unknown[]) => mockSendAction(...args),
   getActionRequestStatus: (...args: unknown[]) => mockGetActionRequestStatus(...args),
-  deleteSession: jest.fn(),
+  deleteSession: (...args: unknown[]) => mockDeleteSession(...args),
   exportSession: jest.fn(),
-  resetSession: jest.fn(),
+  resetSession: (...args: unknown[]) => mockResetSession(...args),
   setSessionMode: jest.fn(),
 }));
 
@@ -352,5 +354,26 @@ describe("PlayScreen action idempotency", () => {
       expect(screen.getByText("You wait.")).toBeTruthy();
     });
     expect(mockSendAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("resets by deleting the chronicle, clearing the pending action, and opening a new story", async () => {
+    mockDeleteSession.mockResolvedValue({ deleted: true });
+    await savePendingAction("sess-1", buildPendingAction("action:old", "wait", false));
+    (Alert.alert as jest.Mock).mockImplementation(
+      (_title: string, _message?: string, buttons?: { text: string; onPress?: () => void }[]) => {
+        buttons?.find((button) => button.text === "Reset")?.onPress?.();
+      }
+    );
+
+    await renderPlay();
+    fireEvent.press(screen.getByTestId("open-menu-btn"));
+    fireEvent.press(screen.getByTestId("reset-session-btn"));
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith("/new-story?from=reset&sessionTitle=Test%20Chronicle");
+    });
+    expect(mockDeleteSession).toHaveBeenCalledWith("sess-1", "device-1");
+    expect(mockResetSession).not.toHaveBeenCalled();
+    expect(await AsyncStorage.getItem("dice_pending_action:sess-1")).toBeNull();
   });
 });

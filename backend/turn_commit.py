@@ -315,18 +315,29 @@ async def commit_opening_turn(
 # Reset / delete (same lease + revision contract)
 # ---------------------------------------------------------------------------
 def reset_session_fields(now: Optional[datetime] = None) -> Dict[str, Any]:
+    moment = now or datetime.now(timezone.utc)
     return {
         "turn_count": 0,
         "last_narrative_snippet": "",
         "last_state": {},
         "rolling_state": None,
         "replayability_state": None,
-        "updated_at": now or datetime.now(timezone.utc),
+        "updated_at": moment,
+        # Marks a deliberate reset shell, so it is never mistaken for a
+        # provisional session left by a dead creation.
+        "reset_at": moment,
     }
 
 
 async def commit_session_reset(db, *, session_id: str, lease_token: str) -> None:
-    """Delete turns and clear gameplay state atomically under the caller's lease."""
+    """Delete turns and clear gameplay state atomically under the caller's lease.
+
+    Request records are deleted with the turns they point to, the same as a
+    session delete. A completed record would otherwise point at a deleted turn
+    (replay 404 while status said "superseded", and a false
+    completed_without_turn anomaly). An old request id sent again after a
+    reset is a new request for the reset session.
+    """
     ops = {
         "$set": reset_session_fields(),
         "$inc": {SESSION_REVISION_FIELD: 1},
@@ -342,18 +353,8 @@ async def commit_session_reset(db, *, session_id: str, lease_token: str) -> None
         if result.matched_count == 0:
             raise CommitPreconditionFailed("reset lease lost")
         await db.turns.delete_many({"session_id": session_id}, session=mongo_session)
-        await db[ACTION_REQUESTS_COLLECTION].update_many(
-            {"session_id": session_id, "status": {"$in": ["in_progress", "uncertain"]}},
-            {
-                "$set": {
-                    "status": "failed",
-                    "error_kind": "superseded",
-                    "claim_token": None,
-                    "claim_expires_at": None,
-                    "updated_at": utc_now(),
-                }
-            },
-            session=mongo_session,
+        await db[ACTION_REQUESTS_COLLECTION].delete_many(
+            {"session_id": session_id}, session=mongo_session
         )
         return True
 
@@ -509,7 +510,10 @@ async def consistency_report(db, *, sample_limit: int = 20) -> Dict[str, Any]:
         completed_without_turn.append(row)
 
     provisional_sessions = await db.sessions.count_documents(
-        {"turn_count": {"$in": [0, None]}}
+        {"turn_count": {"$in": [0, None]}, "reset_at": {"$exists": False}}
+    )
+    reset_sessions = await db.sessions.count_documents(
+        {"turn_count": {"$in": [0, None]}, "reset_at": {"$exists": True}}
     )
 
     return {
@@ -519,6 +523,7 @@ async def consistency_report(db, *, sample_limit: int = 20) -> Dict[str, Any]:
         "orphaned_turns": orphaned,
         "duplicate_turn_numbers": duplicate_turn_numbers,
         "provisional_sessions_without_opening_turn": provisional_sessions,
+        "reset_sessions_without_turns": reset_sessions,
         "action_requests": {
             "in_progress_active": active_in_progress,
             "in_progress_stale_claim": stale_in_progress,

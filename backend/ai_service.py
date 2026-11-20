@@ -288,7 +288,18 @@ async def _call_model_once(
         timeout = max(1.0, min(float(DEFAULT_TIMEOUT_SECONDS), float(timeout_seconds)))
 
     async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(url, json=payload, headers=headers)
+        try:
+            # httpx timeouts bound each wait between bytes, not the whole call:
+            # a slow, steady response could outlive the generation deadline and
+            # the action lease. wait_for makes the cap a wall-clock limit.
+            resp = await asyncio.wait_for(
+                client.post(url, json=payload, headers=headers), timeout=timeout
+            )
+        except asyncio.TimeoutError as exc:
+            raise AIServiceError(
+                f"{label} call exceeded its {timeout:.0f}s wall-clock limit",
+                kind=KIND_TIMEOUT,
+            ) from exc
     latency_ms = int((time.monotonic() - started) * 1000)
 
     if resp.status_code >= 400:

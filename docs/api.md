@@ -69,7 +69,9 @@ Start a new chronicle.
 
 **Response:** `{ session_id, turn, session }` — player allowlist serializers only (`player_api.py`). No `device_id`, `rolling_state`, `debug`, or engine metadata in responses.
 
-**Input limits (422 before any paid work):** short fields (`genre`, `role`, `tone`, `difficulty`, `mode`, `prose_mode`, `scenario_id`) ≤ `CREATION_SHORT_FIELD_MAX_CHARS` (200); `custom_premise` and every string inside `custom_world_setup` / `mature_content` ≤ `CREATION_TEXT_FIELD_MAX_CHARS` (2000); all `custom_world_setup` text combined ≤ `CREATION_SETUP_TOTAL_MAX_CHARS` (12000). The `detail` names the field and the limit.
+**Input limits (422 before any paid work):** short fields (`genre`, `role`, `tone`, `difficulty`, `mode`, `prose_mode`, `scenario_id`) ≤ `CREATION_SHORT_FIELD_MAX_CHARS` (200); `custom_premise` and every string inside `custom_world_setup` / `mature_content` ≤ `CREATION_TEXT_FIELD_MAX_CHARS` (2000); all `custom_world_setup` text combined ≤ `CREATION_SETUP_TOTAL_MAX_CHARS` (12000). The serialized JSON of `custom_world_setup` (keys, numbers and empty values included) ≤ `CREATION_SETUP_JSON_MAX_CHARS` (16000), and of `mature_content` ≤ `MATURE_CONTENT_JSON_MAX_CHARS` (8000). The `detail` names the field and the limit. Any request body over `MAX_REQUEST_BODY_BYTES` (262144) is refused with **413** `{ "detail": "Request body too large" }` before the route runs.
+
+**Failed creations leave nothing behind:** any error or cancellation after the provisional session is inserted and before the opening commit is attempted deletes that session. A provisional session older than `ACTION_GENERATION_DEADLINE_SEC` + 60s (a creation that died, for example a killed process) is removed when the client retries with the same `creation_request_id`, and the retry creates the story; a younger one still answers **409** `Story creation already in progress`.
 
 **Persistence:** the opening turn, the session completion (`turn_count`, state, model lock) and the session revision commit in **one MongoDB transaction** (`turn_commit.commit_opening_turn`). The server refuses story creation with **503** `{ "detail": "Service unavailable" }` when the connected MongoDB cannot run transactions (standalone server).
 
@@ -84,11 +86,11 @@ Start a new chronicle.
 | `RATE_LIMIT_GLOBAL_MAX` | 50 | Max total story creations globally per fixed window |
 | `RATE_LIMIT_GLOBAL_WINDOW_SEC` | 3600 | Global fixed window (seconds) |
 | `RATE_LIMIT_GLOBAL_CONCURRENT` | 3 | Max in-flight story creations (expiring lease pool; a crashed worker's slot frees itself after `STORY_CREATION_LEASE_SEC`, default 600) |
-| `TRUSTED_PROXY_COUNT` | 0 | When >0, client IP from `X-Forwarded-For` at `parts[-N]` (requires chain length > N). **Do not trust `X-Forwarded-For` unless this matches your deployment proxy depth.** |
+| `TRUSTED_PROXY_COUNT` | 0 | When >0, client IP from `X-Forwarded-For` at `parts[-N]` (requires chain length ≥ N; with N trusted proxies an honest chain has exactly N entries, and entries a client prepends are ignored). **Do not trust `X-Forwarded-For` unless this matches your deployment proxy depth.** |
 
 Story creation also consumes the shared provider controls listed under **Paid-provider controls** below (global concurrency lease, per-request attempt budget, global attempt quota).
 
-Exceeded limits → **429** `{ "detail": "Too many requests" }` (generic; no admin/model details). Limiter backend failure → **503** `{ "detail": "Service unavailable" }` (fail closed).
+Exceeded limits → **429** `{ "detail": "Too many requests" }` (generic; no admin/model details). Limiter backend failure → **503** `{ "detail": "Service unavailable" }` (fail closed). A creation answered with any **4xx** (invalid scenario or settings, duplicate in progress, provider quota refusal) made no provider call and its quota reservation is refunded; **502** answers keep it, because paid work may have happened.
 
 `device_id` in the body is **not** abuse-proof — clients can regenerate UUIDs. IP limits complement device limits.
 
@@ -177,11 +179,11 @@ List sessions for a device.
 
 **Header:** `X-Device-Id` (required)
 
-**Response:** `{ sessions: SessionSummary[] }` — sessions are always sanitised (no `rolling_state`).
+**Response:** `{ sessions: SessionSummary[] }` — sessions are always sanitised (no `rolling_state`). Provisional sessions (creation still running, or a creation that died) are not listed; reset sessions are.
 
 ### `GET /story/session/{session_id}`
 
-Full session with all turns. Player-facing response is always sanitised.
+Session with its newest turns (at most `TURN_WINDOW_MAX`, default 500, oldest first). Player-facing response is always sanitised.
 
 **Header:** `X-Device-Id` (required) — must match `session.device_id`.
 
@@ -232,12 +234,14 @@ Switch simulation mode mid-chronicle.
   "turns": [ ],
   "summary": {
     "turn_count": 0,
+    "turns_included": 0,
+    "truncated": false,
     "last_state": { }
   }
 }
 ```
 
-Turns are sorted by `turn_number` ascending (max 500).
+Turns are the newest `TURN_WINDOW_MAX` (default 500), sorted by `turn_number` ascending. `summary.turn_count` is the chronicle's full turn count; `truncated` is `true` when older turns were left out.
 
 ### `GET /story/session/{session_id}/export/raw`
 
@@ -251,7 +255,9 @@ Not exposed in the player UI. Not enabled by `developer_mode` alone.
 
 ### `POST /story/session/{session_id}/reset`
 
-Delete all turns and clear rolling state; keep session shell (genre, role, difficulty, mode). Runs in one transaction under the session lease and increments `session_revision`, so a stale generation started before the reset can never commit against the reset session (even though `turn_count` returns to 0). Incomplete request records for the session are marked `failed` / `superseded`.
+Delete all turns and clear rolling state; keep session shell (genre, role, difficulty, mode) and mark it with `reset_at`. Runs in one transaction under the session lease and increments `session_revision`, so a stale generation started before the reset can never commit against the reset session (even though `turn_count` returns to 0). The session's action request records are deleted with its turns, the same as a delete, so no record points at a deleted turn; an old `action_request_id` sent again afterwards is a new request for the reset session (its status reads `unknown` until then).
+
+The app's "Reset chronicle" menu no longer calls this endpoint: it deletes the chronicle and opens New Story, so no empty shell is left behind. The endpoint remains for API clients.
 
 **Header:** `X-Device-Id` (required)
 
@@ -270,9 +276,13 @@ Every paid model call — story creation and player actions, including validatio
 | `RATE_LIMIT_ACTION_DEVICE_MAX` / `RATE_LIMIT_ACTION_DEVICE_WINDOW_SEC` | 60 / 3600 | per `device_id`, actions | **429** before generation |
 | `PROVIDER_GLOBAL_CONCURRENT` | 4 | all paid requests | **429** before generation (expiring lease pool; crashed workers release automatically after `ACTION_GENERATION_DEADLINE_SEC` + 60s) |
 | `PROVIDER_ATTEMPTS_PER_ACTION` | 8 | per logical request (shared by per-model retries, fallbacks and the validation retry) | **502**; no further retry or fallback |
-| `ACTION_GENERATION_DEADLINE_SEC` | 240 | per logical request | **502**; each HTTP call is also capped at the remaining time. The session action lease and the request claim (`ACTION_LOCK_LEASE_SEC`, default 600) are floored at this deadline + 60s so a retry can never take over a still-running action |
+| `ACTION_GENERATION_DEADLINE_SEC` | 240 | per logical request | **502**; each HTTP call is capped at the remaining time as a **wall-clock** limit (`asyncio.wait_for`; httpx timeouts alone only bound the gap between bytes). The session action lease and the request claim default to this deadline + 60s (`ACTION_LOCK_LEASE_SEC` may lengthen, never shorten, them) so a retry can never take over a still-running action |
 | `PROVIDER_GLOBAL_ATTEMPT_MAX` / `PROVIDER_GLOBAL_ATTEMPT_WINDOW_SEC` | 500 / 3600 | all attempts globally | **429** (checked before every attempt) |
 | `ACTION_TEXT_MAX_CHARS`, `CREATION_TEXT_FIELD_MAX_CHARS`, `CREATION_SETUP_TOTAL_MAX_CHARS`, `CREATION_SHORT_FIELD_MAX_CHARS` | 2000 / 2000 / 12000 / 200 | input size | **422** before any work |
+| `CREATION_SETUP_JSON_MAX_CHARS`, `MATURE_CONTENT_JSON_MAX_CHARS` | 16000 / 8000 | serialized size, keys included | **422** before any work |
+| `MAX_REQUEST_BODY_BYTES` | 262144 | any request body | **413** before the route runs |
+| `TURN_WINDOW_MAX` | 500 | turns per read (session, export, history) | newest turns kept |
+| `CLEAR_LEASES_ON_STARTUP` | off | startup | `1` frees every session lease, creation/provider concurrency slot and request claim left by an earlier process. **Only for single-process deployments** (the Windows launcher sets it); with several workers it would free a running worker's lease |
 
 Usage accounting: every attempt writes a `provider_usage` row (request key, model, status `started`→`ok`/`error`/`uncertain`, token counts when the provider reports them, `telemetry_missing` otherwise; 30-day TTL). Rows are never deleted on uncertain outcomes. These are hard request/attempt/concurrency caps with token accounting — **not a monetary spending ceiling** (no pricing is embedded). Limiter or usage storage failure → **503** for new paid work; read-only story routes keep working.
 
@@ -345,7 +355,7 @@ Per-session diagnostics (model switches, compression, context budget). Returns *
 
 ### `GET /admin/consistency?sample_limit=20`
 
-Read-only consistency diagnostic for existing data: sessions whose `turn_count` disagrees with their stored turns, orphaned turns (session missing), duplicate `(session_id, turn_number)` rows, provisional sessions without an opening turn, and action-request record counts (`in_progress_active`, `in_progress_stale_claim`, `uncertain`, `failed`, `completed_without_turn`). Samples contain identifiers only. `transaction_support_error` reports why paid writes are disabled, or `null`. **Never deletes or rewrites data** — repairs of ambiguous historical data are an operator decision.
+Read-only consistency diagnostic for existing data: sessions whose `turn_count` disagrees with their stored turns, orphaned turns (session missing), duplicate `(session_id, turn_number)` rows, provisional sessions without an opening turn, reset sessions without turns (`reset_sessions_without_turns`, expected after a reset and not an anomaly), and action-request record counts (`in_progress_active`, `in_progress_stale_claim`, `uncertain`, `failed`, `completed_without_turn`). Samples contain identifiers only. `transaction_support_error` reports why paid writes are disabled, or `null`. **Never deletes or rewrites data** — repairs of ambiguous historical data are an operator decision.
 
 ## Error handling
 
@@ -353,7 +363,7 @@ Read-only consistency diagnostic for existing data: sessions whose `turn_count` 
 - Story engine provider failures return **502** `{ "detail": "Story engine unavailable" }` — no raw exception strings to clients. Details are logged server-side only.
 - Rate limit exceeded returns **429** `{ "detail": "Too many requests" }`.
 - Limiter/usage storage, transaction support, or commit-outcome problems return **503** `{ "detail": "Service unavailable" }`.
-- Input-size violations return **422** with a field-and-limit message (player-safe, no payload echo).
+- Input-size violations return **422** with a field-and-limit message (player-safe, no payload echo); an oversized request body returns **413** `{ "detail": "Request body too large" }`.
 - Frontend `friendlyError()` maps common patterns (429, 402, 401, 404, network) to user-facing alerts.
 
 ## Authentication and ownership

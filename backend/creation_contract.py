@@ -847,16 +847,13 @@ def restore_creation_surfaces(
     if hooks:
         existing = out.get("character_hooks") if isinstance(out.get("character_hooks"), dict) else {}
         merged = dict(existing)
+        # Contract values always win: the model may add hooks of its own but
+        # cannot rewrite or erase one the player set at creation (review
+        # 2026-11-20, finding 10: a model reply turned "sibling" into
+        # "sworn_enemy" and the change persisted).
         for k, v in hooks.items():
-            # Prefer durable contract values; do not let empty model dict wipe them.
-            if not merged.get(k):
+            if v:
                 merged[k] = v
-            else:
-                merged.setdefault(k, v)
-        # Always re-assert core desire/fear from contract (hard character hooks).
-        for core in ("desire", "fear"):
-            if hooks.get(core):
-                merged[core] = hooks[core]
         out["character_hooks"] = merged
 
     frame = contract.get("world_frame")
@@ -881,7 +878,7 @@ def restore_creation_surfaces(
         # Exclusions always re-assert from contract (cannot be prose-overwritten away).
         if slim.get("excluded_elements"):
             restored["excluded_elements"] = slim["excluded_elements"]
-        if slim.get("required_elements") and not restored.get("required_elements"):
+        if slim.get("required_elements"):
             restored["required_elements"] = slim["required_elements"]
         if slim.get("era"):
             restored["era"] = slim["era"]

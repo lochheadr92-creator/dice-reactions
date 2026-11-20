@@ -77,8 +77,10 @@ from rate_limit import (  # noqa: E402
     ConcurrencyPoolUnavailable,
     _rollback_bucket_reservations,
     acquire_concurrency_lease,
+    STORY_CREATION_POOL_ID,
     acquire_story_creation_slot,
     check_action_limits,
+    clear_concurrency_pool,
     check_story_creation_limits,
     ensure_rate_limit_indexes,
     release_concurrency_lease,
@@ -88,15 +90,20 @@ from rate_limit import (  # noqa: E402
 from action_concurrency import (  # noqa: E402
     ACTION_CONFLICT_DETAIL,
     SESSION_REVISION_FIELD,
+    CLEAR_LEASES_ENV_VAR,
     ActionLeaseConflict,
     acquire_action_lease,
+    clear_leases_on_startup_enabled,
+    clear_session_leases_and_claims,
     ensure_action_concurrency_indexes,
     release_action_lease_quietly,
 )
 import action_requests  # noqa: E402  — action request idempotency records
 import provider_budget  # noqa: E402  — attempt/deadline/quota enforcement
 import turn_commit  # noqa: E402  — transactional turn + session commit
+import request_limits  # noqa: E402  — request body size limit
 from player_api import (  # noqa: E402
+    PLAYER_TURN_FIELDS,
     build_new_story_session_payload,
     build_player_session,
     build_player_state,
@@ -3660,6 +3667,11 @@ ACTION_TEXT_MAX_CHARS = int(os.environ.get("ACTION_TEXT_MAX_CHARS", "2000"))
 CREATION_TEXT_FIELD_MAX_CHARS = int(os.environ.get("CREATION_TEXT_FIELD_MAX_CHARS", "2000"))
 CREATION_SETUP_TOTAL_MAX_CHARS = int(os.environ.get("CREATION_SETUP_TOTAL_MAX_CHARS", "12000"))
 CREATION_SHORT_FIELD_MAX_CHARS = int(os.environ.get("CREATION_SHORT_FIELD_MAX_CHARS", "200"))
+# Serialized size caps, keys and non-string values included. The text-only
+# caps above count string values only, so they cannot bound key count or
+# numbers (review 2026-11-20, finding 2).
+CREATION_SETUP_JSON_MAX_CHARS = int(os.environ.get("CREATION_SETUP_JSON_MAX_CHARS", "16000"))
+MATURE_CONTENT_JSON_MAX_CHARS = int(os.environ.get("MATURE_CONTENT_JSON_MAX_CHARS", "8000"))
 
 # Set at startup when the connected MongoDB cannot run transactions. Paid
 # write routes then fail closed (503); read-only story access keeps working.
@@ -3690,6 +3702,20 @@ def _measure_text(value: Any) -> int:
     if isinstance(value, (list, tuple)):
         return sum(_measure_text(v) for v in value)
     return 0
+
+
+def _serialized_size(value: Any) -> int:
+    return len(
+        _json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+    )
+
+
+def _validate_serialized_size(value: Any, field: str, max_chars: int) -> None:
+    if _serialized_size(value) > max_chars:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{field} is too large (maximum {max_chars} characters of JSON, keys included)",
+        )
 
 
 def _validate_text_tree(value: Any, field: str, per_field_max: int) -> None:
@@ -3729,8 +3755,14 @@ def _validate_creation_input(req: NewStoryRequest) -> None:
                 status_code=422,
                 detail=f"custom_world_setup is too long (maximum {CREATION_SETUP_TOTAL_MAX_CHARS} characters in total)",
             )
+        _validate_serialized_size(
+            req.custom_world_setup, "custom_world_setup", CREATION_SETUP_JSON_MAX_CHARS
+        )
     if req.mature_content is not None:
         _validate_text_tree(req.mature_content, "mature_content", CREATION_TEXT_FIELD_MAX_CHARS)
+        _validate_serialized_size(
+            req.mature_content, "mature_content", MATURE_CONTENT_JSON_MAX_CHARS
+        )
 
 
 async def _acquire_provider_concurrency(owner: str) -> str:
@@ -3782,6 +3814,11 @@ async def _build_existing_creation_response(req: NewStoryRequest) -> Optional[Di
     if not session_doc:
         return None
     if int(session_doc.get("turn_count") or 0) < 1:
+        # A provisional session older than one full generation belongs to a
+        # creation that died (crash, kill, unhandled error). Remove it so this
+        # retry can create the story instead of answering 409 forever.
+        if await _reclaim_stale_provisional_session(session_doc):
+            return None
         raise HTTPException(status_code=409, detail=_CREATION_IN_PROGRESS_DETAIL)
     turn_doc = await db.turns.find_one(
         {"session_id": session_doc["id"], "turn_number": 1},
@@ -3819,7 +3856,15 @@ async def new_story(req: NewStoryRequest, request: Request):
         except HTTPException:
             await _rollback_bucket_reservations(db, consumed_buckets)
             raise
-        return await _create_new_story(req)
+        try:
+            return await _create_new_story(req)
+        except HTTPException as exc:
+            # 4xx answers (bad scenario id, invalid mature settings, in-progress
+            # duplicates, provider quota refusals) happen before any provider
+            # call, so they must not consume the caller's creation quota.
+            if 400 <= exc.status_code < 500:
+                await _rollback_bucket_reservations(db, consumed_buckets)
+            raise
     finally:
         await _release_provider_concurrency(provider_slot)
         if creation_slot:
@@ -3830,6 +3875,45 @@ async def _cleanup_provisional_story(session_id: str) -> None:
     """Remove session and any turns created during a failed story creation."""
     await db.turns.delete_many({"session_id": session_id})
     await db.sessions.delete_one({"id": session_id})
+
+
+def _provisional_session_stale_seconds() -> int:
+    # A live creation finishes generation within the deadline; 60s covers commit.
+    return int(provider_budget.ACTION_GENERATION_DEADLINE_SEC) + 60
+
+
+def _as_utc(value: Any) -> Optional[datetime]:
+    if not isinstance(value, datetime):
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+async def _reclaim_stale_provisional_session(session_doc: Dict[str, Any]) -> bool:
+    """Delete a provisional (turn_count 0) session left by a dead creation.
+
+    Only sessions that never committed an opening turn, are older than one
+    full generation, and were not produced by a reset qualify. Returns True
+    when the stale session is gone (removed here or concurrently).
+    """
+    if session_doc.get("reset_at") is not None:
+        return False
+    created_at = _as_utc(session_doc.get("created_at"))
+    if created_at is None:
+        return False
+    age = (datetime.now(timezone.utc) - created_at).total_seconds()
+    if age < _provisional_session_stale_seconds():
+        return False
+    result = await db.sessions.delete_one(
+        {"id": session_doc["id"], "turn_count": 0, "reset_at": {"$exists": False}}
+    )
+    await db.turns.delete_many({"session_id": session_doc["id"]})
+    logger.warning(
+        "reclaimed stale provisional session %s (age %ss, removed=%s)",
+        session_doc["id"],
+        int(age),
+        result.deleted_count,
+    )
+    return True
 
 
 async def _commit_story_action_turn(
@@ -3868,6 +3952,33 @@ async def _commit_story_action_turn(
 
 
 async def _create_new_story(req: NewStoryRequest):
+    """Create a story; never leave a provisional session behind on failure.
+
+    Any exception or cancellation after the provisional session insert and
+    before the opening commit is attempted removes that session. Once the
+    commit has been attempted the session is left alone: the opening turn may
+    have committed (stale takeover handles the rare dead remainder).
+    """
+    attempt: Dict[str, Any] = {"session_id": None, "commit_attempted": False}
+    try:
+        return await _create_new_story_inner(req, attempt)
+    except BaseException as exc:
+        session_id = attempt["session_id"]
+        if session_id and not attempt["commit_attempted"]:
+            try:
+                await _cleanup_provisional_story(session_id)
+            except Exception:
+                logger.exception(
+                    "provisional session cleanup failed for %s (stale takeover will remove it)",
+                    session_id,
+                )
+        if isinstance(exc, HTTPException) or not isinstance(exc, Exception):
+            raise  # HTTP errors as-is; cancellation and exit signals propagate
+        logger.exception("unexpected failure during new_story")
+        raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE) from exc
+
+
+async def _create_new_story_inner(req: NewStoryRequest, attempt: Dict[str, Any]):
     settings = await get_ai_settings()
     creation_request_id = _normalize_creation_request_id(req.creation_request_id)
     try:
@@ -4079,6 +4190,7 @@ async def _create_new_story(req: NewStoryRequest):
         if existing:
             return existing
         raise HTTPException(status_code=409, detail=_CREATION_IN_PROGRESS_DETAIL)
+    attempt["session_id"] = session.id
 
     budget = provider_budget.for_request(
         db,
@@ -4207,6 +4319,7 @@ async def _create_new_story(req: NewStoryRequest):
         "rendering_policy": rendering_policy,
         "updated_at": datetime.now(timezone.utc),
     }
+    attempt["commit_attempted"] = True
     try:
         # Opening turn + session completion + model lock commit atomically.
         await turn_commit.commit_opening_turn(
@@ -4677,6 +4790,24 @@ async def set_session_mode(
     return {"mode": req.mode}
 
 
+# Most turns any single read returns. Reads keep the NEWEST turns: an
+# ascending sort with a length cap used to drop the latest turns of long
+# chronicles (review 2026-11-20, finding 11).
+TURN_WINDOW_MAX = int(os.environ.get("TURN_WINDOW_MAX", "500"))
+_PLAYER_TURN_PROJECTION: Dict[str, int] = {"_id": 0, **{f: 1 for f in PLAYER_TURN_FIELDS}}
+
+
+async def _newest_turns(
+    session_id: str, projection: Dict[str, int], limit: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """Return up to ``limit`` most recent turns, oldest first."""
+    rows = await db.turns.find({"session_id": session_id}, projection).sort(
+        "turn_number", -1
+    ).to_list(length=limit or TURN_WINDOW_MAX)
+    rows.reverse()
+    return rows
+
+
 @api_router.get("/story/session/{session_id}/history")
 async def session_causal_history(session_id: str, device_id: str = Depends(require_device_id)):
     """Player-safe "Why this happened" causal chain — built from engine state only.
@@ -4686,10 +4817,10 @@ async def session_causal_history(session_id: str, device_id: str = Depends(requi
     Output contains no internal identifiers or engine field names.
     """
     session = await fetch_owned_session(db, session_id, device_id)
-    turns = await db.turns.find(
-        {"session_id": session_id},
+    turns = await _newest_turns(
+        session_id,
         {"_id": 0, "turn_number": 1, "player_action": 1, "debug": 1, "rolling_state": 1, "state": 1},
-    ).sort("turn_number", 1).to_list(length=500)
+    )
     return {
         "session_id": session_id,
         "title": session.get("title"),
@@ -4702,15 +4833,18 @@ async def session_causal_history(session_id: str, device_id: str = Depends(requi
 async def export_session(session_id: str, device_id: str = Depends(require_device_id)):
     """Player-safe export: verified ownership + always-sanitised chronicle payload."""
     session = await fetch_owned_session(db, session_id, device_id)
-    turns = await db.turns.find({"session_id": session_id}, {"_id": 0}).sort("turn_number", 1).to_list(length=500)
+    turns = await _newest_turns(session_id, _PLAYER_TURN_PROJECTION)
     safe_session = build_player_session(session)
     safe_turns = [build_player_turn(t) for t in turns]
+    total = int(session.get("turn_count") or len(turns))
     return {
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "session": safe_session,
         "turns": safe_turns,
         "summary": {
-            "turn_count": len(turns),
+            "turn_count": total,
+            "turns_included": len(safe_turns),
+            "truncated": len(safe_turns) < total,
             "last_state": build_player_state(session.get("last_state")),
         },
     }
@@ -4768,7 +4902,15 @@ async def reset_session(session_id: str, device_id: str = Depends(require_device
 
 @api_router.get("/story/sessions")
 async def list_sessions(device_id: str = Depends(require_device_id)):
-    cursor = db.sessions.find({"device_id": device_id}, {"_id": 0}).sort("updated_at", -1)
+    # Provisional sessions (creation still running or died) are not chronicles
+    # yet; reset shells stay listed.
+    cursor = db.sessions.find(
+        {
+            "device_id": device_id,
+            "$or": [{"turn_count": {"$gte": 1}}, {"reset_at": {"$exists": True}}],
+        },
+        {"_id": 0},
+    ).sort("updated_at", -1)
     sessions = await cursor.to_list(length=200)
     sessions = [build_player_session(s) for s in sessions]
     return {"sessions": sessions}
@@ -4777,9 +4919,12 @@ async def list_sessions(device_id: str = Depends(require_device_id)):
 @api_router.get("/story/session/{session_id}")
 async def get_session(session_id: str, device_id: str = Depends(require_device_id)):
     raw_session = await fetch_owned_session(db, session_id, device_id)
-    turns = await db.turns.find({"session_id": session_id}, {"_id": 0}).sort("turn_number", 1).to_list(length=500)
     settings = await get_ai_settings()
     include_debug = _session_debug_allowed(raw_session, settings)
+    projection = dict(_PLAYER_TURN_PROJECTION)
+    if include_debug:
+        projection["debug"] = 1
+    turns = await _newest_turns(session_id, projection)
     session = build_player_session(raw_session)
     turns = [build_player_turn(t, include_debug=include_debug) for t in turns]
     return {"session": session, "turns": turns}
@@ -4833,6 +4978,10 @@ async def admin_consistency(
 
 app.include_router(api_router)
 
+# Body size limit sits inside CORS (added first, so CORS stays outermost and
+# still decorates 413 responses for browsers).
+app.add_middleware(request_limits.BodySizeLimitMiddleware)
+
 _cors_origins_raw = os.environ.get("CORS_ORIGINS", "*")
 _cors_origins = ["*"] if _cors_origins_raw.strip() == "*" else [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
 _cors_allow_headers = [
@@ -4865,6 +5014,17 @@ async def startup_rate_limit_indexes():
     await ensure_story_creation_idempotency_indexes(db)
     await action_requests.ensure_action_request_indexes(db)
     await provider_budget.ensure_provider_usage_indexes(db)
+    if clear_leases_on_startup_enabled():
+        # Single-process deployments (the Windows launcher, uvicorn --reload):
+        # whatever lease exists now belongs to a process that has exited.
+        cleared = await clear_session_leases_and_claims(db)
+        cleared["creation_slots_cleared"] = await clear_concurrency_pool(
+            db, STORY_CREATION_POOL_ID
+        )
+        cleared["provider_slots_cleared"] = await clear_concurrency_pool(
+            db, provider_budget.PROVIDER_CONCURRENCY_POOL_ID
+        )
+        logger.warning("startup lease clearing (%s=1): %s", CLEAR_LEASES_ENV_VAR, cleared)
     try:
         topology = await turn_commit.check_transaction_support(db)
         _TRANSACTION_SUPPORT_ERROR = None

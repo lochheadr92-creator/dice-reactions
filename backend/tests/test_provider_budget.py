@@ -170,6 +170,60 @@ def test_each_call_timeout_is_capped_by_remaining_deadline(monkeypatch):
     assert seen["timeout"] is not None and 0 < seen["timeout"] <= 5
 
 
+def test_call_timeout_is_a_wall_clock_limit_for_slow_responses(monkeypatch):
+    """A response trickling one byte at a time must not outlive the cap (review finding 4)."""
+    import json
+    import time
+
+    body = json.dumps({"choices": [{"message": {"content": "late"}}]}).encode()
+
+    async def scenario():
+        async def handle(reader, writer):
+            await reader.readuntil(b"\r\n\r\n")
+            pad = 40
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                + b"Content-Length: %d\r\nConnection: close\r\n\r\n" % (pad + len(body))
+            )
+            try:
+                for _ in range(pad):
+                    writer.write(b" ")
+                    await writer.drain()
+                    await asyncio.sleep(0.25)
+                writer.write(body)
+                await writer.drain()
+            except (ConnectionError, asyncio.CancelledError):
+                pass
+            finally:
+                writer.close()
+
+        srv = await asyncio.start_server(handle, "127.0.0.1", 0)
+        port = srv.sockets[0].getsockname()[1]
+        route = {
+            "provider": "openrouter",
+            "label": "Test",
+            "base_url": f"http://127.0.0.1:{port}/v1",
+            "api_key": "test-key",
+            "api_model": "test-model",
+            "key_env": "OPENROUTER_API_KEY",
+            "extra_headers": {},
+        }
+        monkeypatch.setattr(ai_service, "resolve_provider_route", lambda _m: route)
+        started = time.monotonic()
+        try:
+            with pytest.raises(ai_service.AIServiceError) as exc:
+                await ai_service._call_model_once(
+                    "test-model", [{"role": "user", "content": "x"}], 0.1, 16, timeout_seconds=1.0
+                )
+        finally:
+            srv.close()
+        return exc.value, time.monotonic() - started
+
+    error, elapsed = asyncio.run(scenario())
+    assert error.kind == ai_service.KIND_TIMEOUT
+    assert elapsed < 3.0
+
+
 def test_provider_boundary_fails_closed_without_budget(monkeypatch):
     calls = []
 
@@ -547,6 +601,82 @@ def test_creation_input_limits_reject_before_paid_work(env, monkeypatch):
     assert fake.calls == 0
     assert env.sync_db.sessions.count_documents({"device_id": device}) == 0
     assert list(env.sync_db.rate_limits.find({"count": {"$gt": 0}})) == []
+
+
+def test_creation_setup_serialized_size_counts_keys_and_numbers(env, monkeypatch):
+    """Keys, numbers and empty strings must count toward the setup cap (review finding 2)."""
+    device = f"dev_{uuid.uuid4()}"
+    fake = FakeGateway(OPENING_TURN).install()
+    try:
+        with make_client() as client:
+            numeric_keys = client.post(
+                "/api/story/new",
+                json={
+                    "device_id": device,
+                    "genre": "fantasy",
+                    "custom_world_setup": {f"k{i}": i for i in range(5000)},
+                },
+            )
+            empty_strings = client.post(
+                "/api/story/new",
+                json={
+                    "device_id": device,
+                    "genre": "fantasy",
+                    "custom_world_setup": {"contentSettings": {f"n{i}": "" for i in range(5000)}},
+                },
+            )
+            mature = client.post(
+                "/api/story/new",
+                json={
+                    "device_id": device,
+                    "genre": "fantasy",
+                    "mature_content": {f"x{i}": i for i in range(5000)},
+                },
+            )
+    finally:
+        fake.restore()
+    for response, field in (
+        (numeric_keys, "custom_world_setup"),
+        (empty_strings, "custom_world_setup"),
+        (mature, "mature_content"),
+    ):
+        assert response.status_code == 422, response.text
+        assert field in response.json()["detail"]
+    assert fake.calls == 0
+    assert env.sync_db.sessions.count_documents({"device_id": device}) == 0
+
+
+def test_request_body_limit_rejects_oversized_bodies(env, monkeypatch):
+    import request_limits
+
+    monkeypatch.setattr(request_limits, "MAX_REQUEST_BODY_BYTES", 2048)
+    fake = FakeGateway(OPENING_TURN).install()
+    try:
+        with make_client() as client:
+            declared = client.post(
+                "/api/story/new",
+                json={"device_id": "d", "genre": "fantasy", "custom_premise": "x" * 4000},
+            )
+
+            def chunks():
+                yield b'{"device_id": "d", "genre": "fantasy", "custom_premise": "'
+                for _ in range(10):
+                    yield b"y" * 500
+                yield b'"}'
+
+            streamed = client.post(
+                "/api/story/new",
+                content=chunks(),
+                headers={"Content-Type": "application/json"},
+            )
+            small = client.get("/api/health")
+    finally:
+        fake.restore()
+    assert declared.status_code == 413
+    assert declared.json()["detail"] == request_limits.BODY_TOO_LARGE_DETAIL
+    assert streamed.status_code == 413
+    assert small.status_code == 200
+    assert fake.calls == 0
 
 
 def test_story_creation_budget_failure_cleans_provisional_session(env, monkeypatch):

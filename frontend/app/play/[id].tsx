@@ -27,7 +27,6 @@ import {
   sendAction,
   deleteSession,
   exportSession,
-  resetSession,
   setSessionMode,
   getActionRequestStatus,
   Turn,
@@ -1009,7 +1008,10 @@ export default function PlayScreen() {
                 const confirmAndRun = async () => {
                   try {
                     const deviceId = deviceIdRef.current || (await getDeviceId());
-                    await resetSession(sessionId, deviceId);
+                    // "Reset" starts a new story. The old chronicle is deleted
+                    // rather than left behind as an empty shell (review
+                    // 2026-11-20, finding 9).
+                    await deleteSession(sessionId, deviceId);
                     pendingActionRef.current = null;
                     await clearPendingAction(sessionId);
                     setShowMenu(false);
@@ -1020,9 +1022,9 @@ export default function PlayScreen() {
                   }
                 };
                 if (Platform.OS === "web") {
-                  if (confirm("Reset this chronicle? All turns and rolling state will be wiped.")) confirmAndRun();
+                  if (confirm("Reset this chronicle? It will be deleted and you can start a new story.")) confirmAndRun();
                 } else {
-                  Alert.alert("Reset chronicle?", "All turns and rolling state will be wiped. The session shell stays.", [
+                  Alert.alert("Reset chronicle?", "This chronicle will be deleted and you can start a new story.", [
                     { text: "Cancel", style: "cancel" },
                     { text: "Reset", style: "destructive", onPress: confirmAndRun },
                   ]);

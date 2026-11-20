@@ -89,6 +89,9 @@ def relax_rate_limits(monkeypatch) -> None:
     monkeypatch.setattr(rate_limit, "RATE_LIMIT_GLOBAL_CONCURRENT", 10)
     monkeypatch.setattr(rate_limit, "RATE_LIMIT_ACTION_DEVICE_MAX", 500)
     monkeypatch.setattr(rate_limit, "TRUSTED_PROXY_COUNT", 0)
+    # Freeze fixed windows so quota assertions cannot straddle a window boundary.
+    frozen = float(int(rate_limit._epoch_seconds()))
+    monkeypatch.setattr(rate_limit, "_epoch_seconds", lambda: frozen)
 
 
 def run_db(coro):

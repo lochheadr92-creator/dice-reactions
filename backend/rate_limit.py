@@ -22,10 +22,12 @@ X-Forwarded-For selection (only when TRUSTED_PROXY_COUNT > 0):
   XFF reads left-to-right as client → … → nearest proxy.
   1. Read the X-Forwarded-For header; if absent or blank, use the TCP peer host.
   2. Split on commas, strip whitespace, drop empty segments.
-  3. If len(parts) <= TRUSTED_PROXY_COUNT, ignore XFF and use the TCP peer host
-     (chain too short — leftmost client-supplied hops are not trusted).
-  4. Otherwise return parts[-TRUSTED_PROXY_COUNT] — the leftmost hop of the
-     rightmost TRUSTED_PROXY_COUNT proxy hops (verified deployment model).
+  3. If len(parts) < TRUSTED_PROXY_COUNT, ignore XFF and use the TCP peer host
+     (chain shorter than the proxy depth: the deployment does not match).
+  4. Otherwise return parts[-TRUSTED_PROXY_COUNT]. With N trusted proxies the
+     honest chain has exactly N entries (client, proxy 1, ... proxy N-1), so
+     this is the client address; anything a client prepends sits further left
+     and is ignored.
   5. If the selected segment is not a plausible IP/hostname token, use the TCP peer host.
 
 Mongo limiter mechanics:
@@ -62,6 +64,7 @@ logger = logging.getLogger(__name__)
 _RATE_LIMIT_GENERIC_DETAIL = "Too many requests"
 _LIMITER_UNAVAILABLE_DETAIL = "Service unavailable"
 _CONCURRENT_SLOT_ID = "story_new_concurrent"
+STORY_CREATION_POOL_ID = _CONCURRENT_SLOT_ID
 _GLOBAL_FIXED_PREFIX = "global"
 
 RATE_LIMIT_IP_MAX = int(os.environ.get("RATE_LIMIT_IP_MAX", "10"))
@@ -95,7 +98,7 @@ def select_xff_client_ip(parts: list[str], trusted_proxy_count: int) -> Optional
     """Pick client IP using the rightmost-N trusted-proxy deployment model."""
     if trusted_proxy_count <= 0 or not parts:
         return None
-    if len(parts) <= trusted_proxy_count:
+    if len(parts) < trusted_proxy_count:
         return None
     candidate = parts[-trusted_proxy_count]
     if not _plausible_ip_token(candidate):
@@ -117,8 +120,13 @@ def resolve_client_ip(request: Request) -> str:
     return "unknown"
 
 
+def _epoch_seconds() -> float:
+    """Wall clock for fixed-window bucket ids (patched by tests to freeze windows)."""
+    return time.time()
+
+
 def _window_bucket(prefix: str, identifier: str, window_sec: int) -> str:
-    window_id = int(time.time()) // max(window_sec, 1)
+    window_id = int(_epoch_seconds()) // max(window_sec, 1)
     return f"{prefix}:{identifier}:{window_id}"
 
 
@@ -353,6 +361,15 @@ async def release_concurrency_lease(db, pool_id: str, token: str) -> bool:
         logger.exception("concurrency lease release failed for pool %s", pool_id)
         return False
     return bool(result.matched_count)
+
+
+async def clear_concurrency_pool(db, pool_id: str) -> int:
+    """Drop every lease in one pool (single-process startup only). Returns count removed."""
+    doc = await db.rate_limits.find_one({"_id": pool_id}, {"leases": 1})
+    removed = len((doc or {}).get("leases") or [])
+    if removed:
+        await db.rate_limits.update_one({"_id": pool_id}, {"$set": {"leases": []}})
+    return removed
 
 
 async def count_active_leases(db, pool_id: str) -> int:

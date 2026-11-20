@@ -110,12 +110,12 @@ Backend (needs the replica set; the deterministic suite makes no provider calls)
 ```powershell
 Set-Location backend
 $env:MONGO_URL = "mongodb://127.0.0.1:27017/?replicaSet=rs0"
-$env:DB_NAME = "dice_reactions_test"
 $env:ADMIN_API_KEY = "local-test-only"
-$env:OPENROUTER_API_KEY = ""
 & .\.venv\Scripts\python.exe -m pip check
 & .\.venv\Scripts\python.exe -m pytest -m "not live" -q
 ```
+
+**Test database guard.** Several test fixtures delete every session and turn in the test database. `tests/conftest.py` (through `tests/db_guard.py`) therefore never uses `DB_NAME` from the shell or `backend/.env`: it always runs against `TEST_DB_NAME` (default `dice_reactions_test`), refuses to start unless that name ends in `_test`, does not load `backend/.env`, and sets provider keys to empty unless the shell exports them. Your saved stories in the database named in `backend/.env` are never touched by a test run.
 
 Frontend (Node 20):
 
@@ -171,5 +171,7 @@ See `AGENTS.md`:
 - MongoDB 7 **replica set or sharded cluster** (transactions). Verify after deploy: `GET /api/admin/consistency` → `transaction_support_error` must be `null`.
 - Node 20 / Yarn 1.22.22 for web export; Python 3.12 with `constraints.txt` for the backend.
 - `ADMIN_API_KEY` set; provider keys set only on the deployment that should make paid calls.
-- Rollback: the release adds collections (`action_requests`, `provider_usage`), indexes, and the `session_revision` / `turns.action_request_key` fields. Rolling the code back leaves those in place harmlessly; the previous code ignores them. Rolling forward again normalises `session_revision` lazily on the next lease acquisition. No data migration is required or performed.
+- Single backend process (one uvicorn without workers, as the Windows launcher runs it): set `CLEAR_LEASES_ON_STARTUP=1` so a restart frees leases left by the previous process instead of blocking those chronicles for up to `ACTION_GENERATION_DEADLINE_SEC` + 60s. Leave it unset with several workers.
+- Unique request-key index: startup creates `turns_action_request_key_unique`. Databases created by the first reliability build also keep the older non-unique `turns_action_request_key` index; it is redundant and harmless, and dropping it is an operator choice. If duplicate request keys already exist the unique index is not created and an error is logged; check `GET /api/admin/consistency`.
+- Rollback: the release adds collections (`action_requests`, `provider_usage`), indexes, and the `session_revision` / `turns.action_request_key` / `sessions.reset_at` fields. Rolling the code back leaves those in place harmlessly; the previous code ignores them. Rolling forward again normalises `session_revision` lazily on the next lease acquisition. No data migration is required or performed.
 - No Dockerfile or deployment manifest exists in the repository; CI is `.github/workflows/deterministic-ci.yml`.

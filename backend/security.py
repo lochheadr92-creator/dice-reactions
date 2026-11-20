@@ -25,6 +25,18 @@ _SESSION_NOT_FOUND_DETAIL = "Session not found"
 _DEVICE_ID_REQUIRED_DETAIL = "device_id is required"
 
 
+def constant_time_equals(provided: Any, expected: Any) -> bool:
+    """Constant-time comparison that accepts any text.
+
+    hmac.compare_digest raises TypeError for str values outside ASCII, which
+    turned a non-ASCII header into an HTTP 500. Comparing UTF-8 bytes avoids
+    that and keeps the comparison constant-time.
+    """
+    return hmac.compare_digest(
+        str(provided).encode("utf-8"), str(expected).encode("utf-8")
+    )
+
+
 def configured_admin_api_key() -> Optional[str]:
     value = os.environ.get(ADMIN_API_KEY_ENV, "")
     return value if value else None
@@ -38,7 +50,7 @@ async def require_admin(
     if not expected:
         raise HTTPException(status_code=503, detail="Admin API not configured")
     provided = x_admin_api_key or ""
-    if not hmac.compare_digest(provided, expected):
+    if not constant_time_equals(provided, expected):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -72,7 +84,7 @@ async def fetch_owned_session(
 
     stored = str(session.get("device_id") or "")
     provided = str(device_id)
-    if not stored or not hmac.compare_digest(stored, provided):
+    if not stored or not constant_time_equals(stored, provided):
         raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND_DETAIL)
 
     return session

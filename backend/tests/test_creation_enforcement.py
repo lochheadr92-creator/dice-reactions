@@ -417,6 +417,39 @@ def test_compaction_restores_world_frame_and_character_hooks():
     assert len(d1) < 2200
 
 
+def test_model_cannot_rewrite_contract_hooks_or_frame():
+    """Review 2026-11-20, finding 10: contract values win over model output."""
+    session = _session(
+        custom_world_setup={
+            "creationFlow": "advanced",
+            "want": "redemption",
+            "fear": "becoming-a-monster",
+            "whoMatters": "sibling",
+            "worldElements": "watchtowers",
+            "worldExclusions": "zombies",
+            "settingGroundedness": "realistic",
+        }
+    )
+    seeded = server._seed_custom_setup_into_rolling({}, session["custom_world_setup"])
+    seeded = creation_contract.restore_creation_surfaces(seeded, session)
+    contract_hooks = dict(seeded["character_hooks"])
+    contract_frame = dict(seeded["world_frame"])
+    assert contract_hooks.get("relationship_archetype")
+
+    hostile = {
+        "character_hooks": {key: "rewritten_by_model" for key in contract_hooks},
+        "world_frame": {key: "rewritten_by_model" for key in contract_frame},
+    }
+    hostile["character_hooks"]["model_added_hook"] = "kept"
+    merged = consolidate_rolling_state(seeded, hostile)
+    restored = creation_contract.restore_creation_surfaces(merged, session)
+    for key, value in contract_hooks.items():
+        assert restored["character_hooks"][key] == value, key
+    for key, value in contract_frame.items():
+        assert restored["world_frame"][key] == value, key
+    assert restored["character_hooks"]["model_added_hook"] == "kept"
+
+
 def test_bounded_projection_does_not_grow_every_turn():
     session = _session()
     contract = creation_contract.build_creation_contract(session)

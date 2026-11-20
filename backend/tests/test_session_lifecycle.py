@@ -8,6 +8,7 @@ fail-closed behaviour when transactions are unavailable.
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import uuid
 from datetime import timedelta
@@ -190,7 +191,8 @@ def test_delete_after_lease_expiry_blocks_stale_commit_and_removes_request_recor
     assert client.get(f"/api/story/session/{sid}", headers=_headers(device)).status_code == 404
 
 
-def test_reset_supersedes_incomplete_request_records(client, env):
+def test_reset_removes_request_records_with_their_turns(client, env):
+    """Review 2026-11-20, finding 9: after a reset no record points at a deleted turn."""
     device = f"dev_{uuid.uuid4()}"
     sid = insert_session(env.sync_db, device)
     now = ac.utc_now()
@@ -207,10 +209,27 @@ def test_reset_supersedes_incomplete_request_records(client, env):
             "expires_at": now + timedelta(days=1),
         }
     )
+    body = {"session_id": sid, "action_text": "wait", "action_request_id": "done"}
+    assert client.post("/api/story/action", json=body, headers=_headers(device)).status_code == 200
+
     assert client.post(f"/api/story/session/{sid}/reset", headers=_headers(device)).status_code == 200
-    record = env.sync_db.action_requests.find_one({"_id": f"{sid}|stuck"})
-    assert record["status"] == "failed"
-    assert record["error_kind"] == action_requests.ERROR_SUPERSEDED
+    assert env.sync_db.action_requests.count_documents({"session_id": sid}) == 0
+    shell = env.sync_db.sessions.find_one({"id": sid})
+    assert shell["turn_count"] == 0 and shell.get("reset_at") is not None
+
+    status = client.get(f"/api/story/session/{sid}/action/done", headers=_headers(device))
+    assert status.json() == {"status": "unknown"}
+    report = client.get("/api/admin/consistency", headers={"X-Admin-Api-Key": os.environ["ADMIN_API_KEY"]}).json()
+    assert report["action_requests"]["completed_without_turn"]["count"] == 0
+    assert report["provisional_sessions_without_opening_turn"] == 0
+    assert report["reset_sessions_without_turns"] == 1
+    listed = client.get("/api/story/sessions", headers=_headers(device)).json()["sessions"]
+    assert [s["id"] for s in listed] == [sid]
+
+    # The old id is now a new request for the reset session.
+    again = client.post("/api/story/action", json=body, headers=_headers(device))
+    assert again.status_code == 200
+    assert again.json()["turn"]["turn_number"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +403,39 @@ def test_lost_acknowledgement_without_commit_reports_uncertain_then_retries_clea
     assert env.sync_db.turns.count_documents({"session_id": sid}) == 1
 
 
+def test_long_chronicles_return_their_newest_turns(client, env, monkeypatch):
+    """Review 2026-11-20, finding 11: the turn window keeps the latest turns."""
+    monkeypatch.setattr(server, "TURN_WINDOW_MAX", 5)
+    device = f"dev_{uuid.uuid4()}"
+    sid = insert_session(env.sync_db, device, turn_count=8)
+    env.sync_db.turns.insert_many(
+        [
+            {
+                "id": str(uuid.uuid4()),
+                "session_id": sid,
+                "turn_number": n,
+                "narrative": f"turn {n}",
+                "paragraphs": [f"turn {n}"],
+                "choices": [],
+                "state": {},
+                "ledger": {},
+                "raw": "x" * 1000,
+                "rolling_state": {"big": "y" * 1000},
+            }
+            for n in range(1, 9)
+        ]
+    )
+    session = client.get(f"/api/story/session/{sid}", headers=_headers(device)).json()
+    assert [t["turn_number"] for t in session["turns"]] == [4, 5, 6, 7, 8]
+    exported = client.get(f"/api/story/session/{sid}/export", headers=_headers(device)).json()
+    assert [t["turn_number"] for t in exported["turns"]] == [4, 5, 6, 7, 8]
+    assert exported["summary"]["turn_count"] == 8
+    assert exported["summary"]["turns_included"] == 5
+    assert exported["summary"]["truncated"] is True
+    history = client.get(f"/api/story/session/{sid}/history", headers=_headers(device))
+    assert history.status_code == 200
+
+
 def test_lease_and_claim_outlive_the_generation_deadline(monkeypatch):
     """A retry must not be able to take over an action that is still generating."""
     import provider_budget
@@ -394,9 +446,12 @@ def test_lease_and_claim_outlive_the_generation_deadline(monkeypatch):
     assert action_requests.claim_ttl_seconds() == ac.resolve_lease_seconds()
     monkeypatch.setattr(provider_budget, "ACTION_GENERATION_DEADLINE_SEC", 240)
     monkeypatch.delenv(ac.LEASE_ENV_VAR, raising=False)
-    assert ac.resolve_lease_seconds() == ac.DEFAULT_LEASE_SECONDS
+    # Default is the floor itself (deadline + 60s), not a longer fixed value.
+    assert ac.resolve_lease_seconds() == 300
     monkeypatch.setenv(ac.LEASE_ENV_VAR, "60")
     assert ac.resolve_lease_seconds() == 300
+    monkeypatch.setenv(ac.LEASE_ENV_VAR, "900")
+    assert ac.resolve_lease_seconds() == 900
 
 
 def test_no_transaction_error_is_classified():

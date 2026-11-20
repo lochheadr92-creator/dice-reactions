@@ -18,6 +18,9 @@ identity used by the game.
 - Keep provider credentials in `backend/.env` or the launching user's environment.
   Inherited environment values take precedence, matching the backend.
 - The launcher does not select models, edit keys, install packages, or make paid AI calls.
+- The launcher sets `CLEAR_LEASES_ON_STARTUP=1` for the engine (unless `backend/.env` or the
+  environment sets it), because it runs a single backend process. A restart then frees any
+  chronicle lock left by a previous run instead of blocking that chronicle for a few minutes.
 - Node is found in the existing `.nw_tmp/node20` installation, then on PATH.
 - Expo starts with `EXPO_OFFLINE=1` using installed dependencies, so launching
   the frontend does not depend on Expo's online version-check service. This

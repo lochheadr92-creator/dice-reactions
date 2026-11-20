@@ -64,6 +64,11 @@ def mongo_env(monkeypatch):
     monkeypatch.setattr(rate_limit, "RATE_LIMIT_GLOBAL_WINDOW_SEC", 60)
     monkeypatch.setattr(rate_limit, "RATE_LIMIT_GLOBAL_CONCURRENT", 10)
     monkeypatch.setattr(rate_limit, "TRUSTED_PROXY_COUNT", 0)
+    # Freeze fixed windows so a real window boundary mid-test cannot reset the
+    # counters (the flake recorded in the 2026-11-20 review, finding 13).
+    window_clock = {"now": float(int(time.time()))}
+    monkeypatch.setattr(rate_limit, "_epoch_seconds", lambda: window_clock["now"])
+    sync_db.window_clock = window_clock  # type: ignore[attr-defined]
     yield sync_db
     server.db = original_db
     motor_client.close()
@@ -179,7 +184,7 @@ class TestStoryCreationRateLimit:
         for _ in range(2):
             assert client.post("/api/story/new", json=_new_payload(device)).status_code == 200
         assert client.post("/api/story/new", json=_new_payload(device)).status_code == 429
-        time.sleep(1.1)
+        mongo_env.window_clock["now"] += 1.1  # type: ignore[attr-defined]
         assert client.post("/api/story/new", json=_new_payload(device)).status_code == 200
 
     def test_limiter_backend_failure_fails_closed(self, client, monkeypatch):
@@ -221,10 +226,16 @@ class TestTrustedProxyExtraction:
         req = self._request("spoofed, 203.0.113.9", host="10.0.0.5")
         assert rate_limit.resolve_client_ip(req) == "203.0.113.9"
 
-    def test_spoofed_only_chain_falls_back_to_peer(self, monkeypatch):
+    def test_single_proxy_honest_chain_uses_client_address(self, monkeypatch):
+        # One trusted proxy appends exactly one entry: the client it saw.
         monkeypatch.setattr(rate_limit, "TRUSTED_PROXY_COUNT", 1)
-        req = self._request("spoofed-only", host="10.0.0.5")
-        assert rate_limit.resolve_client_ip(req) == "10.0.0.5"
+        req = self._request("203.0.113.9", host="10.0.0.5")
+        assert rate_limit.resolve_client_ip(req) == "203.0.113.9"
+
+    def test_single_proxy_ignores_client_prepended_entries(self, monkeypatch):
+        monkeypatch.setattr(rate_limit, "TRUSTED_PROXY_COUNT", 1)
+        req = self._request("1.2.3.4, 5.6.7.8, 203.0.113.9", host="10.0.0.5")
+        assert rate_limit.resolve_client_ip(req) == "203.0.113.9"
 
     def test_two_proxies_use_rightmost_second_hop(self, monkeypatch):
         monkeypatch.setattr(rate_limit, "TRUSTED_PROXY_COUNT", 2)
@@ -236,10 +247,16 @@ class TestTrustedProxyExtraction:
         req = self._request("client, hop1, hop2, hop3", host="10.0.0.5")
         assert rate_limit.resolve_client_ip(req) == "hop1"
 
-    def test_two_proxies_rejects_spoofed_prefix(self, monkeypatch):
+    def test_two_proxies_honest_chain_uses_client_address(self, monkeypatch):
+        # Proxy 1 appends the client, proxy 2 appends proxy 1: two entries.
         monkeypatch.setattr(rate_limit, "TRUSTED_PROXY_COUNT", 2)
-        req = self._request("evil, only-proxy", host="10.0.0.5")
-        assert rate_limit.resolve_client_ip(req) == "10.0.0.5"
+        req = self._request("203.0.113.9, 172.16.0.1", host="10.0.0.5")
+        assert rate_limit.resolve_client_ip(req) == "203.0.113.9"
+
+    def test_two_proxies_ignore_client_prepended_entry(self, monkeypatch):
+        monkeypatch.setattr(rate_limit, "TRUSTED_PROXY_COUNT", 2)
+        req = self._request("evil, 203.0.113.9, 172.16.0.1", host="10.0.0.5")
+        assert rate_limit.resolve_client_ip(req) == "203.0.113.9"
 
     def test_two_proxies_lb_appended_chain(self, monkeypatch):
         monkeypatch.setattr(rate_limit, "TRUSTED_PROXY_COUNT", 2)
@@ -261,7 +278,9 @@ class TestTrustedProxyExtraction:
     def test_empty_and_whitespace_segments_ignored(self, monkeypatch):
         monkeypatch.setattr(rate_limit, "TRUSTED_PROXY_COUNT", 1)
         req = self._request(" , , 198.51.100.2 , ", host="10.0.0.5")
-        assert rate_limit.resolve_client_ip(req) == "10.0.0.5"
+        assert rate_limit.resolve_client_ip(req) == "198.51.100.2"
+        req2 = self._request(" , , ", host="10.0.0.5")
+        assert rate_limit.resolve_client_ip(req2) == "10.0.0.5"
 
 
 @pytest.fixture()

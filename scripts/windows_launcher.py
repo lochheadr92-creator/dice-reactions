@@ -39,6 +39,9 @@ def service_environment(env_file):
     for key, value in dotenv_values(env_file).items():
         if value is not None:
             env.setdefault(key, value)
+    # The launcher runs one backend process, so leases left by a previous run
+    # belong to a process that has exited; free them at startup.
+    env.setdefault("CLEAR_LEASES_ON_STARTUP", "1")
     env["EXPO_PUBLIC_BACKEND_URL"] = BACKEND_URL
     env["CI"] = "1"
     env["EXPO_NO_TELEMETRY"] = "1"
