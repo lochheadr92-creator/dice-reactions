@@ -1,5 +1,6 @@
 import React from "react";
 import { Alert } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react-native";
 import PlayScreen from "../app/play/[id]";
 import { ApiError } from "../src/api-error";
@@ -36,6 +37,7 @@ jest.mock("../src/api", () => ({
   ApiError: require("../src/api-error").ApiError,
   getSession: (...args: unknown[]) => mockGetSession(...args),
   sendAction: (...args: unknown[]) => mockSendAction(...args),
+  getActionRequestStatus: jest.fn(async () => ({ status: "unknown" })),
   deleteSession: jest.fn(),
   exportSession: jest.fn(),
   resetSession: jest.fn(),
@@ -91,9 +93,10 @@ async function renderPlay() {
 }
 
 describe("PlayScreen action conflict recovery", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.clearAllMocks();
     jest.useRealTimers();
+    await AsyncStorage.clear();
     mockSessionId = "sess-1";
     runFocusEffect = null;
     jest.spyOn(Alert, "alert").mockImplementation(() => {});

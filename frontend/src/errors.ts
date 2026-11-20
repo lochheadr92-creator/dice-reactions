@@ -9,6 +9,18 @@ export const ACTION_CONFLICT_MESSAGE =
   "Another action is being resolved for this chronicle. Checking for the latest turn now.";
 export const ACTION_CONFLICT_EXHAUSTION_MESSAGE =
   "The other action is still being resolved. Your text has been kept. Try again in a moment.";
+export const ACTION_RATE_LIMIT_TITLE = "Taking a breath";
+export const ACTION_RATE_LIMIT_MESSAGE =
+  "The engine has reached its usage limit for now. Your text has been kept — try again in a little while.";
+export const ACTION_MISMATCH_MESSAGE =
+  "That action changed since it was last sent. Press send again to submit it as a new action.";
+export const ACTION_UNCERTAIN_MESSAGE =
+  "The connection dropped before the engine answered. Checking whether your action went through…";
+export const ACTION_PENDING_MESSAGE =
+  "Your last action is still being resolved. Your text has been kept — it will appear when it completes.";
+export const ACTION_RECOVERED_MESSAGE = "Your earlier action completed while you were away.";
+export const ACTION_NOT_SENT_MESSAGE =
+  "Your action did not go through. Your text has been kept — press send to try again.";
 
 function friendlyFromText(text: string): { title: string; message: string } {
   // Network / transport
@@ -82,10 +94,25 @@ function friendlyFromText(text: string): { title: string; message: string } {
 
 export function friendlyError(raw: unknown): { title: string; message: string } {
   if (raw instanceof ApiError) {
+    if (ApiError.isRequestMismatch(raw)) {
+      return { title: "Action changed", message: ACTION_MISMATCH_MESSAGE };
+    }
     if (raw.status === 409) {
       return {
         title: ACTION_CONFLICT_TITLE,
         message: ACTION_CONFLICT_MESSAGE,
+      };
+    }
+    if (raw.status === 429) {
+      return { title: ACTION_RATE_LIMIT_TITLE, message: ACTION_RATE_LIMIT_MESSAGE };
+    }
+    if (raw.status === 422 || raw.status === 400) {
+      const detail = (raw.detail || "").replace(/\s+/g, " ").slice(0, 220);
+      return {
+        title: "Check your action",
+        message: detail
+          ? `${detail}. Your text has been kept.`
+          : "The engine could not accept that input. Your text has been kept.",
       };
     }
     const text = `${raw.status}: ${raw.detail || raw.rawText || raw.message}`;

@@ -13,18 +13,19 @@ Test coverage and verification status for the **`emergent`** branch.
 | Triggers | `push` to `emergent`, `pull_request` targeting `emergent`, `workflow_dispatch` |
 | Concurrency | Newer run on same branch/PR cancels in-progress run |
 | Permissions | `contents: read` only |
-| Backend Python | 3.12 |
+| Backend Python | 3.12, installed with `pip install -r requirements.txt -c constraints.txt` + `pip check` |
 | Frontend Node | 20 |
-| Frontend Yarn | 1.22.22 |
-| MongoDB | Service container `mongo:7` on `localhost:27017` (hermetic — not external Atlas) |
+| Frontend Yarn | 1.22.22 (Corepack) |
+| MongoDB | `mongo:7` started with `--replSet rs0`, initiated and waited for a writable primary, then a commit/abort transaction probe (hermetic — a standalone service container is **not** sufficient) |
 
 **Backend job command:**
 
 ```bash
 cd backend
-export MONGO_URL=mongodb://localhost:27017
+export MONGO_URL="mongodb://localhost:27017/?replicaSet=rs0"
 export DB_NAME=dice_reactions_ci
 export ADMIN_API_KEY=test-admin-key
+export OPENROUTER_API_KEY=""
 python -m pytest -m "not live" -q
 ```
 
@@ -32,10 +33,14 @@ python -m pytest -m "not live" -q
 
 ```bash
 cd frontend
-yarn install --frozen-lockfile
+yarn install --frozen-lockfile --non-interactive
 yarn test
 yarn typecheck
+yarn lint --max-warnings=0
+yarn expo export --platform web --output-dir dist
 ```
+
+**Reliability release (2026-10-30):** see [reliability-release.md](./reliability-release.md) for the current local results (backend 1387 passed / 36 live deselected; frontend 70 Jest tests, typecheck, lint, web export; rendered UI check). Figures quoted below this line are historical.
 
 **Passed 2026-06-20 on `emergent` HEAD @ `d8b9caf`:** **390** deterministic backend tests (replayability engine v1, action concurrency, secret reveal, P2 verifier) + **41** frontend Jest tests + TypeScript clean. **Living Cast tests are not on `emergent` HEAD** — they exist only on unmerged `recovery/living-cast-working-tree` and are **not covered by emergent CI**.
 
@@ -117,7 +122,12 @@ yarn lint
 | `test_pressure_graph.py` | pytest | ✅ Passed 2026-06-20 (offline, pressure graph) |
 | `test_consequence_echoes.py` | pytest | ✅ Passed 2026-06-20 (offline, consequence echoes) |
 | `test_replayability_integration.py` | pytest | ✅ Passed 2026-06-20 (offline, server integration) |
-| `test_action_concurrency.py` | pytest | ✅ Passed 2026-06-20 (offline, per-session action lease + HTTP 409) |
+| `test_action_concurrency.py` | pytest | ✅ Passed 2026-06-20 (offline, per-session action lease + HTTP 409); 2026-10-30 persistence tests rewritten against the transactional commit |
+| `test_turn_commit.py` | pytest | ✅ 2026-10-30 — transaction support, opening-turn commit, ambiguity verification, read-only consistency report (replica set) |
+| `test_action_idempotency.py` | pytest | ✅ 2026-10-30 — sequential/simultaneous duplicate POSTs, contents mismatch, lost response after commit, uncertain outcomes, stale claims, ownership isolation, replay sanitisation, legacy path |
+| `test_provider_budget.py` | pytest | ✅ 2026-10-30 — shared attempt budget across retries/fallbacks, deadline, global attempt quota, usage records, fail-closed storage, concurrency lease pool races, per-device action quota, input limits |
+| `test_session_lifecycle.py` | pytest | ✅ 2026-10-30 — reset/delete under the lease, lease expiry + stale commit, revision guard, competing commits, worker-restart recovery, transient/ambiguous transactions, transactions unavailable |
+| `test_canonical_rendering.py` | pytest | ✅ 2026-10-30 — renderer disabled end to end: adversarial rewrite never called, canonical prose served, capabilities report renderer unavailable |
 | `test_provider_selection.py` | pytest | ✅ Passed 2026-06-20 (offline) |
 | `test_ci_network_safety.py` | pytest | ✅ Passed 2026-06-20 (gateway chokepoint guard) |
 | `test_custom_world_system.py` | pytest | **Mixed** — 3 unit guards ✅ in CI; 4 integration tests marked `@pytest.mark.live` |

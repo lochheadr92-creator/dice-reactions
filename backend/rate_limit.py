@@ -1,5 +1,5 @@
 """
-MongoDB-backed abuse controls for paid story creation (POST /story/new).
+MongoDB-backed abuse controls for paid story work (POST /story/new, POST /story/action).
 
 Limits are enforced before any session insert or LLM invocation.
 Fails closed when the limiter backend is unavailable.
@@ -12,6 +12,9 @@ Environment variables (safe defaults):
   RATE_LIMIT_GLOBAL_MAX          — max total creations globally per fixed window (default 50)
   RATE_LIMIT_GLOBAL_WINDOW_SEC   — global fixed window length in seconds (default 3600)
   RATE_LIMIT_GLOBAL_CONCURRENT   — max in-flight story creations (default 3)
+  RATE_LIMIT_ACTION_DEVICE_MAX   — max player actions per device_id per window (default 60)
+  RATE_LIMIT_ACTION_DEVICE_WINDOW_SEC — action device window in seconds (default 3600)
+  STORY_CREATION_LEASE_SEC       — creation concurrency lease lifetime (default 600)
   TRUSTED_PROXY_COUNT            — if >0, client IP from X-Forwarded-For (see below)
 
 X-Forwarded-For selection (only when TRUSTED_PROXY_COUNT > 0):
@@ -29,12 +32,14 @@ Mongo limiter mechanics:
   - Counter buckets use find_one_and_update with $inc + $setOnInsert expires_at (UTC datetime).
   - Bucket _id is the natural unique key (one document per bucket).
   - Fixed windows use wall-clock bucket ids (epoch // window_sec).
-  - Partial quota reservations roll back when a later bucket or concurrent slot fails.
-  - Concurrent slots use a fixed _id document; release runs in finally and clamps count >= 0.
-  - TTL index on expires_at (expireAfterSeconds=0) bounds collection growth; the concurrent
-    slot document has no expires_at and is not TTL-eligible.
-  - Concurrent acquire is best-effort under multi-worker races; a crashed worker can leak a
-    slot until manual reset (no lease/TTL on the concurrent counter).
+  - Partial quota reservations roll back when a later bucket or concurrency lease fails.
+  - Concurrency pools are documents holding expiring leases ({token, owner,
+    expires_at}). Acquire is a single atomic update guarded by a $expr count of
+    unexpired leases, so concurrent workers cannot over-reserve. Only the exact
+    token can renew or release its lease; a crashed worker's lease expires on
+    its own and frees the capacity.
+  - TTL index on expires_at (expireAfterSeconds=0) bounds collection growth; pool
+    documents have no top-level expires_at and are not TTL-eligible.
 """
 
 from __future__ import annotations
@@ -43,11 +48,13 @@ import logging
 import os
 import re
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from fastapi import HTTPException
 from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 from starlette.requests import Request
 
 logger = logging.getLogger(__name__)
@@ -64,6 +71,11 @@ RATE_LIMIT_DEVICE_WINDOW_SEC = int(os.environ.get("RATE_LIMIT_DEVICE_WINDOW_SEC"
 RATE_LIMIT_GLOBAL_MAX = int(os.environ.get("RATE_LIMIT_GLOBAL_MAX", "50"))
 RATE_LIMIT_GLOBAL_WINDOW_SEC = int(os.environ.get("RATE_LIMIT_GLOBAL_WINDOW_SEC", "3600"))
 RATE_LIMIT_GLOBAL_CONCURRENT = int(os.environ.get("RATE_LIMIT_GLOBAL_CONCURRENT", "3"))
+RATE_LIMIT_ACTION_DEVICE_MAX = int(os.environ.get("RATE_LIMIT_ACTION_DEVICE_MAX", "60"))
+RATE_LIMIT_ACTION_DEVICE_WINDOW_SEC = int(
+    os.environ.get("RATE_LIMIT_ACTION_DEVICE_WINDOW_SEC", "3600")
+)
+STORY_CREATION_LEASE_SEC = int(os.environ.get("STORY_CREATION_LEASE_SEC", "600"))
 TRUSTED_PROXY_COUNT = int(os.environ.get("TRUSTED_PROXY_COUNT", "0"))
 
 _IP_TOKEN_RE = re.compile(r"^[a-zA-Z0-9.:_%\-]+$")
@@ -129,6 +141,7 @@ async def _prune_expired_buckets(db) -> None:
         await db.rate_limits.delete_many(
             {
                 "_id": {"$ne": _CONCURRENT_SLOT_ID},
+                "leases": {"$exists": False},
                 "expires_at": {"$lt": datetime.now(timezone.utc)},
             }
         )
@@ -201,50 +214,175 @@ async def check_story_creation_limits(db, client_ip: str, device_id: str) -> Lis
         raise HTTPException(status_code=503, detail=_LIMITER_UNAVAILABLE_DETAIL)
 
 
-async def acquire_story_creation_slot(db) -> None:
-    """Reserve a global concurrent creation slot before LLM work."""
+async def check_action_limits(db, device_id: str) -> List[str]:
+    """Reserve the per-device action quota; return consumed ids for rollback."""
+    consumed: List[str] = []
     try:
-        doc = await db.rate_limits.find_one_and_update(
-            {
-                "_id": _CONCURRENT_SLOT_ID,
-                "$or": [
-                    {"count": {"$lt": RATE_LIMIT_GLOBAL_CONCURRENT}},
-                    {"count": {"$exists": False}},
-                ],
-            },
-            {"$inc": {"count": 1}},
-            upsert=True,
-            return_document=ReturnDocument.AFTER,
+        await _prune_expired_buckets(db)
+        bucket_id = _window_bucket(
+            "action-device", device_id, RATE_LIMIT_ACTION_DEVICE_WINDOW_SEC
         )
-        if not doc or doc.get("count", 0) > RATE_LIMIT_GLOBAL_CONCURRENT:
-            if doc and doc.get("count", 0) > RATE_LIMIT_GLOBAL_CONCURRENT:
-                await db.rate_limits.update_one(
-                    {"_id": _CONCURRENT_SLOT_ID}, {"$inc": {"count": -1}}
-                )
-            raise HTTPException(status_code=429, detail=_RATE_LIMIT_GENERIC_DETAIL)
+        await _consume_bucket(
+            db, bucket_id, RATE_LIMIT_ACTION_DEVICE_MAX, RATE_LIMIT_ACTION_DEVICE_WINDOW_SEC
+        )
+        consumed.append(bucket_id)
+        return consumed
     except HTTPException:
+        await _rollback_bucket_reservations(db, consumed)
         raise
     except Exception:
-        logger.exception("concurrent slot acquire failure")
+        await _rollback_bucket_reservations(db, consumed)
+        logger.exception("rate_limit backend failure (action)")
         raise HTTPException(status_code=503, detail=_LIMITER_UNAVAILABLE_DETAIL)
 
 
-async def release_story_creation_slot(db) -> None:
-    """Release a global concurrent slot after creation completes or aborts."""
+# ---------------------------------------------------------------------------
+# Expiring concurrency leases (atomic reservation, ownership-safe release)
+# ---------------------------------------------------------------------------
+class ConcurrencyPoolFull(Exception):
+    """No free slot in the pool right now."""
+
+
+class ConcurrencyPoolUnavailable(Exception):
+    """Limiter storage failed; callers must fail closed."""
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_aware(value: Any) -> datetime:
+    if not isinstance(value, datetime):
+        return datetime.min.replace(tzinfo=timezone.utc)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+async def acquire_concurrency_lease(
+    db,
+    pool_id: str,
+    limit: int,
+    ttl_seconds: int,
+    *,
+    owner: str = "",
+) -> str:
+    """Atomically reserve one slot in ``pool_id``; return the lease token.
+
+    The reservation update only matches when fewer than ``limit`` unexpired
+    leases exist, so concurrent workers cannot over-reserve. Expired leases are
+    pruned first so a crashed worker's capacity is reclaimed automatically.
+    """
+    if limit <= 0:
+        raise ConcurrencyPoolFull()
+    token = str(uuid.uuid4())
+    now = _now()
+    lease = {
+        "token": token,
+        "owner": owner or token,
+        "acquired_at": now,
+        "expires_at": now + timedelta(seconds=max(1, int(ttl_seconds))),
+    }
     try:
+        try:
+            await db.rate_limits.update_one(
+                {"_id": pool_id},
+                {"$setOnInsert": {"leases": []}},
+                upsert=True,
+            )
+        except DuplicateKeyError:
+            pass  # two workers created the pool document at the same instant
         await db.rate_limits.update_one(
-            {"_id": _CONCURRENT_SLOT_ID},
-            {"$inc": {"count": -1}},
+            {"_id": pool_id},
+            {"$pull": {"leases": {"expires_at": {"$lte": now}}}},
         )
-        await db.rate_limits.update_one(
-            {"_id": _CONCURRENT_SLOT_ID, "count": {"$lt": 0}},
-            {"$set": {"count": 0}},
+        result = await db.rate_limits.update_one(
+            {
+                "_id": pool_id,
+                "$expr": {
+                    "$lt": [
+                        {
+                            "$size": {
+                                "$filter": {
+                                    "input": {"$ifNull": ["$leases", []]},
+                                    "cond": {"$gt": ["$$this.expires_at", now]},
+                                }
+                            }
+                        },
+                        int(limit),
+                    ]
+                },
+            },
+            {"$push": {"leases": lease}},
+        )
+    except Exception as exc:
+        logger.exception("concurrency lease acquire failed for pool %s", pool_id)
+        raise ConcurrencyPoolUnavailable(str(exc)) from exc
+    if result.matched_count == 0:
+        raise ConcurrencyPoolFull()
+    return token
+
+
+async def renew_concurrency_lease(db, pool_id: str, token: str, ttl_seconds: int) -> bool:
+    """Extend only the lease owned by ``token``."""
+    try:
+        result = await db.rate_limits.update_one(
+            {"_id": pool_id, "leases.token": token},
+            {
+                "$set": {
+                    "leases.$.expires_at": _now() + timedelta(seconds=max(1, int(ttl_seconds)))
+                }
+            },
         )
     except Exception:
-        logger.exception("concurrent slot release failure")
+        logger.exception("concurrency lease renew failed for pool %s", pool_id)
+        return False
+    return bool(result.matched_count)
+
+
+async def release_concurrency_lease(db, pool_id: str, token: str) -> bool:
+    """Release only the lease owned by ``token`` (never another worker's)."""
+    if not token:
+        return False
+    try:
+        result = await db.rate_limits.update_one(
+            {"_id": pool_id, "leases.token": token},
+            {"$pull": {"leases": {"token": token}}},
+        )
+    except Exception:
+        logger.exception("concurrency lease release failed for pool %s", pool_id)
+        return False
+    return bool(result.matched_count)
+
+
+async def count_active_leases(db, pool_id: str) -> int:
+    doc = await db.rate_limits.find_one({"_id": pool_id})
+    now = _now()
+    leases = (doc or {}).get("leases") or []
+    return sum(1 for lease in leases if _as_aware(lease.get("expires_at")) > now)
+
+
+async def acquire_story_creation_slot(db, *, owner: str = "") -> str:
+    """Reserve a global concurrent creation lease before LLM work; return token."""
+    try:
+        return await acquire_concurrency_lease(
+            db,
+            _CONCURRENT_SLOT_ID,
+            RATE_LIMIT_GLOBAL_CONCURRENT,
+            STORY_CREATION_LEASE_SEC,
+            owner=owner,
+        )
+    except ConcurrencyPoolFull:
+        raise HTTPException(status_code=429, detail=_RATE_LIMIT_GENERIC_DETAIL)
+    except ConcurrencyPoolUnavailable:
+        raise HTTPException(status_code=503, detail=_LIMITER_UNAVAILABLE_DETAIL)
+
+
+async def release_story_creation_slot(db, token: str) -> None:
+    """Release this worker's creation lease after creation completes or aborts."""
+    await release_concurrency_lease(db, _CONCURRENT_SLOT_ID, token)
 
 
 async def read_concurrent_slot_count(db) -> int:
-    """Test/diagnostic helper — current concurrent slot counter."""
-    doc = await db.rate_limits.find_one({"_id": _CONCURRENT_SLOT_ID})
-    return int((doc or {}).get("count", 0))
+    """Test/diagnostic helper — number of unexpired creation leases."""
+    return await count_active_leases(db, _CONCURRENT_SLOT_ID)

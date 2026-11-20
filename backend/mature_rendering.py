@@ -3,6 +3,17 @@
 The authoritative turn has already been generated and validated before this
 module runs.  Only prose may be replaced; state, choices, events, model locks,
 and replay inputs remain untouched.
+
+RELIABILITY RELEASE: the second-pass renderer is DISABLED
+(``MATURE_RENDERER_ENABLED = False``). Assessment showed the rewrite could
+change an event or object ownership while authoritative state stayed
+unchanged, and no reliable factual-equivalence check exists yet. Until a
+renderer redesign ships, every session — including existing sessions whose
+stored ``rendering_policy.route`` is ``mature_pinned`` — is served the
+validated canonical narrative. Stored content preferences, saved stories, and
+historical passages are not rewritten. ``mature_renderer_is_configured()``
+reports ``False`` so capability responses and the UI show the renderer as
+unavailable.
 """
 
 from __future__ import annotations
@@ -26,6 +37,12 @@ from mature_content import (
 )
 
 
+# Release switch. Not environment-driven on purpose: this release must not be
+# able to execute a second rendering-provider call under any configuration.
+MATURE_RENDERER_ENABLED = False
+RENDERER_DISABLED_STATUS = "safe_fallback_renderer_disabled"
+
+
 @dataclass(frozen=True)
 class MatureRenderResult:
     narrative: str
@@ -44,6 +61,8 @@ def _is_pinned_model_id(model_id: str) -> bool:
 
 
 def mature_renderer_is_configured() -> bool:
+    if not MATURE_RENDERER_ENABLED:
+        return False
     model_id = get_mature_model_id()
     return _is_pinned_model_id(model_id) and model_is_configured(model_id)
 
@@ -113,6 +132,14 @@ async def render_mature_presentation(
     if not preferences.get("adult_mode_enabled"):
         return MatureRenderResult(
             original, original_paragraphs, _policy(session, "standard")
+        )
+    if not MATURE_RENDERER_ENABLED:
+        # Canonical narrative is authoritative output in this release. No
+        # provider call is made regardless of configuration.
+        return MatureRenderResult(
+            original,
+            original_paragraphs,
+            _policy(session, RENDERER_DISABLED_STATUS),
         )
     if not configured:
         return MatureRenderResult(

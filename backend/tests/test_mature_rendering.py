@@ -1,3 +1,11 @@
+"""Mature renderer — reliability release: second-pass rendering is DISABLED.
+
+The strict single-model provider path is still exercised (it must never step
+to an automatic fallback), but ``render_mature_presentation`` must serve the
+validated canonical narrative without any provider call, for every session
+including those whose stored policy route is ``mature_pinned``.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -11,6 +19,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 import ai_service  # noqa: E402
 import mature_content  # noqa: E402
 import mature_rendering  # noqa: E402
+import provider_budget  # noqa: E402
 
 
 def _enable_adult_env(monkeypatch):
@@ -38,6 +47,23 @@ def _session():
     }
 
 
+def _configure_renderer(monkeypatch):
+    """Simulate a fully configured pinned renderer; the release switch must still win."""
+    _enable_adult_env(monkeypatch)
+    monkeypatch.setattr(
+        mature_rendering, "get_mature_model_id", lambda: "x-ai/grok-pinned-2026-01"
+    )
+    monkeypatch.setattr(mature_rendering, "model_is_configured", lambda _model: True)
+
+
+def _run_with_budget(coro):
+    async def inner():
+        async with provider_budget.active_budget(provider_budget.offline_budget()):
+            return await coro
+
+    return asyncio.run(inner())
+
+
 def test_strict_model_call_never_steps_to_automatic_fallback(monkeypatch):
     calls = []
 
@@ -50,7 +76,7 @@ def test_strict_model_call_never_steps_to_automatic_fallback(monkeypatch):
     monkeypatch.setattr(ai_service, "_call_model_once", fail_once)
 
     with pytest.raises(ai_service.AIServiceError):
-        asyncio.run(
+        _run_with_budget(
             ai_service.chat_completion_with_meta(
                 messages=[{"role": "user", "content": "render"}],
                 primary_model="x-ai/grok-pinned-2026-01",
@@ -63,104 +89,71 @@ def test_strict_model_call_never_steps_to_automatic_fallback(monkeypatch):
     assert calls == ["x-ai/grok-pinned-2026-01"]
 
 
-def test_configured_mature_route_rerenders_prose_only(monkeypatch):
-    _enable_adult_env(monkeypatch)
-    monkeypatch.setattr(
-        mature_rendering, "get_mature_model_id", lambda: "x-ai/grok-pinned-2026-01"
+def test_release_switch_is_off():
+    assert mature_rendering.MATURE_RENDERER_ENABLED is False
+
+
+def test_renderer_reports_unavailable_even_when_fully_configured(monkeypatch):
+    _configure_renderer(monkeypatch)
+    assert mature_rendering.mature_renderer_is_configured() is False
+    capabilities = mature_content.get_distribution_capabilities(
+        renderer_configured=mature_rendering.mature_renderer_is_configured()
     )
-    monkeypatch.setattr(mature_rendering, "model_is_configured", lambda _model: True)
-    captured = {}
+    assert capabilities["mature_renderer_configured"] is False
+    # Unrelated content capabilities are untouched by the renderer switch.
+    assert capabilities["adult_mode_available"] is True
 
-    async def fake_completion(**kwargs):
-        captured.update(kwargs)
-        return {"content": "<narrative>The rain struck harder against the broken gate.</narrative>"}
+
+def test_configured_mature_route_serves_canonical_prose_without_provider_call(monkeypatch):
+    _configure_renderer(monkeypatch)
+    called = {"n": 0}
+
+    async def rewrite_that_changes_events(**_kwargs):
+        called["n"] += 1
+        return {"content": "<narrative>Mara opens the gate with your key and escapes.</narrative>"}
 
     monkeypatch.setattr(
-        mature_rendering, "chat_completion_strict_with_meta", fake_completion
+        mature_rendering, "chat_completion_strict_with_meta", rewrite_that_changes_events
     )
 
+    canonical = "Mara waits outside the locked gate. The key remains in your pocket."
     result = asyncio.run(
         mature_rendering.render_mature_presentation(
-            _session(),
-            "The rain struck the broken gate.",
-            {"player_age": 30, "npcs": []},
+            _session(), canonical, {"player_age": 30, "npcs": [{"name": "Mara", "age": 30}]}
         )
     )
 
-    assert result.rendered is True
-    assert result.narrative == "The rain struck harder against the broken gate."
-    assert result.rendering_policy["last_status"] == "rendered_mature"
-    assert captured["model"] == "x-ai/grok-pinned-2026-01"
-    assert "Permissions are ceilings, never instructions" in captured["messages"][0]["content"]
+    assert called["n"] == 0
+    assert result.rendered is False
+    assert result.narrative == canonical
+    assert result.paragraphs == [canonical]
+    assert result.rendering_policy["last_status"] == mature_rendering.RENDERER_DISABLED_STATUS
+    assert result.rendering_policy["last_renderer"] == "standard"
+    # Stored route preference is preserved, not rewritten.
+    assert result.rendering_policy["route"] == "mature_pinned"
 
 
-def test_missing_or_unpinned_mature_model_falls_back_without_call(monkeypatch):
-    _enable_adult_env(monkeypatch)
-    monkeypatch.setattr(mature_rendering, "get_mature_model_id", lambda: "x-ai/grok/latest")
-    called = False
-
-    async def should_not_call(**_kwargs):
-        nonlocal called
-        called = True
-        return {"content": "unexpected"}
-
-    monkeypatch.setattr(
-        mature_rendering, "chat_completion_strict_with_meta", should_not_call
-    )
-
+def test_standard_sessions_are_unchanged(monkeypatch):
+    _configure_renderer(monkeypatch)
+    session = {"mature_content": mature_content.default_mature_content(), "rendering_policy": {}}
     result = asyncio.run(
-        mature_rendering.render_mature_presentation(
-            _session(), "Canonical safe prose.", {"player_age": 30, "npcs": []}
-        )
+        mature_rendering.render_mature_presentation(session, "Canonical safe prose.", {})
     )
-
-    assert called is False
     assert result.rendered is False
     assert result.narrative == "Canonical safe prose."
-    assert result.rendering_policy["last_status"] == "safe_fallback_renderer_unavailable"
+    assert result.rendering_policy["last_status"] == "standard"
 
 
-def test_provider_failure_keeps_canonical_prose(monkeypatch):
-    _enable_adult_env(monkeypatch)
-    monkeypatch.setattr(
-        mature_rendering, "get_mature_model_id", lambda: "x-ai/grok-pinned-2026-01"
-    )
-    monkeypatch.setattr(mature_rendering, "model_is_configured", lambda _model: True)
+def test_disabled_renderer_never_reaches_provider_even_without_budget(monkeypatch):
+    """No active provider budget exists here; a provider call would fail closed.
 
-    async def fail(**_kwargs):
-        raise ai_service.AIServiceError("provider down")
-
-    monkeypatch.setattr(mature_rendering, "chat_completion_strict_with_meta", fail)
-    result = asyncio.run(
-        mature_rendering.render_mature_presentation(
-            _session(), "Canonical safe prose.", {"player_age": 30, "npcs": []}
-        )
-    )
-
-    assert result.rendered is False
-    assert result.narrative == "Canonical safe prose."
-    assert result.rendering_policy["last_status"] == "safe_fallback_provider_error"
-
-
-def test_renderer_output_cannot_introduce_sexual_context_with_ambiguous_ages(monkeypatch):
-    _enable_adult_env(monkeypatch)
-    monkeypatch.setattr(
-        mature_rendering, "get_mature_model_id", lambda: "x-ai/grok-pinned-2026-01"
-    )
-    monkeypatch.setattr(mature_rendering, "model_is_configured", lambda _model: True)
-
-    async def unsafe_output(**_kwargs):
-        return {"content": "<narrative>They had sex beside the fire.</narrative>"}
-
-    monkeypatch.setattr(
-        mature_rendering, "chat_completion_strict_with_meta", unsafe_output
-    )
+    The renderer must return before that point, proving it never attempts one.
+    """
+    _configure_renderer(monkeypatch)
     result = asyncio.run(
         mature_rendering.render_mature_presentation(
             _session(), "They sat beside the fire.", {"npcs": []}
         )
     )
-
     assert result.rendered is False
     assert result.narrative == "They sat beside the fire."
-    assert result.rendering_policy["last_status"] == "safe_fallback_age_boundary"

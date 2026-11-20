@@ -28,13 +28,13 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 import action_concurrency as ac  # noqa: E402
 import gateway  # noqa: E402
 import player_api  # noqa: E402
-import secrets  # noqa: E402
+import story_secrets as secrets  # noqa: E402
 import server  # noqa: E402
+import turn_commit  # noqa: E402
 from action_concurrency import (  # noqa: E402
     ACTION_CONFLICT_DETAIL,
     ACTION_LOCK_FIELDS,
     ActionLeaseConflict,
-    ActionLeaseLost,
 )
 from ai_service import AIServiceError  # noqa: E402
 from security import ADMIN_API_KEY_HEADER, DEVICE_ID_HEADER  # noqa: E402
@@ -503,10 +503,10 @@ class TestStoryActionConflict:
 
 
 # ---------------------------------------------------------------------------
-# Persistence CAS (16–20)
+# Transactional commit precondition (16–20)
 # ---------------------------------------------------------------------------
 class TestPersistenceCAS:
-    def test_cas_conflict_returns_409_not_restore_snapshot(self, mongo_env):
+    def test_cas_conflict_raises_precondition_failed_and_writes_nothing(self, mongo_env):
         device_id = f"dev_{uuid.uuid4()}"
         rolling = _registry(_entry(SECRET_A))
         sid = _insert_session(mongo_env, device_id, rolling=rolling)
@@ -539,16 +539,15 @@ class TestPersistenceCAS:
         update_set = {"turn_count": 2, "last_state": {"Health": "stable"}}
 
         async def run():
-            with pytest.raises(ActionLeaseLost):
-                await server._persist_story_action_turn(
+            with pytest.raises(turn_commit.CommitPreconditionFailed):
+                await server._commit_story_action_turn(
                     sid,
-                    2,
                     turn_doc,
                     update_set,
-                    {"turn_count": 1, "rolling_state": rolling},
                     {"model_used": "test"},
                     lease_token=lease_token,
                     expected_turn_count=1,
+                    expected_revision=None,
                 )
 
         _run_db(run())
@@ -557,7 +556,7 @@ class TestPersistenceCAS:
         assert stored["rolling_state"]["secret_registry"][0]["revealed"] is True
         assert mongo_env.turns.count_documents({"session_id": sid, "id": turn_doc["id"]}) == 0
 
-    def test_lost_lease_deletes_only_exact_inserted_turn(self, mongo_env):
+    def test_lost_lease_never_touches_winner_turn(self, mongo_env):
         device_id = f"dev_{uuid.uuid4()}"
         sid = _insert_session(mongo_env, device_id, turn_count=1)
         winner_id = str(uuid.uuid4())
@@ -598,21 +597,60 @@ class TestPersistenceCAS:
         }
 
         async def run():
-            with pytest.raises(ActionLeaseLost):
-                await server._persist_story_action_turn(
+            with pytest.raises(turn_commit.CommitPreconditionFailed):
+                await server._commit_story_action_turn(
                     sid,
-                    2,
                     turn_doc,
                     {"turn_count": 2},
-                    {"turn_count": 1},
                     {},
                     lease_token=lease_token,
                     expected_turn_count=1,
+                    expected_revision=None,
                 )
 
         _run_db(run())
         assert mongo_env.turns.count_documents({"session_id": sid, "id": winner_id}) == 1
         assert mongo_env.turns.count_documents({"session_id": sid, "id": loser_id}) == 0
+
+    def test_revision_mismatch_blocks_commit_even_when_turn_count_matches(self, mongo_env):
+        """Reset returns turn_count to the same value; the revision check still rejects."""
+        device_id = f"dev_{uuid.uuid4()}"
+        sid = _insert_session(mongo_env, device_id, turn_count=1)
+        lease_token = str(uuid.uuid4())
+        _set_active_lease(
+            mongo_env, sid, lease_token, expires_at=FIXED_NOW + timedelta(seconds=600)
+        )
+        mongo_env.sessions.update_one({"id": sid}, {"$set": {"session_revision": 7}})
+        turn_doc = {
+            "id": str(uuid.uuid4()),
+            "session_id": sid,
+            "turn_number": 2,
+            "player_action": "stale",
+            "narrative": "stale",
+            "paragraphs": ["stale"],
+            "choices": [],
+            "state": {},
+            "ledger": {},
+            "rolling_state": {},
+        }
+
+        async def run():
+            with pytest.raises(turn_commit.CommitPreconditionFailed):
+                await server._commit_story_action_turn(
+                    sid,
+                    turn_doc,
+                    {"turn_count": 2},
+                    {},
+                    lease_token=lease_token,
+                    expected_turn_count=1,
+                    expected_revision=6,
+                )
+
+        _run_db(run())
+        stored = mongo_env.sessions.find_one({"id": sid})
+        assert stored["turn_count"] == 1
+        assert stored["session_revision"] == 7
+        assert mongo_env.turns.count_documents({"session_id": sid}) == 0
 
 
 # ---------------------------------------------------------------------------

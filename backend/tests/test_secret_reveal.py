@@ -27,8 +27,10 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import gateway  # noqa: E402
 import player_api  # noqa: E402
-import secrets  # noqa: E402
+import story_secrets as secrets  # noqa: E402
 import server  # noqa: E402
+import action_concurrency as ac  # noqa: E402
+import turn_commit  # noqa: E402
 from ai_service import AIServiceError  # noqa: E402
 from memory import enforce_context_budget  # noqa: E402
 from security import ADMIN_API_KEY_HEADER, DEVICE_ID_HEADER  # noqa: E402
@@ -642,7 +644,7 @@ def test_different_registry_positions_do_not_collide():
 
 
 def test_secret_id_path_has_no_random_or_time_dependent_generation():
-    source = Path(__file__).resolve().parents[1] / "secrets.py"
+    source = Path(__file__).resolve().parents[1] / "story_secrets.py"
     text = source.read_text(encoding="utf-8")
     forbidden = ("uuid4", "uuid.uuid4", "time.time", "datetime.now", "random.", "hash(")
     for token in forbidden:
@@ -962,111 +964,14 @@ def test_finalize_validated_turn_scrubs_without_touching_registry():
 # ---------------------------------------------------------------------------
 # Persistence atomicity / rollback
 # ---------------------------------------------------------------------------
-def test_rollback_removes_inserted_turn_when_session_not_updated(mongo_env):
-    device_id = f"dev_{uuid.uuid4()}"
-    rolling = _registry(_entry(SECRET_A))
-    sid = _insert_session(mongo_env, device_id, rolling)
-    turn_id = str(uuid.uuid4())
-    snapshot = {
-        "turn_count": 1,
-        "rolling_state": copy.deepcopy(rolling),
-        "last_state": {"Health": "stable"},
-    }
-    mongo_env.turns.insert_one(
-        {
-            "id": turn_id,
-            "session_id": sid,
-            "turn_number": 2,
-            "player_action": "Reveal my secret.",
-            "narrative": "confession",
-            "paragraphs": ["confession"],
-            "choices": [],
-            "state": {"Health": "stable"},
-            "ledger": {},
-            "rolling_state": _registry(_entry(SECRET_A, revealed=True, revealed_turn=2)),
-        }
+def _reveal_commit_args(sid: str, rolling, lease_token: str, *, turn_number: int = 2, expected_turn_count: int = 1):
+    revealed = _registry(
+        _entry(SECRET_A, revealed=True, revealed_turn=turn_number, reveal_mode="player_confession")
     )
-
-    async def run():
-        await server._rollback_story_action_persist(
-            sid,
-            turn_id,
-            snapshot,
-            None,
-            turn_inserted=True,
-            session_updated=False,
-        )
-
-    _run_db(run())
-    assert mongo_env.turns.count_documents({"session_id": sid, "id": turn_id}) == 0
-    stored = mongo_env.sessions.find_one({"id": sid})
-    assert stored["turn_count"] == 1
-    assert stored["rolling_state"]["secret_registry"][0]["revealed"] is False
-
-
-def test_rollback_restores_session_and_removes_turn(mongo_env):
-    device_id = f"dev_{uuid.uuid4()}"
-    rolling = _registry(_entry(SECRET_A))
-    sid = _insert_session(mongo_env, device_id, rolling)
-    turn_id = str(uuid.uuid4())
-    snapshot = {
-        "turn_count": 1,
-        "rolling_state": copy.deepcopy(rolling),
-        "last_state": {"Health": "stable"},
-        "debug_mode": True,
-    }
-    revealed = _registry(_entry(SECRET_A, revealed=True, revealed_turn=2, reveal_mode="player_confession"))
-    attempted_update = {"turn_count": 2, "rolling_state": revealed}
-    mongo_env.sessions.update_one({"id": sid}, {"$set": attempted_update})
-    mongo_env.turns.insert_one(
-        {
-            "id": turn_id,
-            "session_id": sid,
-            "turn_number": 2,
-            "player_action": "Reveal my secret.",
-            "narrative": "confession",
-            "paragraphs": ["confession"],
-            "choices": [],
-            "state": {"Health": "stable"},
-            "ledger": {},
-            "rolling_state": revealed,
-        }
-    )
-
-    async def run():
-        await server._rollback_story_action_persist(
-            sid,
-            turn_id,
-            snapshot,
-            attempted_update,
-            turn_inserted=True,
-            session_updated=True,
-        )
-
-    _run_db(run())
-    assert mongo_env.turns.count_documents({"session_id": sid, "id": turn_id}) == 0
-    stored = mongo_env.sessions.find_one({"id": sid})
-    assert stored["turn_count"] == 1
-    assert stored["rolling_state"]["secret_registry"][0]["revealed"] is False
-
-
-def test_persist_story_action_turn_rolls_back_when_cas_update_fails(mongo_env, monkeypatch):
-    device_id = f"dev_{uuid.uuid4()}"
-    rolling = _registry(_entry(SECRET_A))
-    sid = _insert_session(mongo_env, device_id, rolling)
-    lease_token = _attach_action_lease(mongo_env, sid)
-    revealed = _registry(_entry(SECRET_A, revealed=True, revealed_turn=2, reveal_mode="player_confession"))
-    snapshot = {
-        "turn_count": 1,
-        "rolling_state": copy.deepcopy(rolling),
-        "last_state": {"Health": "stable"},
-        "debug_mode": True,
-        "model_switches": [],
-    }
     turn_doc = {
         "id": str(uuid.uuid4()),
         "session_id": sid,
-        "turn_number": 2,
+        "turn_number": turn_number,
         "player_action": "Reveal my secret.",
         "narrative": "confession",
         "paragraphs": ["confession"],
@@ -1076,149 +981,176 @@ def test_persist_story_action_turn_rolls_back_when_cas_update_fails(mongo_env, m
         "rolling_state": revealed,
     }
     update_set = {
-        "turn_count": 2,
+        "turn_count": turn_number,
         "last_state": {"Health": "stable"},
         "rolling_state": revealed,
         "debug_mode": True,
         "updated_at": "2026-01-01T00:00:00Z",
     }
+    return dict(
+        session_id=sid,
+        turn_doc=turn_doc,
+        update_set=update_set,
+        meta={"model_used": "test"},
+        lease_token=lease_token,
+        expected_turn_count=expected_turn_count,
+        expected_revision=None,
+    )
 
-    async def boom_cas(*_args, **_kwargs):
-        raise RuntimeError("session CAS failed")
 
-    monkeypatch.setattr(server, "_cas_update_story_action_session", boom_cas)
+@pytest.fixture()
+def checkpoint_hook():
+    yield turn_commit.set_checkpoint_hook_for_tests
+    turn_commit.set_checkpoint_hook_for_tests(None)
 
-    async def run():
-        from fastapi import HTTPException
 
-        with pytest.raises(HTTPException) as exc:
-            await server._persist_story_action_turn(
-                sid,
-                2,
-                turn_doc,
-                update_set,
-                snapshot,
-                {"model_used": "test"},
-                lease_token=lease_token,
-                expected_turn_count=1,
-            )
-        assert exc.value.status_code == 502
-
-    _run_db(run())
-    assert mongo_env.turns.count_documents({"session_id": sid, "turn_number": 2}) == 0
+def _assert_registry_unchanged(mongo_env, sid: str, *, turn_count: int = 1):
     stored = mongo_env.sessions.find_one({"id": sid})
-    assert stored["turn_count"] == 1
+    assert stored["turn_count"] == turn_count
     assert stored["rolling_state"]["secret_registry"][0]["revealed"] is False
+    assert mongo_env.turns.count_documents({"session_id": sid, "turn_number": turn_count + 1}) == 0
 
 
-def test_turn_insert_failure_leaves_session_registry_unchanged(mongo_env, monkeypatch):
+@pytest.mark.parametrize(
+    "checkpoint",
+    ["before_session_update", "after_session_update", "after_turn_insert", "before_commit"],
+)
+def test_interruption_before_commit_leaves_registry_and_turns_untouched(
+    mongo_env, checkpoint_hook, checkpoint
+):
+    """Interrupting at any persistence boundary before commit writes nothing."""
     device_id = f"dev_{uuid.uuid4()}"
     rolling = _registry(_entry(SECRET_A))
     sid = _insert_session(mongo_env, device_id, rolling)
     lease_token = _attach_action_lease(mongo_env, sid)
-    revealed = _registry(_entry(SECRET_A, revealed=True, revealed_turn=2, reveal_mode="player_confession"))
-    snapshot = {
-        "turn_count": 1,
-        "rolling_state": copy.deepcopy(rolling),
-        "last_state": {"Health": "stable"},
-        "debug_mode": True,
-        "model_switches": [],
-    }
-    turn_doc = {
-        "id": str(uuid.uuid4()),
-        "session_id": sid,
-        "turn_number": 2,
-        "player_action": "Reveal my secret.",
-        "narrative": "confession",
-        "paragraphs": ["confession"],
-        "choices": [],
-        "state": {"Health": "stable"},
-        "ledger": {},
-        "rolling_state": revealed,
-    }
-    update_set = {"turn_count": 2, "rolling_state": revealed, "last_state": {"Health": "stable"}}
+    args = _reveal_commit_args(sid, rolling, lease_token)
 
-    async def fail_insert(_doc):
-        raise RuntimeError("insert failed")
+    def interrupt(name):
+        if name == checkpoint:
+            raise asyncio.CancelledError(f"interrupted at {name}")
 
-    monkeypatch.setattr(server, "_insert_story_action_turn", fail_insert)
+    checkpoint_hook(interrupt)
 
     async def run():
-        from fastapi import HTTPException
-
-        with pytest.raises(HTTPException) as exc:
-            await server._persist_story_action_turn(
-                sid,
-                2,
-                turn_doc,
-                update_set,
-                snapshot,
-                {"model_used": "test"},
-                lease_token=lease_token,
-                expected_turn_count=1,
-            )
-        assert exc.value.status_code == 502
+        with pytest.raises(asyncio.CancelledError):
+            await server._commit_story_action_turn(**args)
 
     _run_db(run())
+    _assert_registry_unchanged(mongo_env, sid)
+    # Lease still owned by the interrupted worker (commit never cleared it);
+    # the next attempt is only blocked until it expires — never permanently.
     stored = mongo_env.sessions.find_one({"id": sid})
-    assert stored["turn_count"] == 1
-    assert stored["rolling_state"]["secret_registry"][0]["revealed"] is False
-    assert mongo_env.turns.count_documents({"session_id": sid}) == 0
+    assert stored["action_lock_token"] == lease_token
 
 
-def test_session_update_failure_rolls_back_inserted_turn(mongo_env, monkeypatch):
+def test_interruption_after_commit_keeps_turn_and_registry_consistent(
+    mongo_env, checkpoint_hook
+):
+    """A response lost after commit leaves the turn AND the session state visible together."""
     device_id = f"dev_{uuid.uuid4()}"
     rolling = _registry(_entry(SECRET_A))
     sid = _insert_session(mongo_env, device_id, rolling)
     lease_token = _attach_action_lease(mongo_env, sid)
-    revealed = _registry(_entry(SECRET_A, revealed=True, revealed_turn=2, reveal_mode="player_confession"))
-    snapshot = {
-        "turn_count": 1,
-        "rolling_state": copy.deepcopy(rolling),
-        "last_state": {"Health": "stable"},
-        "debug_mode": True,
-        "model_switches": [],
-    }
-    turn_doc = {
-        "id": str(uuid.uuid4()),
-        "session_id": sid,
-        "turn_number": 2,
-        "player_action": "Reveal my secret.",
-        "narrative": "confession",
-        "paragraphs": ["confession"],
-        "choices": [],
-        "state": {"Health": "stable"},
-        "ledger": {},
-        "rolling_state": revealed,
-    }
-    update_set = {"turn_count": 2, "rolling_state": revealed, "last_state": {"Health": "stable"}}
+    args = _reveal_commit_args(sid, rolling, lease_token)
 
-    async def fail_update(*_args, **_kwargs):
-        raise RuntimeError("session update failed")
+    def interrupt(name):
+        if name == "after_commit":
+            raise asyncio.CancelledError("response lost after commit")
 
-    monkeypatch.setattr(server, "_cas_update_story_action_session", fail_update)
+    checkpoint_hook(interrupt)
 
     async def run():
-        from fastapi import HTTPException
-
-        with pytest.raises(HTTPException) as exc:
-            await server._persist_story_action_turn(
-                sid,
-                2,
-                turn_doc,
-                update_set,
-                snapshot,
-                {"model_used": "test"},
-                lease_token=lease_token,
-                expected_turn_count=1,
-            )
-        assert exc.value.status_code == 502
+        with pytest.raises(asyncio.CancelledError):
+            await server._commit_story_action_turn(**args)
 
     _run_db(run())
-    assert mongo_env.turns.count_documents({"session_id": sid, "turn_number": 2}) == 0
+    stored = mongo_env.sessions.find_one({"id": sid})
+    assert stored["turn_count"] == 2
+    assert stored["rolling_state"]["secret_registry"][0]["revealed"] is True
+    assert stored.get("action_lock_token") is None
+    assert mongo_env.turns.count_documents({"session_id": sid, "turn_number": 2}) == 1
+
+
+def test_commit_precondition_failure_writes_nothing_and_preserves_winner(mongo_env):
+    """A stale worker whose turn_count no longer matches cannot touch the winner's state."""
+    device_id = f"dev_{uuid.uuid4()}"
+    rolling = _registry(_entry(SECRET_A))
+    sid = _insert_session(mongo_env, device_id, rolling)
+    lease_token = _attach_action_lease(mongo_env, sid)
+    winner_revealed = _registry(
+        _entry(SECRET_A, revealed=True, revealed_turn=2, reveal_mode="player_confession")
+    )
+    mongo_env.sessions.update_one(
+        {"id": sid}, {"$set": {"turn_count": 2, "rolling_state": winner_revealed}}
+    )
+    args = _reveal_commit_args(sid, rolling, lease_token)
+
+    async def run():
+        with pytest.raises(turn_commit.CommitPreconditionFailed):
+            await server._commit_story_action_turn(**args)
+
+    _run_db(run())
+    stored = mongo_env.sessions.find_one({"id": sid})
+    assert stored["turn_count"] == 2
+    assert stored["rolling_state"]["secret_registry"][0]["revealed"] is True
+    assert mongo_env.turns.count_documents({"session_id": sid, "id": args["turn_doc"]["id"]}) == 0
+
+
+def test_turn_insert_failure_inside_transaction_rolls_back_session(mongo_env):
+    """If the turn row cannot be inserted (duplicate number) the session update is undone."""
+    device_id = f"dev_{uuid.uuid4()}"
+    rolling = _registry(_entry(SECRET_A))
+    sid = _insert_session(mongo_env, device_id, rolling)
+    lease_token = _attach_action_lease(mongo_env, sid)
+    _run_db(ac.ensure_action_concurrency_indexes(server.db))
+    mongo_env.turns.insert_one(
+        {
+            "id": str(uuid.uuid4()),
+            "session_id": sid,
+            "turn_number": 2,
+            "player_action": "earlier",
+            "narrative": "earlier",
+            "paragraphs": ["earlier"],
+            "choices": [],
+            "state": {},
+            "ledger": {},
+            "rolling_state": copy.deepcopy(rolling),
+        }
+    )
+    args = _reveal_commit_args(sid, rolling, lease_token)
+
+    async def run():
+        with pytest.raises(turn_commit.CommitPreconditionFailed):
+            await server._commit_story_action_turn(**args)
+
+    _run_db(run())
     stored = mongo_env.sessions.find_one({"id": sid})
     assert stored["turn_count"] == 1
     assert stored["rolling_state"]["secret_registry"][0]["revealed"] is False
+    assert mongo_env.turns.count_documents({"session_id": sid, "turn_number": 2}) == 1
+    assert mongo_env.turns.count_documents({"session_id": sid, "id": args["turn_doc"]["id"]}) == 0
+
+
+def test_storage_failure_inside_transaction_leaves_registry_unchanged(mongo_env, checkpoint_hook):
+    """A database error after the session update aborts the transaction entirely."""
+    device_id = f"dev_{uuid.uuid4()}"
+    rolling = _registry(_entry(SECRET_A))
+    sid = _insert_session(mongo_env, device_id, rolling)
+    lease_token = _attach_action_lease(mongo_env, sid)
+    args = _reveal_commit_args(sid, rolling, lease_token)
+
+    def storage_error(name):
+        if name == "after_turn_insert":
+            raise RuntimeError("storage failed")
+
+    checkpoint_hook(storage_error)
+
+    async def run():
+        with pytest.raises(RuntimeError):
+            await server._commit_story_action_turn(**args)
+
+    _run_db(run())
+    _assert_registry_unchanged(mongo_env, sid)
 
 
 def test_successful_persistence_writes_one_turn_and_one_reveal_transition(client, mongo_env):
@@ -1241,27 +1173,25 @@ def test_successful_persistence_writes_one_turn_and_one_reveal_transition(client
 
 
 def test_retry_after_persistence_failure_reveals_exactly_once(client, mongo_env, monkeypatch):
+    real_commit = server._commit_story_action_turn
+    attempts = {"n": 0}
+
+    async def fail_once_commit(*args, **kwargs):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise turn_commit.CommitOutcomeUnknown("simulated lost acknowledgement, not committed")
+        return await real_commit(*args, **kwargs)
+
+    monkeypatch.setattr(server, "_commit_story_action_turn", fail_once_commit)
     device_id = f"dev_{uuid.uuid4()}"
     rolling = _registry(_entry(SECRET_A))
     sid = _insert_session(mongo_env, device_id, rolling)
-    real_persist = server._persist_story_action_turn
-    attempts = {"n": 0}
-
-    async def fail_once_persist(*args, **kwargs):
-        attempts["n"] += 1
-        if attempts["n"] == 1:
-            from fastapi import HTTPException
-
-            raise HTTPException(status_code=502, detail=server._STORY_ENGINE_UNAVAILABLE)
-        return await real_persist(*args, **kwargs)
-
-    monkeypatch.setattr(server, "_persist_story_action_turn", fail_once_persist)
     first = client.post(
         "/api/story/action",
         json={"session_id": sid, "action_text": "Reveal my secret.", "debug_mode": True},
         headers={DEVICE_ID_HEADER: device_id},
     )
-    assert first.status_code == 502
+    assert first.status_code == 503
     second = client.post(
         "/api/story/action",
         json={"session_id": sid, "action_text": "Reveal my secret.", "debug_mode": True},
@@ -1277,12 +1207,12 @@ def test_retry_after_persistence_failure_reveals_exactly_once(client, mongo_env,
     assert sum(1 for t in reveal_turns if t["rolling_state"]["secret_registry"][0]["revealed"]) == 1
 
 
-def test_rollback_does_not_delete_earlier_turn(mongo_env):
+def test_aborted_commit_does_not_delete_earlier_turn(mongo_env, checkpoint_hook):
     device_id = f"dev_{uuid.uuid4()}"
     rolling = _registry(_entry(SECRET_A))
     sid = _insert_session(mongo_env, device_id, rolling, turn_count=2)
+    lease_token = _attach_action_lease(mongo_env, sid)
     earlier_id = str(uuid.uuid4())
-    failed_id = str(uuid.uuid4())
     mongo_env.turns.insert_one(
         {
             "id": earlier_id,
@@ -1297,158 +1227,23 @@ def test_rollback_does_not_delete_earlier_turn(mongo_env):
             "rolling_state": copy.deepcopy(rolling),
         }
     )
-    snapshot = {
-        "turn_count": 2,
-        "rolling_state": copy.deepcopy(rolling),
-        "last_state": {"Health": "stable"},
-    }
-    mongo_env.turns.insert_one(
-        {
-            "id": failed_id,
-            "session_id": sid,
-            "turn_number": 3,
-            "player_action": "Reveal my secret.",
-            "narrative": "failed turn",
-            "paragraphs": ["failed turn"],
-            "choices": [],
-            "state": {"Health": "stable"},
-            "ledger": {},
-            "rolling_state": _registry(_entry(SECRET_A, revealed=True, revealed_turn=3)),
-        }
-    )
+    args = _reveal_commit_args(sid, rolling, lease_token, turn_number=3, expected_turn_count=2)
+
+    def interrupt(name):
+        if name == "before_commit":
+            raise RuntimeError("abort before commit")
+
+    checkpoint_hook(interrupt)
 
     async def run():
-        await server._rollback_story_action_persist(
-            sid,
-            failed_id,
-            snapshot,
-            None,
-            turn_inserted=True,
-            session_updated=False,
-        )
+        with pytest.raises(RuntimeError):
+            await server._commit_story_action_turn(**args)
 
     _run_db(run())
     assert mongo_env.turns.count_documents({"session_id": sid, "id": earlier_id}) == 1
-    assert mongo_env.turns.count_documents({"session_id": sid, "id": failed_id}) == 0
+    assert mongo_env.turns.count_documents({"session_id": sid, "turn_number": 3}) == 0
     stored = mongo_env.sessions.find_one({"id": sid})
     assert stored["turn_count"] == 2
-
-
-def test_rollback_deletes_only_exact_turn_id_when_turn_numbers_collide(mongo_env):
-    device_id = f"dev_{uuid.uuid4()}"
-    rolling = _registry(_entry(SECRET_A))
-    sid = _insert_session(mongo_env, device_id, rolling)
-    try:
-        mongo_env.turns.drop_index("turns_session_turn_unique")
-    except Exception:
-        pass
-    winner_id = str(uuid.uuid4())
-    loser_id = str(uuid.uuid4())
-    winner_doc = {
-        "id": winner_id,
-        "session_id": sid,
-        "turn_number": 2,
-        "player_action": "winner",
-        "narrative": "Winner turn.",
-        "paragraphs": ["Winner turn."],
-        "choices": [],
-        "state": {"Health": "stable"},
-        "ledger": {},
-        "rolling_state": copy.deepcopy(rolling),
-    }
-    loser_doc = {
-        "id": loser_id,
-        "session_id": sid,
-        "turn_number": 2,
-        "player_action": "loser",
-        "narrative": "Loser turn.",
-        "paragraphs": ["Loser turn."],
-        "choices": [],
-        "state": {"Health": "stable"},
-        "ledger": {},
-        "rolling_state": copy.deepcopy(rolling),
-    }
-    mongo_env.turns.insert_one(winner_doc)
-    mongo_env.turns.insert_one(loser_doc)
-
-    async def run():
-        await server._rollback_story_action_persist(
-            sid,
-            loser_id,
-            {"turn_count": 1, "rolling_state": copy.deepcopy(rolling)},
-            None,
-            turn_inserted=True,
-            session_updated=False,
-        )
-
-    _run_db(run())
-    assert mongo_env.turns.count_documents({"session_id": sid, "id": winner_id}) == 1
-    assert mongo_env.turns.count_documents({"session_id": sid, "id": loser_id}) == 0
-
-
-def test_rollback_idempotent_when_exact_turn_already_absent(mongo_env):
-    device_id = f"dev_{uuid.uuid4()}"
-    sid = _insert_session(mongo_env, device_id, _registry(_entry(SECRET_A)))
-    missing_id = str(uuid.uuid4())
-
-    async def run():
-        await server._rollback_story_action_persist(
-            sid,
-            missing_id,
-            {"turn_count": 1, "rolling_state": _registry(_entry(SECRET_A))},
-            None,
-            turn_inserted=True,
-            session_updated=False,
-        )
-        await server._rollback_story_action_persist(
-            sid,
-            missing_id,
-            {"turn_count": 1, "rolling_state": _registry(_entry(SECRET_A))},
-            None,
-            turn_inserted=True,
-            session_updated=False,
-        )
-
-    _run_db(run())
-
-
-def test_session_rollback_skipped_when_compare_and_set_misses(mongo_env):
-    device_id = f"dev_{uuid.uuid4()}"
-    rolling = _registry(_entry(SECRET_A))
-    sid = _insert_session(mongo_env, device_id, rolling)
-    turn_id = str(uuid.uuid4())
-    winner_revealed = _registry(
-        _entry(SECRET_A, revealed=True, revealed_turn=2, reveal_mode="player_confession")
-    )
-    loser_revealed = _registry(
-        _entry("forged secret text", revealed=True, revealed_turn=2, reveal_mode="player_confession")
-    )
-    mongo_env.sessions.update_one(
-        {"id": sid},
-        {"$set": {"turn_count": 2, "rolling_state": winner_revealed}},
-    )
-    snapshot = {
-        "turn_count": 1,
-        "rolling_state": copy.deepcopy(rolling),
-        "last_state": {"Health": "stable"},
-    }
-    attempted_update = {"turn_count": 2, "rolling_state": loser_revealed}
-
-    async def run():
-        await server._rollback_story_action_persist(
-            sid,
-            turn_id,
-            snapshot,
-            attempted_update,
-            turn_inserted=False,
-            session_updated=True,
-        )
-
-    _run_db(run())
-    stored = mongo_env.sessions.find_one({"id": sid})
-    assert stored["turn_count"] == 2
-    assert stored["rolling_state"]["secret_registry"][0]["secret"] == SECRET_A
-    assert stored["rolling_state"]["secret_registry"][0]["revealed"] is True
 
 
 def test_debug_telemetry_contains_no_secret_text(client, mongo_env):

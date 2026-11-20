@@ -17,6 +17,7 @@ import {
   resolveGuidedWorldSelection,
 } from "../src/newstory/GuidedStart";
 import type { GuidedStartSelections } from "../src/newstory/types";
+import type { TalentValue } from "../src/newstory/options";
 
 jest.setTimeout(25000);
 
@@ -370,7 +371,9 @@ describe("new story onboarding redesign", () => {
       fear: "failure",
       whoMatters: "nobody",
       ghost: undefined,
-      talent: "",
+      // Malformed runtime input on purpose: an empty string is outside the
+      // closed TalentValue catalogue and must be dropped by omitEmptySetup.
+      talent: "" as unknown as TalentValue,
       worldElements: "",
     });
     expect(request.genre).toBe("horror");
@@ -382,6 +385,8 @@ describe("new story onboarding redesign", () => {
     expect(request.custom_world_setup.secret).toBeUndefined();
     expect(request.custom_world_setup.worldPace).toBeUndefined();
     expect(request.custom_world_setup.ghost).toBeUndefined();
+    expect(request.custom_world_setup.talent).toBeUndefined();
+    expect(request.custom_world_setup.worldElements).toBeUndefined();
     expect(request.custom_world_setup.worldGenre).toBeUndefined();
   });
 

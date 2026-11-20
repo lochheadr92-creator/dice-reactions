@@ -18,6 +18,17 @@ import ai_config  # noqa: E402
 import ai_service  # noqa: E402
 
 
+
+def _run_with_budget(coro):
+    """Provider loop requires an active budget (reliability release)."""
+    import provider_budget
+
+    async def inner():
+        async with provider_budget.active_budget(provider_budget.offline_budget()):
+            return await coro
+
+    return asyncio.run(inner())
+
 def test_supported_models_catalogue_excludes_haiku():
     models = ai_service.get_supported_models()
     ids = [m["id"] for m in models]
@@ -60,7 +71,7 @@ def test_uncensored_never_in_automatic_chain():
 def test_haiku_primary_is_never_called_automatically():
     calls: list[str] = []
 
-    async def fake_once(model_id, messages, temp, mt, extra_headers=None):
+    async def fake_once(model_id, messages, temp, mt, extra_headers=None, **_kwargs):
         calls.append(model_id)
         return "ok", {
             "model": model_id,
@@ -74,7 +85,7 @@ def test_haiku_primary_is_never_called_automatically():
         }
 
     with patch.object(ai_service, "_call_model_once", new=AsyncMock(side_effect=fake_once)):
-        result = asyncio.run(
+        result = _run_with_budget(
             ai_service.chat_completion_with_meta(
                 messages=[{"role": "user", "content": "hi"}],
                 primary_model=ai_config.MODEL_HAIKU,
@@ -91,7 +102,7 @@ def test_haiku_primary_is_never_called_automatically():
 def test_chat_completion_deepseek_on_sonnet_failure_without_haiku():
     calls: list[str] = []
 
-    async def fake_once(model_id, messages, temp, mt, extra_headers=None):
+    async def fake_once(model_id, messages, temp, mt, extra_headers=None, **_kwargs):
         calls.append(model_id)
         if model_id == ai_config.MODEL_SONNET:
             raise ai_service.AIServiceError("credits", kind=ai_service.KIND_INSUFFICIENT_CREDITS)
@@ -107,7 +118,7 @@ def test_chat_completion_deepseek_on_sonnet_failure_without_haiku():
         }
 
     with patch.object(ai_service, "_call_model_once", new=AsyncMock(side_effect=fake_once)):
-        result = asyncio.run(
+        result = _run_with_budget(
             ai_service.chat_completion_with_meta(
                 messages=[{"role": "user", "content": "hi"}],
                 primary_model=ai_config.MODEL_SONNET,

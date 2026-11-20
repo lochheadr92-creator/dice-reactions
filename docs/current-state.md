@@ -663,3 +663,9 @@ affect prompts, `prepare_action_turn`, behaviour, or player-facing payloads.
 
 **Not yet:** Historical Weight; trait reads by utility/stress/memory/settlement
 consumers; rolling_state projection of settlement traits.
+
+## Reliability release (2026-10-30, uncommitted working tree)
+
+**Code / Tests:** Turn persistence is transactional (`turn_commit.py`: turn + session + `session_revision` + lease release + request record in one MongoDB transaction; replica set or mongos required, paid writes fail closed with 503 otherwise). `POST /story/action` accepts `action_request_id` (at most one committed transition per id; saved result replayed; status endpoint `GET /story/session/{id}/action/{request_id}`). Paid provider usage is bounded at `ai_service.chat_completion_with_meta` by a required `provider_budget` (per-request attempt budget + deadline, global attempt quota, usage records), per-device action quota, and expiring concurrency leases. The optional mature prose renderer is disabled (`MATURE_RENDERER_ENABLED = False`); canonical narrative is served. Read-only `GET /admin/consistency` diagnoses historical data. Evidence and limitations: [reliability-release.md](./reliability-release.md).
+
+**Not changed:** NPC/world systems, seeds and ordering, gameplay rules and difficulty, ownership/admin auth, player-safe serializers, provider routing intent. No monetary spending ceiling exists (counts and token accounting only).

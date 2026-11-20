@@ -450,3 +450,31 @@ For each mode: detection, prevention, recovery, and **current protection status*
 ## Removed from catalogue (N/A)
 
 Historical pre-foundation scoring equivalence remains **N/A** because that implementation never existed. Foundation Utility AI scoring now drives the deterministic live selector by default through `ENABLE_CANONICAL_UTILITY`; shadow comparison and fail-closed heuristic fallback remain active. Provider-backed gameplay acceptance is still unverified.
+
+## FM-28: Interrupted or duplicated turn persistence
+
+**Symptom:** A turn row exists without the matching `session.turn_count` update (or vice versa), the next action collides with a saved turn number, or one tapped action produces two committed turns and two provider calls.
+
+**Cause:** Pre-release persistence wrote the turn and the session in two separate operations; a cancelled request between them left them inconsistent. Repeated POSTs had no identity, so a retry after a lost response was a new action.
+
+**Mitigation (2026-10-30 reliability release):** `turn_commit.commit_action_turn` writes turn + session + lease release + request record in one MongoDB transaction with a lease/`turn_count`/`session_revision` precondition; `action_requests` makes one `action_request_id` ⇒ at most one committed transition; the client reuses the id and queries `GET /story/session/{id}/action/{request_id}` instead of resending. `GET /admin/consistency` reports (never repairs) historical inconsistencies.
+
+**Detection:** `tests/test_turn_commit.py`, `tests/test_action_idempotency.py`, `tests/test_session_lifecycle.py`; `GET /admin/consistency`.
+
+## FM-29: Unbounded paid provider usage
+
+**Symptom:** Actions on existing chronicles keep invoking the provider after story-creation quotas are exhausted; retries and fallbacks multiply calls; a crashed worker leaks a concurrency slot.
+
+**Cause:** Quotas existed only on `POST /story/new`; the provider loop had no shared per-request budget; the concurrency counter had no lease.
+
+**Mitigation:** `provider_budget` is required at the provider boundary (`ai_service.chat_completion_with_meta`), enforcing a per-request attempt budget and deadline, a global attempt quota and usage records; `rate_limit.check_action_limits` adds a per-device action quota; concurrency pools are expiring, owner-released leases. Limits are hard caps with token accounting, not a monetary ceiling.
+
+**Detection:** `tests/test_provider_budget.py`.
+
+## FM-30: Presentation renderer changing events
+
+**Symptom:** The optional mature prose rerender described an event or object ownership that contradicted authoritative state.
+
+**Mitigation:** The second-pass renderer is disabled for this release (`mature_rendering.MATURE_RENDERER_ENABLED = False`); the validated canonical narrative is served and no second provider call can run. A renderer redesign with a real factual-equivalence gate is separate future work.
+
+**Detection:** `tests/test_canonical_rendering.py`, `tests/test_mature_rendering.py`.

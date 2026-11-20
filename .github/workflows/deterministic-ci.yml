@@ -20,38 +20,82 @@ jobs:
   backend-deterministic:
     name: Backend deterministic tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    services:
-      mongodb:
-        image: mongo:7
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --eval 'db.runCommand({ ping: 1 })'"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+    timeout-minutes: 25
     env:
-      MONGO_URL: mongodb://localhost:27017
+      # Transaction-capable topology is REQUIRED (turn commits run in
+      # multi-document transactions). A standalone mongod is not sufficient.
+      MONGO_URL: mongodb://localhost:27017/?replicaSet=rs0
       DB_NAME: dice_reactions_ci
       ADMIN_API_KEY: test-admin-key
       OPENROUTER_API_KEY: ""
+      OPENAI_API_KEY: ""
+      NVIDIA_API_KEY: ""
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Start MongoDB 7 single-node replica set
+        run: |
+          docker run -d --name mongo-rs -p 27017:27017 mongo:7 --replSet rs0 --bind_ip_all
+          for i in $(seq 1 30); do
+            if docker exec mongo-rs mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok' >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+          docker exec mongo-rs mongosh --quiet --eval \
+            'rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "localhost:27017" }] })'
+          for i in $(seq 1 30); do
+            if [ "$(docker exec mongo-rs mongosh --quiet --eval 'db.hello().isWritablePrimary')" = "true" ]; then
+              echo "replica set primary is writable"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "replica set did not elect a writable primary"
+          docker logs mongo-rs
+          exit 1
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/constraints.txt
 
-      - name: Install backend dependencies
+      - name: Install backend dependencies (pinned by constraints.txt)
         working-directory: backend
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install -r requirements.txt -c constraints.txt
+          python -m pip check
+
+      - name: Prove transactions commit and abort on the CI database
+        working-directory: backend
+        run: |
+          python - <<'EOF'
+          import os
+          from pymongo import MongoClient
+          client = MongoClient(os.environ["MONGO_URL"], serverSelectionTimeoutMS=20000)
+          db = client["ci_txn_probe"]
+          db.probe.delete_many({})
+          with client.start_session() as s:
+              with s.start_transaction():
+                  db.probe.insert_one({"_id": "commit"}, session=s)
+          assert db.probe.count_documents({"_id": "commit"}) == 1, "commit failed"
+          try:
+              with client.start_session() as s:
+                  with s.start_transaction():
+                      db.probe.insert_one({"_id": "abort"}, session=s)
+                      raise RuntimeError("force abort")
+          except RuntimeError:
+              pass
+          assert db.probe.count_documents({"_id": "abort"}) == 0, "abort leaked a write"
+          client.drop_database("ci_txn_probe")
+          print("transaction commit/abort verified")
+          EOF
 
       - name: Run deterministic backend tests
         working-directory: backend
@@ -60,7 +104,7 @@ jobs:
   frontend-deterministic:
     name: Frontend deterministic checks
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -69,15 +113,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: yarn
-          cache-dependency-path: frontend/yarn.lock
 
-      - name: Install frontend dependencies
+      - name: Install frontend dependencies (Yarn 1.22.22 via Corepack)
         working-directory: frontend
         run: |
           corepack enable
           corepack prepare yarn@1.22.22 --activate
-          yarn install --frozen-lockfile
+          yarn --version
+          yarn install --frozen-lockfile --non-interactive
 
       - name: Run Jest unit tests
         working-directory: frontend
@@ -86,3 +129,14 @@ jobs:
       - name: Run TypeScript typecheck
         working-directory: frontend
         run: yarn typecheck
+
+      - name: Run ESLint
+        working-directory: frontend
+        run: yarn lint --max-warnings=0
+
+      - name: Export web bundle
+        working-directory: frontend
+        env:
+          EXPO_PUBLIC_BACKEND_URL: http://localhost:8000
+          CI: "1"
+        run: yarn expo export --platform web --output-dir dist

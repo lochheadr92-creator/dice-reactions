@@ -600,6 +600,12 @@ export function AdvancedBuilder({
                   <Text style={styles.matureHelp}>
                     Optional permissions. They do not force content.
                   </Text>
+                  {!capabilities.mature_renderer_configured ? (
+                    <Text style={styles.matureHelp} testID="mature-renderer-unavailable">
+                      Mature prose rendering is unavailable in this release. Permissions are
+                      saved with the chronicle; the standard narrative is shown.
+                    </Text>
+                  ) : null}
                 </View>
                 <Ionicons
                   name={matureExpanded ? "chevron-up" : "chevron-down"}

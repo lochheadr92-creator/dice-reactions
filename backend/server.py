@@ -2,6 +2,7 @@ from fastapi import Depends, FastAPI, APIRouter, HTTPException, Request
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+import asyncio
 import copy
 import os
 import re
@@ -72,23 +73,29 @@ import mature_content as mature_policy  # noqa: E402
 import mature_rendering  # noqa: E402
 from security import fetch_owned_session, require_admin, require_device_id  # noqa: E402
 from rate_limit import (  # noqa: E402
+    ConcurrencyPoolFull,
+    ConcurrencyPoolUnavailable,
     _rollback_bucket_reservations,
+    acquire_concurrency_lease,
     acquire_story_creation_slot,
+    check_action_limits,
     check_story_creation_limits,
     ensure_rate_limit_indexes,
+    release_concurrency_lease,
     release_story_creation_slot,
     resolve_client_ip,
 )
 from action_concurrency import (  # noqa: E402
     ACTION_CONFLICT_DETAIL,
+    SESSION_REVISION_FIELD,
     ActionLeaseConflict,
-    ActionLeaseLost,
     acquire_action_lease,
-    build_model_lock_patch,
-    build_persist_cas_filter,
     ensure_action_concurrency_indexes,
-    release_action_lease,
+    release_action_lease_quietly,
 )
+import action_requests  # noqa: E402  — action request idempotency records
+import provider_budget  # noqa: E402  — attempt/deadline/quota enforcement
+import turn_commit  # noqa: E402  — transactional turn + session commit
 from player_api import (  # noqa: E402
     build_new_story_session_payload,
     build_player_session,
@@ -577,6 +584,9 @@ class ActionRequest(BaseModel):
     session_id: str
     action_text: str
     debug_mode: bool = False
+    # Client-generated idempotency key. One id ⇒ at most one committed turn for
+    # this session. Optional for legacy clients (no idempotency without it).
+    action_request_id: Optional[str] = Field(default=None, max_length=128)
 
 class ParsedTurn(BaseModel):
     narrative: str
@@ -604,6 +614,8 @@ class TurnRecord(BaseModel):
     rolling_state: Optional[Dict[str, Any]] = None
     debug: Optional[Dict[str, str]] = None
     raw: Optional[str] = None
+    # Idempotency binding: the action request record this turn satisfied.
+    action_request_key: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class SessionRecord(BaseModel):
@@ -641,6 +653,8 @@ class SessionRecord(BaseModel):
     model_switches: List[Dict[str, Any]] = Field(default_factory=list)
     cost_mode: str = "normal"  # "normal" | "low"
     replayability_state: Optional[Dict[str, Any]] = None
+    # Monotonic revision; bumped by every committed gameplay mutation.
+    session_revision: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -3264,11 +3278,20 @@ async def _generate_validated_turn(
         hard_meta["validation_receipt"] = receipt
         return _finalize_validated_turn(fb_parsed, fb_raw, hard_meta)
     except Exception as exc:
-        logger.warning("Retry call raised %s — recovering without hard-invalid commit", exc)
+        if isinstance(exc, provider_budget.ProviderBudgetError):
+            # No provider call was made; the first attempt's output is kept.
+            logger.warning(
+                "Validation retry stopped by provider budget (%s) — recovering without hard-invalid commit",
+                exc.reason,
+            )
+        else:
+            logger.warning("Retry call raised %s — recovering without hard-invalid commit", exc)
         recovered = dict(meta)
         recovered["validation_retried"] = True
         recovered["validation_first_fail"] = reason
         recovered["retry_exception"] = str(exc)[:240]
+        if isinstance(exc, provider_budget.ProviderBudgetError):
+            recovered["retry_budget_stop"] = exc.reason
         if not _validation_failure_is_hard(kind, reason):
             return _finalize_validated_turn(parsed, raw, recovered)
         fb_parsed, fb_raw, receipt = _build_fail_forward_parsed_turn(
@@ -3452,41 +3475,6 @@ async def _apply_presentation_rendering(
     return parsed, policy
 
 
-async def _persist_model_lock(
-    session_id: str, meta: Dict[str, Any], at_turn: int
-) -> None:
-    """Record fallback events and update active_model on the session."""
-    fe = list(meta.get("fallback_events") or [])
-    update_set: Dict[str, Any] = {}
-    if meta.get("model_used"):
-        update_set["active_model"] = meta["model_used"]
-    ops: Dict[str, Any] = {}
-    if update_set:
-        ops["$set"] = update_set
-    if fe:
-        now = datetime.now(timezone.utc).isoformat()
-        entries = [
-            {
-                "from_model": e.get("from"),
-                "to_model": e.get("to"),
-                "reason": e.get("reason"),
-                "message": e.get("message"),
-                "at_turn": at_turn,
-                "ts": now,
-            }
-            for e in fe
-        ]
-        ops["$push"] = {"model_switches": {"$each": entries}}
-        logger.warning(
-            "Session %s model switch: %s (turn %s)",
-            session_id,
-            " → ".join([fe[0].get("from") or ""] + [e.get("to") or "" for e in fe]),
-            at_turn,
-        )
-    if ops:
-        await db.sessions.update_one({"id": session_id}, ops)
-
-
 async def ensure_story_creation_idempotency_indexes(db) -> None:
     """Prevent duplicate in-flight/completed creations for one device request key."""
     await db.sessions.create_index(
@@ -3664,6 +3652,114 @@ async def admin_list_models(_: None = Depends(require_admin)):
 
 # -------- Story flow --------------------------------------------------------
 _CREATION_IN_PROGRESS_DETAIL = "Story creation already in progress"
+_SERVICE_UNAVAILABLE_DETAIL = "Service unavailable"
+_RATE_LIMIT_DETAIL = "Too many requests"
+
+# Explicit input-size limits (player-safe 422 before any paid work).
+ACTION_TEXT_MAX_CHARS = int(os.environ.get("ACTION_TEXT_MAX_CHARS", "2000"))
+CREATION_TEXT_FIELD_MAX_CHARS = int(os.environ.get("CREATION_TEXT_FIELD_MAX_CHARS", "2000"))
+CREATION_SETUP_TOTAL_MAX_CHARS = int(os.environ.get("CREATION_SETUP_TOTAL_MAX_CHARS", "12000"))
+CREATION_SHORT_FIELD_MAX_CHARS = int(os.environ.get("CREATION_SHORT_FIELD_MAX_CHARS", "200"))
+
+# Set at startup when the connected MongoDB cannot run transactions. Paid
+# write routes then fail closed (503); read-only story access keeps working.
+_TRANSACTION_SUPPORT_ERROR: Optional[str] = None
+
+
+def _require_transaction_support() -> None:
+    if _TRANSACTION_SUPPORT_ERROR:
+        raise HTTPException(status_code=503, detail=_SERVICE_UNAVAILABLE_DETAIL)
+
+
+def _validate_action_input(req: ActionRequest) -> None:
+    text = req.action_text or ""
+    if not text.strip():
+        raise HTTPException(status_code=422, detail="action_text must not be empty")
+    if len(text) > ACTION_TEXT_MAX_CHARS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"action_text is too long (maximum {ACTION_TEXT_MAX_CHARS} characters)",
+        )
+
+
+def _measure_text(value: Any) -> int:
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, dict):
+        return sum(_measure_text(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return sum(_measure_text(v) for v in value)
+    return 0
+
+
+def _validate_text_tree(value: Any, field: str, per_field_max: int) -> None:
+    if isinstance(value, str):
+        if len(value) > per_field_max:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{field} is too long (maximum {per_field_max} characters per field)",
+            )
+        return
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            _validate_text_tree(nested, field, per_field_max)
+        return
+    if isinstance(value, (list, tuple)):
+        for nested in value:
+            _validate_text_tree(nested, field, per_field_max)
+
+
+def _validate_creation_input(req: NewStoryRequest) -> None:
+    for name in ("genre", "role", "tone", "difficulty", "mode", "prose_mode", "scenario_id"):
+        value = getattr(req, name, None)
+        if isinstance(value, str) and len(value) > CREATION_SHORT_FIELD_MAX_CHARS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{name} is too long (maximum {CREATION_SHORT_FIELD_MAX_CHARS} characters)",
+            )
+    if req.custom_premise and len(req.custom_premise) > CREATION_TEXT_FIELD_MAX_CHARS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"custom_premise is too long (maximum {CREATION_TEXT_FIELD_MAX_CHARS} characters)",
+        )
+    if req.custom_world_setup is not None:
+        _validate_text_tree(req.custom_world_setup, "custom_world_setup", CREATION_TEXT_FIELD_MAX_CHARS)
+        if _measure_text(req.custom_world_setup) > CREATION_SETUP_TOTAL_MAX_CHARS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"custom_world_setup is too long (maximum {CREATION_SETUP_TOTAL_MAX_CHARS} characters in total)",
+            )
+    if req.mature_content is not None:
+        _validate_text_tree(req.mature_content, "mature_content", CREATION_TEXT_FIELD_MAX_CHARS)
+
+
+async def _acquire_provider_concurrency(owner: str) -> str:
+    """Reserve a global provider concurrency lease (429 when full, 503 on storage failure)."""
+    try:
+        return await acquire_concurrency_lease(
+            db,
+            provider_budget.PROVIDER_CONCURRENCY_POOL_ID,
+            provider_budget.PROVIDER_GLOBAL_CONCURRENT,
+            provider_budget.ACTION_GENERATION_DEADLINE_SEC + 60,
+            owner=owner,
+        )
+    except ConcurrencyPoolFull:
+        raise HTTPException(status_code=429, detail=_RATE_LIMIT_DETAIL)
+    except ConcurrencyPoolUnavailable:
+        raise HTTPException(status_code=503, detail=_SERVICE_UNAVAILABLE_DETAIL)
+
+
+async def _release_provider_concurrency(token: Optional[str]) -> None:
+    if token:
+        await release_concurrency_lease(db, provider_budget.PROVIDER_CONCURRENCY_POOL_ID, token)
+
+
+def _budget_error_to_http(exc: provider_budget.ProviderBudgetError) -> HTTPException:
+    if isinstance(exc, provider_budget.ProviderQuotaExceeded):
+        return HTTPException(status_code=429, detail=_RATE_LIMIT_DETAIL)
+    if isinstance(exc, provider_budget.ProviderBudgetUnavailable):
+        return HTTPException(status_code=503, detail=_SERVICE_UNAVAILABLE_DETAIL)
+    return HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
 
 
 def _normalize_creation_request_id(value: Optional[str]) -> Optional[str]:
@@ -3704,24 +3800,30 @@ async def _build_existing_creation_response(req: NewStoryRequest) -> Optional[Di
 
 @api_router.post("/story/new")
 async def new_story(req: NewStoryRequest, request: Request):
+    _validate_creation_input(req)
     existing = await _build_existing_creation_response(req)
     if existing:
         return existing
+    _require_transaction_support()
 
     client_ip = resolve_client_ip(request)
     consumed_buckets = await check_story_creation_limits(db, client_ip, req.device_id)
-    acquired_slot = False
+    creation_slot: Optional[str] = None
+    provider_slot: Optional[str] = None
     try:
         try:
-            await acquire_story_creation_slot(db)
-            acquired_slot = True
+            creation_slot = await acquire_story_creation_slot(
+                db, owner=f"story_new:{req.device_id}"
+            )
+            provider_slot = await _acquire_provider_concurrency(f"story_new:{req.device_id}")
         except HTTPException:
             await _rollback_bucket_reservations(db, consumed_buckets)
             raise
         return await _create_new_story(req)
     finally:
-        if acquired_slot:
-            await release_story_creation_slot(db)
+        await _release_provider_concurrency(provider_slot)
+        if creation_slot:
+            await release_story_creation_slot(db, creation_slot)
 
 
 async def _cleanup_provisional_story(session_id: str) -> None:
@@ -3730,142 +3832,39 @@ async def _cleanup_provisional_story(session_id: str) -> None:
     await db.sessions.delete_one({"id": session_id})
 
 
-async def _rollback_story_action_persist(
+async def _commit_story_action_turn(
     session_id: str,
-    turn_id: str,
-    session_snapshot: Dict[str, Any],
-    attempted_update_set: Optional[Dict[str, Any]],
-    *,
-    turn_inserted: bool,
-    session_updated: bool,
-) -> None:
-    """Compensate partial story_action persistence. Raises on rollback failure."""
-    if turn_inserted:
-        await db.turns.delete_one({"session_id": session_id, "id": turn_id})
-    if session_updated:
-        restore_fields = {
-            key: session_snapshot[key]
-            for key in (
-                "turn_count",
-                "last_narrative_snippet",
-                "last_state",
-                "rolling_state",
-                "replayability_state",
-                "updated_at",
-                "debug_mode",
-                "rolling_state_updated_at",
-                "active_model",
-                "model_switches",
-                "rendering_policy",
-            )
-            if key in session_snapshot
-        }
-        cas_filter: Dict[str, Any] = {"id": session_id}
-        if attempted_update_set:
-            if "turn_count" in attempted_update_set:
-                cas_filter["turn_count"] = attempted_update_set["turn_count"]
-            if "rolling_state" in attempted_update_set:
-                cas_filter["rolling_state"] = attempted_update_set["rolling_state"]
-        result = await db.sessions.update_one(cas_filter, {"$set": restore_fields})
-        if result.matched_count == 0:
-            logger.warning(
-                "session rollback skipped for session %s: compare-and-set miss",
-                session_id,
-            )
-
-
-async def _insert_story_action_turn(turn_doc: Dict[str, Any]) -> None:
-    await db.turns.insert_one(turn_doc)
-
-
-async def _apply_story_action_session_update(
-    session_id: str, update_set: Dict[str, Any]
-) -> None:
-    await db.sessions.update_one({"id": session_id}, {"$set": update_set})
-
-
-async def _cas_update_story_action_session(
-    session_id: str,
-    lease_token: str,
-    expected_turn_count: int,
-    update_set: Dict[str, Any],
-    meta: Dict[str, Any],
-    turn_number: int,
-) -> bool:
-    """Final session write: lease token + expected turn_count CAS, model lock folded in."""
-    model_set, model_push = build_model_lock_patch(meta, turn_number)
-    final_set = {**update_set, **model_set}
-    ops: Dict[str, Any] = {"$set": final_set}
-    if model_push:
-        ops["$push"] = model_push
-    cas_filter = build_persist_cas_filter(
-        session_id, lease_token, expected_turn_count
-    )
-    result = await db.sessions.update_one(cas_filter, ops)
-    if result.matched_count:
-        fe = list(meta.get("fallback_events") or [])
-        if fe:
-            logger.warning(
-                "Session %s model switch: %s (turn %s)",
-                session_id,
-                " → ".join([fe[0].get("from") or ""] + [e.get("to") or "" for e in fe]),
-                turn_number,
-            )
-        return True
-    logger.info("action persistence CAS conflict for session %s", session_id)
-    return False
-
-
-async def _persist_story_action_turn(
-    session_id: str,
-    turn_number: int,
     turn_doc: Dict[str, Any],
     update_set: Dict[str, Any],
-    session_snapshot: Dict[str, Any],
     meta: Dict[str, Any],
     *,
     lease_token: str,
     expected_turn_count: int,
-) -> None:
-    """Persist one story_action turn: insert turn, then lease+turn_count CAS session update."""
-    turn_inserted = False
-    session_updated = False
+    expected_revision: Optional[int],
+    request_key: Optional[str] = None,
+) -> turn_commit.CommitResult:
+    """Commit one story_action turn atomically (turn + session + lease + request record).
+
+    Raises CommitPreconditionFailed (nothing written; caller answers 409),
+    HTTPException 503 when transactions are unavailable, and
+    CommitOutcomeUnknown when the acknowledgement was lost and could not be
+    verified (caller marks the request uncertain).
+    """
     try:
-        await _insert_story_action_turn(turn_doc)
-        turn_inserted = True
-        if await _cas_update_story_action_session(
-            session_id,
-            lease_token,
-            expected_turn_count,
-            update_set,
-            meta,
-            turn_number,
-        ):
-            session_updated = True
-            return
-        await db.turns.delete_one({"session_id": session_id, "id": turn_doc["id"]})
-        raise ActionLeaseLost()
-    except ActionLeaseLost:
-        raise
-    except Exception:
-        logger.exception("story persistence failed during story_action")
-        try:
-            await _rollback_story_action_persist(
-                session_id,
-                turn_doc["id"],
-                session_snapshot,
-                update_set,
-                turn_inserted=turn_inserted,
-                session_updated=session_updated,
-            )
-        except Exception:
-            logger.exception(
-                "story_action persistence rollback failed for session %s turn_id %s",
-                session_id,
-                turn_doc.get("id"),
-            )
-            raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
-        raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
+        return await turn_commit.commit_action_turn(
+            db,
+            session_id=session_id,
+            lease_token=lease_token,
+            expected_turn_count=expected_turn_count,
+            expected_revision=expected_revision,
+            turn_doc=turn_doc,
+            update_set=update_set,
+            meta=meta,
+            request_key=request_key,
+        )
+    except turn_commit.TransactionSupportUnavailable:
+        logger.error("story_action commit refused: transactions unavailable")
+        raise HTTPException(status_code=503, detail=_SERVICE_UNAVAILABLE_DETAIL)
 
 
 async def _create_new_story(req: NewStoryRequest):
@@ -4081,12 +4080,24 @@ async def _create_new_story(req: NewStoryRequest):
             return existing
         raise HTTPException(status_code=409, detail=_CREATION_IN_PROGRESS_DETAIL)
 
+    budget = provider_budget.for_request(
+        db,
+        request_key=f"story_new:{session.id}",
+        kind=provider_budget.KIND_STORY_CREATION,
+        device_id=req.device_id,
+        session_id=session.id,
+    )
     try:
-        parsed, raw, meta = await _generate_validated_turn(
-            session.model_dump(),
-            opening_prompt,
-            replayability_directives=frozen_rb_directives,
-        )
+        async with provider_budget.active_budget(budget):
+            parsed, raw, meta = await _generate_validated_turn(
+                session.model_dump(),
+                opening_prompt,
+                replayability_directives=frozen_rb_directives,
+            )
+    except provider_budget.ProviderBudgetError as exc:
+        logger.warning("provider budget stopped new_story: %s", exc.reason)
+        await _cleanup_provisional_story(session.id)
+        raise _budget_error_to_http(exc)
     except AIServiceError:
         logger.exception("AI service failed during new_story")
         await _cleanup_provisional_story(session.id)
@@ -4095,6 +4106,7 @@ async def _create_new_story(req: NewStoryRequest):
         logger.exception("LLM call failed during new_story")
         await _cleanup_provisional_story(session.id)
         raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
+    meta["provider_budget"] = budget.summary()
 
     guard_adjustments = _apply_object_permanence(parsed)
     enriched_debug = _meta_into_debug(parsed.debug, meta)
@@ -4184,30 +4196,39 @@ async def _create_new_story(req: NewStoryRequest):
         debug=enriched_debug,
         raw=raw,
     )
+    snippet = (parsed.paragraphs[0][:180] + "…") if parsed.paragraphs else ""
+    opening_update = {
+        "turn_count": 1,
+        "last_narrative_snippet": snippet,
+        "last_state": parsed.state,
+        "rolling_state": merged_rolling or parsed.rolling_state,
+        "rolling_state_updated_at": datetime.now(timezone.utc),
+        "replayability_state": replayability_state,
+        "rendering_policy": rendering_policy,
+        "updated_at": datetime.now(timezone.utc),
+    }
     try:
-        await db.turns.insert_one(turn.model_dump())
-
-        snippet = (parsed.paragraphs[0][:180] + "…") if parsed.paragraphs else ""
-        await db.sessions.update_one(
-            {"id": session.id},
-            {"$set": {
-                "turn_count": 1,
-                "last_narrative_snippet": snippet,
-                "last_state": parsed.state,
-                "rolling_state": merged_rolling or parsed.rolling_state,
-                "rolling_state_updated_at": datetime.now(timezone.utc),
-                "replayability_state": replayability_state,
-                "rendering_policy": rendering_policy,
-                "updated_at": datetime.now(timezone.utc),
-            }},
+        # Opening turn + session completion + model lock commit atomically.
+        await turn_commit.commit_opening_turn(
+            db,
+            session_id=session.id,
+            turn_doc=turn.model_dump(),
+            update_set=opening_update,
+            meta=meta,
         )
-
-        # Persist session-level model lock + any fallback switch ledger.
-        await _persist_model_lock(session.id, meta, at_turn=1)
-    except Exception:
-        logger.exception("story persistence failed during new_story")
+    except turn_commit.TransactionSupportUnavailable:
+        logger.error("new_story commit refused: transactions unavailable")
+        await _cleanup_provisional_story(session.id)
+        raise HTTPException(status_code=503, detail=_SERVICE_UNAVAILABLE_DETAIL)
+    except turn_commit.CommitPreconditionFailed:
+        logger.exception("opening turn precondition failed during new_story")
         await _cleanup_provisional_story(session.id)
         raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
+    except turn_commit.CommitOutcomeUnknown:
+        # Do not delete: the opening turn may have committed. The client can
+        # retry with the same creation_request_id and receive the saved result.
+        logger.exception("opening turn commit outcome unknown during new_story")
+        raise HTTPException(status_code=503, detail=_SERVICE_UNAVAILABLE_DETAIL)
 
     session_doc = session.model_dump(mode="json")
     session_doc["replayability_state"] = replayability_state
@@ -4219,14 +4240,113 @@ async def _create_new_story(req: NewStoryRequest):
     }
 
 
+async def _replay_completed_action(
+    session_id: str, device_id: str, record: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Rebuild a completed request's response from current data (owner-checked)."""
+    await fetch_owned_session(db, session_id, device_id)
+    turn_doc = await db.turns.find_one(
+        {"id": record.get("turn_id"), "session_id": session_id}, {"_id": 0}
+    )
+    if not turn_doc:
+        # The turn was reset/deleted after completion; the saved result no longer exists.
+        raise HTTPException(status_code=404, detail="Turn not found")
+    settings = await get_ai_settings()
+    # Same rule as the fresh response: server developer_mode AND the request's
+    # own debug flag (persisted on the record), so a replay is an exact repeat.
+    include_debug = bool(settings.get("developer_mode")) and bool(record.get("debug_mode"))
+    return {
+        "turn": build_player_turn(turn_doc, include_debug=include_debug),
+        "replayed": True,
+    }
+
+
 @api_router.post("/story/action")
 async def story_action(req: ActionRequest, device_id: str = Depends(require_device_id)):
+    _validate_action_input(req)
+    _require_transaction_support()
+    session_id = req.session_id
+    request_id = action_requests.normalize_request_id(req.action_request_id)
+    request_key: Optional[str] = None
+    claim_token: Optional[str] = None
+    if request_id:
+        await fetch_owned_session(db, session_id, device_id)
+        request_key = action_requests.request_key(session_id, request_id)
+        try:
+            claim = await action_requests.claim(
+                db,
+                session_id=session_id,
+                device_id=device_id,
+                request_id=request_id,
+                request_fingerprint=action_requests.fingerprint(
+                    session_id, req.action_text, req.debug_mode
+                ),
+                debug_mode=req.debug_mode,
+            )
+        except action_requests.ActionRequestMismatch:
+            raise HTTPException(status_code=409, detail=action_requests.REQUEST_MISMATCH_DETAIL)
+        if claim.kind == "completed":
+            return await _replay_completed_action(session_id, device_id, claim.record)
+        if claim.kind == "in_progress":
+            raise HTTPException(status_code=409, detail=ACTION_CONFLICT_DETAIL)
+        claim_token = claim.claim_token
+
+    try:
+        return await _execute_story_action(
+            req, device_id, request_key=request_key, claim_token=claim_token
+        )
+    except HTTPException as exc:
+        if request_key:
+            await action_requests.mark_failed(
+                db, request_key, claim_token, action_requests.error_kind_for_status(exc.status_code)
+            )
+        raise
+    except turn_commit.CommitOutcomeUnknown:
+        logger.exception("story_action commit outcome unknown for session %s", session_id)
+        if request_key:
+            await action_requests.mark_uncertain(db, request_key, claim_token)
+        raise HTTPException(status_code=503, detail=_SERVICE_UNAVAILABLE_DETAIL)
+    except Exception:
+        logger.exception("unexpected failure during story_action for session %s", session_id)
+        if request_key:
+            await action_requests.mark_uncertain(db, request_key, claim_token)
+        raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
+
+
+async def _execute_story_action(
+    req: ActionRequest,
+    device_id: str,
+    *,
+    request_key: Optional[str],
+    claim_token: Optional[str],
+) -> Dict[str, Any]:
     lease_token: Optional[str] = None
+    provider_slot: Optional[str] = None
+    consumed_buckets: List[str] = []
+    committed = False
     session_id = req.session_id
     try:
         session, lease_token = await acquire_action_lease(db, session_id, device_id)
         expected_turn_count = session.get("turn_count", 0)
+        expected_revision = int(session.get(SESSION_REVISION_FIELD) or 0)
         next_turn_number = expected_turn_count + 1
+
+        # Paid-work controls, all before any provider call.
+        consumed_buckets = await check_action_limits(db, device_id)
+        try:
+            provider_slot = await _acquire_provider_concurrency(
+                request_key or f"action:{session_id}:{lease_token}"
+            )
+        except HTTPException:
+            await _rollback_bucket_reservations(db, consumed_buckets)
+            raise
+        budget = provider_budget.for_request(
+            db,
+            request_key=request_key or f"action:{session_id}:{lease_token}",
+            kind=provider_budget.KIND_ACTION,
+            device_id=device_id,
+            session_id=session_id,
+        )
 
         debug_marker = "[DEV_MODE: ON]" if (await get_ai_settings()).get("developer_mode") and req.debug_mode else "[DEV_MODE: OFF]"
         difficulty_marker = f"[DIFFICULTY: {session.get('difficulty', 'standard')}]"
@@ -4255,19 +4375,24 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
         gen_session["rolling_state"] = working_rolling
 
         try:
-            parsed, raw, meta = await _generate_validated_turn(
-                gen_session,
-                user_text,
-                player_action=req.action_text,
-                secret_reveal_directive=secret_directive,
-                replayability_directives=frozen_rb_directives,
-            )
+            async with provider_budget.active_budget(budget):
+                parsed, raw, meta = await _generate_validated_turn(
+                    gen_session,
+                    user_text,
+                    player_action=req.action_text,
+                    secret_reveal_directive=secret_directive,
+                    replayability_directives=frozen_rb_directives,
+                )
+        except provider_budget.ProviderBudgetError as exc:
+            logger.warning("provider budget stopped story_action: %s", exc.reason)
+            raise _budget_error_to_http(exc)
         except AIServiceError:
             logger.exception("AI service failed during story_action")
             raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
         except Exception:
             logger.exception("LLM call failed during story_action")
             raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
+        meta["provider_budget"] = budget.summary()
 
         secrets.merge_reveal_diagnostics(meta, reveal_diag)
         replayability.merge_replayability_diagnostics(meta, rb_diag)
@@ -4435,21 +4560,8 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
             rolling_state=merged_rolling or parsed.rolling_state,
             debug=enriched_debug,
             raw=raw,
+            action_request_key=request_key,
         )
-
-        session_snapshot = {
-            "turn_count": expected_turn_count,
-            "last_narrative_snippet": session.get("last_narrative_snippet"),
-            "last_state": copy.deepcopy(session.get("last_state")),
-            "rolling_state": copy.deepcopy(session.get("rolling_state")),
-            "replayability_state": copy.deepcopy(session.get("replayability_state")),
-            "updated_at": session.get("updated_at"),
-            "debug_mode": session.get("debug_mode"),
-            "rolling_state_updated_at": session.get("rolling_state_updated_at"),
-            "active_model": session.get("active_model"),
-            "model_switches": copy.deepcopy(session.get("model_switches") or []),
-            "rendering_policy": copy.deepcopy(session.get("rendering_policy") or {}),
-        }
 
         snippet = (parsed.paragraphs[0][:180] + "…") if parsed.paragraphs else ""
         update_set: Dict[str, Any] = {
@@ -4469,16 +4581,17 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
         if replayability.replayability_active(session) and working_replayability:
             update_set["replayability_state"] = working_replayability
 
-        await _persist_story_action_turn(
+        await _commit_story_action_turn(
             session_id,
-            next_turn_number,
             turn.model_dump(),
             update_set,
-            session_snapshot,
             meta,
             lease_token=lease_token,
             expected_turn_count=expected_turn_count,
+            expected_revision=expected_revision,
+            request_key=request_key,
         )
+        committed = True
 
         settings = await get_ai_settings()
         include_debug = bool(settings.get("developer_mode")) and bool(req.debug_mode)
@@ -4490,11 +4603,60 @@ async def story_action(req: ActionRequest, device_id: str = Depends(require_devi
         }
     except ActionLeaseConflict:
         raise HTTPException(status_code=409, detail=ACTION_CONFLICT_DETAIL)
-    except ActionLeaseLost:
+    except turn_commit.CommitPreconditionFailed:
+        logger.info("story_action commit precondition failed for session %s", session_id)
         raise HTTPException(status_code=409, detail=ACTION_CONFLICT_DETAIL)
+    except asyncio.CancelledError:
+        # Request interrupted (client gone / worker shutdown). If the commit
+        # already happened the record is final; otherwise make the id
+        # retryable right away instead of waiting for the claim to expire.
+        if request_key and not committed:
+            await action_requests.mark_failed(
+                db, request_key, claim_token, action_requests.ERROR_INTERRUPTED
+            )
+        raise
     finally:
+        # Lease release is best-effort and can never turn a committed turn
+        # into a failed request: the commit already cleared the lease
+        # atomically and the request record is final.
+        await _release_provider_concurrency(provider_slot)
         if lease_token:
-            await release_action_lease(db, session_id, lease_token)
+            await release_action_lease_quietly(db, session_id, lease_token)
+
+
+@api_router.get("/story/session/{session_id}/action/{request_id}")
+async def get_action_request_status(
+    session_id: str,
+    request_id: str,
+    device_id: str = Depends(require_device_id),
+):
+    """Player-safe status of one action request id (owner-verified).
+
+    ``completed`` includes the committed turn rebuilt through the player
+    serializer; ``in_progress`` / ``failed`` / ``unknown`` carry no payload.
+    """
+    await fetch_owned_session(db, session_id, device_id)
+    normalized = action_requests.normalize_request_id(request_id)
+    if not normalized:
+        return {"status": "unknown"}
+    status = await action_requests.read_status(
+        db, session_id=session_id, device_id=device_id, request_id=normalized
+    )
+    if status.get("status") == action_requests.STATUS_COMPLETED:
+        turn_doc = await db.turns.find_one(
+            {"id": status.get("turn_id"), "session_id": session_id}, {"_id": 0}
+        )
+        if turn_doc:
+            settings = await get_ai_settings()
+            include_debug = bool(settings.get("developer_mode")) and bool(status.get("debug_mode"))
+            return {
+                "status": action_requests.STATUS_COMPLETED,
+                "turn": build_player_turn(turn_doc, include_debug=include_debug),
+            }
+        return {"status": action_requests.STATUS_FAILED, "error_kind": action_requests.ERROR_SUPERSEDED}
+    return {"status": status.get("status", "unknown"), **(
+        {"error_kind": status["error_kind"]} if status.get("error_kind") else {}
+    )}
 
 
 @api_router.post("/story/session/{session_id}/mode")
@@ -4580,20 +4742,27 @@ async def export_session_raw(
 async def reset_session(session_id: str, device_id: str = Depends(require_device_id)):
     """Delete all turns and rolling state but keep the session shell (genre/role/difficulty/mode).
     The client should then re-call /story/action with a meaningful first action, or the next call
-    to /story/new with the same scenario."""
-    await fetch_owned_session(db, session_id, device_id)
-    await db.turns.delete_many({"session_id": session_id})
-    await db.sessions.update_one(
-        {"id": session_id},
-        {"$set": {
-            "turn_count": 0,
-            "last_narrative_snippet": "",
-            "last_state": {},
-            "rolling_state": None,
-            "replayability_state": None,
-            "updated_at": datetime.now(timezone.utc),
-        }},
-    )
+    to /story/new with the same scenario.
+
+    Participates in the action lease + revision contract: a reset cannot run
+    while an action is in flight (409), and any stale generation that outlives
+    the reset can no longer commit (revision bumped, lease token replaced)."""
+    _require_transaction_support()
+    lease_token: Optional[str] = None
+    try:
+        _session, lease_token = await acquire_action_lease(
+            db, session_id, device_id, purpose="reset"
+        )
+        await turn_commit.commit_session_reset(db, session_id=session_id, lease_token=lease_token)
+    except ActionLeaseConflict:
+        raise HTTPException(status_code=409, detail=ACTION_CONFLICT_DETAIL)
+    except turn_commit.CommitPreconditionFailed:
+        raise HTTPException(status_code=409, detail=ACTION_CONFLICT_DETAIL)
+    except turn_commit.TransactionSupportUnavailable:
+        raise HTTPException(status_code=503, detail=_SERVICE_UNAVAILABLE_DETAIL)
+    finally:
+        if lease_token:
+            await release_action_lease_quietly(db, session_id, lease_token)
     return {"reset": True}
 
 
@@ -4629,12 +4798,37 @@ async def get_latest_turn(session_id: str, device_id: str = Depends(require_devi
 
 @api_router.delete("/story/session/{session_id}")
 async def delete_session(session_id: str, device_id: str = Depends(require_device_id)):
-    await fetch_owned_session(db, session_id, device_id)
-    await db.turns.delete_many({"session_id": session_id})
-    result = await db.sessions.delete_one({"id": session_id})
-    if result.deleted_count == 0:
+    """Delete a chronicle atomically under the session lease (409 while an action runs)."""
+    _require_transaction_support()
+    lease_token: Optional[str] = None
+    try:
+        _session, lease_token = await acquire_action_lease(
+            db, session_id, device_id, purpose="delete"
+        )
+        await turn_commit.commit_session_delete(db, session_id=session_id, lease_token=lease_token)
+    except ActionLeaseConflict:
+        raise HTTPException(status_code=409, detail=ACTION_CONFLICT_DETAIL)
+    except turn_commit.CommitPreconditionFailed:
         raise HTTPException(status_code=404, detail="Session not found")
+    except turn_commit.TransactionSupportUnavailable:
+        raise HTTPException(status_code=503, detail=_SERVICE_UNAVAILABLE_DETAIL)
+    finally:
+        if lease_token:
+            await release_action_lease_quietly(db, session_id, lease_token)
     return {"deleted": True}
+
+
+@api_router.get("/admin/consistency")
+async def admin_consistency(
+    sample_limit: int = 20,
+    _: None = Depends(require_admin),
+):
+    """Read-only diagnostic for existing data: mismatched session/turn counts,
+    orphaned turns, duplicate turn numbers, and incomplete request records.
+    Never deletes or rewrites ambiguous historical data."""
+    report = await turn_commit.consistency_report(db, sample_limit=sample_limit)
+    report["transaction_support_error"] = _TRANSACTION_SUPPORT_ERROR
+    return report
 
 
 app.include_router(api_router)
@@ -4665,9 +4859,20 @@ logger = logging.getLogger(__name__)
 
 @app.on_event("startup")
 async def startup_rate_limit_indexes():
+    global _TRANSACTION_SUPPORT_ERROR
     await ensure_rate_limit_indexes(db)
     await ensure_action_concurrency_indexes(db)
     await ensure_story_creation_idempotency_indexes(db)
+    await action_requests.ensure_action_request_indexes(db)
+    await provider_budget.ensure_provider_usage_indexes(db)
+    try:
+        topology = await turn_commit.check_transaction_support(db)
+        _TRANSACTION_SUPPORT_ERROR = None
+        logger.info("transactional commit available: %s", topology)
+    except turn_commit.TransactionSupportUnavailable as exc:
+        # Fail closed for paid writes; read-only story access stays available.
+        _TRANSACTION_SUPPORT_ERROR = str(exc)
+        logger.critical("TRANSACTION SUPPORT UNAVAILABLE — write routes disabled: %s", exc)
 
 
 @app.on_event("shutdown")

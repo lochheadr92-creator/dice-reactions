@@ -42,4 +42,31 @@ export class ApiError extends Error {
   static isConflict(error: unknown): error is ApiError {
     return error instanceof ApiError && error.status === 409;
   }
+
+  /** 409 raised because the same action_request_id was reused with different contents. */
+  static isRequestMismatch(error: unknown): boolean {
+    return (
+      error instanceof ApiError &&
+      error.status === 409 &&
+      typeof error.detail === "string" &&
+      /action_request_id/i.test(error.detail)
+    );
+  }
+
+  static isNotFound(error: unknown): boolean {
+    return error instanceof ApiError && error.status === 404;
+  }
+
+  static isRateLimited(error: unknown): boolean {
+    return error instanceof ApiError && error.status === 429;
+  }
+
+  static isValidation(error: unknown): boolean {
+    return error instanceof ApiError && (error.status === 422 || error.status === 400);
+  }
+
+  /** Server failure where the outcome is not known to have happened (retry with the same id). */
+  static isRetryableServerError(error: unknown): boolean {
+    return error instanceof ApiError && (error.status === 502 || error.status === 503);
+  }
 }

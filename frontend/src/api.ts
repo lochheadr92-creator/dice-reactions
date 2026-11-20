@@ -1,7 +1,5 @@
 import { API } from "./theme";
 import { ApiError } from "./api-error";
-
-export { ApiError } from "./api-error";
 import type {
   WantValue,
   FearValue,
@@ -11,6 +9,8 @@ import type {
   FlawValue,
   LineValue,
 } from "./newstory/options";
+
+export { ApiError } from "./api-error";
 
 export type TurnChoice = { label: string; text: string };
 
@@ -275,18 +275,44 @@ export async function resetSession(sessionId: string, deviceId: string): Promise
   return handle(res);
 }
 
+export type SendActionResponse = {
+  turn: Turn;
+  /** True when the backend returned the saved result of an already-completed request id. */
+  replayed?: boolean;
+};
+
 export async function sendAction(payload: {
   session_id: string;
   device_id: string;
   action_text: string;
   debug_mode: boolean;
-}): Promise<{ turn: Turn }> {
+  /** Client idempotency key: one id ⇒ at most one committed turn. */
+  action_request_id?: string;
+}): Promise<SendActionResponse> {
   const { device_id, ...body } = payload;
   const res = await fetch(`${API}/story/action`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...deviceHeaders(device_id) },
     body: JSON.stringify(body),
   });
+  return handle(res);
+}
+
+export type ActionRequestStatus = {
+  status: "completed" | "in_progress" | "failed" | "unknown";
+  turn?: Turn;
+  error_kind?: string;
+};
+
+export async function getActionRequestStatus(
+  sessionId: string,
+  requestId: string,
+  deviceId: string
+): Promise<ActionRequestStatus> {
+  const res = await fetch(
+    `${API}/story/session/${sessionId}/action/${encodeURIComponent(requestId)}`,
+    { headers: deviceHeaders(deviceId) }
+  );
   return handle(res);
 }
 

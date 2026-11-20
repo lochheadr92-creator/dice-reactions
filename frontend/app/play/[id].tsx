@@ -11,6 +11,7 @@ import {
   Platform,
   Modal,
   Alert,
+  Share,
 } from "react-native";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -28,18 +29,32 @@ import {
   exportSession,
   resetSession,
   setSessionMode,
+  getActionRequestStatus,
   Turn,
   SessionSummary,
 } from "../../src/api";
 import { syncAfterActionConflict } from "../../src/action-conflict-sync";
+import { resolvePendingActionStatus } from "../../src/action-status-sync";
 import { mergeChronicleTurns, maxTurnNumber } from "../../src/chronicle-merge";
+import {
+  PendingAction,
+  buildPendingAction,
+  clearPendingAction,
+  loadPendingAction,
+  resolveRequestId,
+  savePendingAction,
+} from "../../src/pending-action";
 import { getDeviceId, getSettings as getAppSettings } from "../../src/storage";
 import {
   friendlyError,
   ACTION_CONFLICT_EXHAUSTION_MESSAGE,
+  ACTION_MISMATCH_MESSAGE,
+  ACTION_NOT_SENT_MESSAGE,
+  ACTION_PENDING_MESSAGE,
+  ACTION_RECOVERED_MESSAGE,
+  ACTION_UNCERTAIN_MESSAGE,
 } from "../../src/errors";
 import { sanitizeParagraphs, sanitizeChoices } from "../../src/sanitize";
-import { Share } from "react-native";
 
 const HEALTH_COLOR_MAP: Record<string, string> = {
   stable: COLORS.objective,
@@ -165,6 +180,9 @@ export default function PlayScreen() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [syncingConflict, setSyncingConflict] = useState(false);
+  // True while the outcome of an already-sent action is being looked up
+  // (lost response, reload with a pending action). Blocks resubmission.
+  const [resolvingPending, setResolvingPending] = useState(false);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [customAction, setCustomAction] = useState("");
   const [showLedger, setShowLedger] = useState(false);
@@ -191,7 +209,10 @@ export default function PlayScreen() {
   const sessionEpochRef = useRef(0);
   const focusRefreshGenerationRef = useRef(0);
   const mountedRef = useRef(true);
-  const actionBusy = submitting || syncingConflict;
+  // The action currently in flight / awaiting an outcome. Keeps ONE request id
+  // (and the typed text) until the backend reports completion or failure.
+  const pendingActionRef = useRef<PendingAction | null>(null);
+  const actionBusy = submitting || syncingConflict || resolvingPending;
 
   const refreshCausalHistory = useCallback(async () => {
     if (!sessionId || !deviceIdRef.current) return;
@@ -255,7 +276,86 @@ export default function PlayScreen() {
     }, [sessionId, refreshSessionReadOnly])
   );
 
+  const appendCommittedTurn = useCallback(
+    (turn: Turn) => {
+      focusRefreshGenerationRef.current += 1;
+      setTurns((prev) => mergeChronicleTurns(prev, [turn]));
+      pendingScrollRef.current = true;
+      void refreshCausalHistory();
+    },
+    [refreshCausalHistory]
+  );
+
+  const settlePendingAction = useCallback(
+    async (sid: string, completedTurn?: Turn, pendingText?: string) => {
+      pendingActionRef.current = null;
+      await clearPendingAction(sid);
+      if (completedTurn) {
+        appendCommittedTurn(completedTurn);
+        // Clear only the text that belonged to the completed action; keep
+        // anything the player typed afterwards (e.g. after a reload).
+        setCustomAction((current) =>
+          pendingText === undefined || current.trim() === pendingText ? "" : current
+        );
+      }
+    },
+    [appendCommittedTurn]
+  );
+
+  /**
+   * Look up the outcome of a sent action WITHOUT resending it. Completed →
+   * append the saved turn; failed/unknown → keep id + text for a retry;
+   * in_progress → keep id + text and tell the player it is still resolving.
+   */
+  const resolvePendingAction = useCallback(
+    async (
+      pending: PendingAction,
+      generation: number,
+      mode: "recovered" | "uncertain" | "after_conflict"
+    ) => {
+      const sid = sessionId;
+      const epoch = sessionEpochRef.current;
+      setResolvingPending(true);
+      try {
+        const deviceId = deviceIdRef.current || (await getDeviceId());
+        deviceIdRef.current = deviceId;
+        const result = await resolvePendingActionStatus({
+          getActionRequestStatus,
+          sessionId: sid,
+          requestId: pending.requestId,
+          deviceId,
+        });
+        if (
+          !mountedRef.current ||
+          sid !== sessionId ||
+          epoch !== sessionEpochRef.current ||
+          generation !== submitGenerationRef.current
+        ) {
+          return;
+        }
+        if (result.status === "completed" && result.turn) {
+          await settlePendingAction(sid, result.turn, pending.text);
+          setActionNotice(mode === "recovered" ? ACTION_RECOVERED_MESSAGE : null);
+          return;
+        }
+        if (result.status === "in_progress") {
+          setActionNotice(ACTION_PENDING_MESSAGE);
+          return;
+        }
+        // failed / unknown: no transition happened; same id + text can be resent.
+        // After a lease conflict the conflict guidance already says so.
+        if (mode !== "after_conflict") {
+          setActionNotice(ACTION_NOT_SENT_MESSAGE);
+        }
+      } finally {
+        if (mountedRef.current) setResolvingPending(false);
+      }
+    },
+    [sessionId, settlePendingAction]
+  );
+
   const load = useCallback(async () => {
+    const epoch = sessionEpochRef.current;
     try {
       const deviceId = await getDeviceId();
       deviceIdRef.current = deviceId;
@@ -267,12 +367,19 @@ export default function PlayScreen() {
       pendingScrollRef.current = false;
       setDebugMode(res.session.debug_mode);
       setMode(((res.session as any).mode as "basic" | "advanced") || "advanced");
+      // Restore an action whose outcome was never confirmed (reload mid-flight).
+      const pending = await loadPendingAction(sessionId);
+      if (pending && mountedRef.current && epoch === sessionEpochRef.current) {
+        pendingActionRef.current = pending;
+        setCustomAction((current) => current || pending.text);
+        void resolvePendingAction(pending, submitGenerationRef.current, "recovered");
+      }
     } catch (e) {
       console.log("load session", e);
     } finally {
       setLoading(false);
     }
-  }, [refreshCausalHistory, sessionId]);
+  }, [refreshCausalHistory, resolvePendingAction, sessionId]);
 
   useEffect(() => {
     load();
@@ -296,6 +403,8 @@ export default function PlayScreen() {
     focusRefreshGenerationRef.current += 1;
     conflictSyncSignalRef.current.cancelled = true;
     conflictSyncGenerationRef.current += 1;
+    pendingActionRef.current = null;
+    setResolvingPending(false);
     setSyncingConflict(false);
     setSubmitting(false);
     setActionNotice(null);
@@ -362,45 +471,87 @@ export default function PlayScreen() {
     }
   };
 
+  const showError = (e: unknown) => {
+    const { title, message } = friendlyError(e);
+    if (Platform.OS === "web") alert(`${title}\n\n${message}`);
+    else Alert.alert(title, message);
+  };
+
   const submit = async (text: string) => {
-    if (!text.trim() || actionBusy) return;
+    const trimmed = text.trim();
+    if (!trimmed || actionBusy) return;
 
     const generation = submitGenerationRef.current + 1;
     submitGenerationRef.current = generation;
     conflictSyncSignalRef.current.cancelled = true;
 
     const baselineMaxTurn = maxTurnNumber(turns);
+    const sid = sessionId;
+    // Same text + flag as the unresolved action ⇒ same request id (safe retry).
+    // Anything else is a deliberate new action and gets a fresh id.
+    const requestId = resolveRequestId(pendingActionRef.current, trimmed, debugMode);
+    const pending = buildPendingAction(requestId, trimmed, debugMode);
+    pendingActionRef.current = pending;
     setSubmitting(true);
     setActionNotice(null);
 
     try {
       const deviceId = deviceIdRef.current || (await getDeviceId());
       deviceIdRef.current = deviceId;
+      await savePendingAction(sid, pending);
       const res = await sendAction({
-        session_id: sessionId,
+        session_id: sid,
         device_id: deviceId,
-        action_text: text.trim(),
+        action_text: trimmed,
         debug_mode: debugMode,
+        action_request_id: requestId,
       });
 
       if (generation !== submitGenerationRef.current) return;
-
-      focusRefreshGenerationRef.current += 1;
-      setTurns((prev) => [...prev, res.turn]);
-      pendingScrollRef.current = true;
-      setCustomAction("");
-      void refreshCausalHistory();
+      await settlePendingAction(sid, res.turn);
     } catch (e: unknown) {
       if (generation !== submitGenerationRef.current) return;
 
-      if (ApiError.isConflict(e)) {
-        await runConflictSync(generation, baselineMaxTurn);
+      if (ApiError.isRequestMismatch(e)) {
+        // Our id was already bound to different contents: drop it, keep the text.
+        pendingActionRef.current = null;
+        await clearPendingAction(sid);
+        setActionNotice(ACTION_MISMATCH_MESSAGE);
         return;
       }
 
-      const { title, message } = friendlyError(e);
-      if (Platform.OS === "web") alert(`${title}\n\n${message}`);
-      else Alert.alert(title, message);
+      if (ApiError.isConflict(e)) {
+        await runConflictSync(generation, baselineMaxTurn);
+        if (generation === submitGenerationRef.current && pendingActionRef.current) {
+          // The conflicting action may have been our own duplicate: ask, don't resend.
+          await resolvePendingAction(pendingActionRef.current, generation, "after_conflict");
+        }
+        return;
+      }
+
+      if (ApiError.isValidation(e)) {
+        // Rejected before any work: the id is free to reuse, the text is kept.
+        pendingActionRef.current = null;
+        await clearPendingAction(sid);
+        showError(e);
+        return;
+      }
+
+      if (e instanceof ApiError) {
+        // 429 / 502 / 503: nothing committed; keep id + text for a safe retry.
+        // Other statuses (e.g. 404 session gone) cannot be retried meaningfully.
+        if (!ApiError.isRateLimited(e) && !ApiError.isRetryableServerError(e)) {
+          pendingActionRef.current = null;
+          await clearPendingAction(sid);
+        }
+        showError(e);
+        return;
+      }
+
+      // Transport failure after sending: the outcome is uncertain. Never resend
+      // blindly — look the request up by its id.
+      setActionNotice(ACTION_UNCERTAIN_MESSAGE);
+      await resolvePendingAction(pending, generation, "uncertain");
     } finally {
       if (generation === submitGenerationRef.current) {
         setSubmitting(false);
@@ -413,6 +564,8 @@ export default function PlayScreen() {
       try {
         const deviceId = deviceIdRef.current || (await getDeviceId());
         await deleteSession(sessionId, deviceId);
+        pendingActionRef.current = null;
+        await clearPendingAction(sessionId);
         router.replace("/");
       } catch (e) {
         console.log(e);
@@ -660,6 +813,13 @@ export default function PlayScreen() {
             </View>
           )}
 
+          {resolvingPending && !syncingConflict && (
+            <View style={styles.thinkingRow} testID="resolving-indicator">
+              <ActivityIndicator color={COLORS.primary} size="small" />
+              <Text style={styles.thinkingText}>checking your last action…</Text>
+            </View>
+          )}
+
           {actionNotice ? (
             <View style={styles.actionNoticeRow} testID="action-notice">
               <Text style={styles.actionNoticeText}>{actionNotice}</Text>
@@ -850,6 +1010,8 @@ export default function PlayScreen() {
                   try {
                     const deviceId = deviceIdRef.current || (await getDeviceId());
                     await resetSession(sessionId, deviceId);
+                    pendingActionRef.current = null;
+                    await clearPendingAction(sessionId);
                     setShowMenu(false);
                     router.replace(`/new-story?from=reset&sessionTitle=${encodeURIComponent(session.title)}`);
                   } catch (e: any) {

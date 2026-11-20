@@ -27,6 +27,12 @@ ACTION_LOCK_FIELDS = (
     ACTION_LOCK_ACQUIRED_AT_FIELD,
     ACTION_LOCK_EXPIRES_AT_FIELD,
 )
+# Monotonic per-session revision. Every committed gameplay mutation (action
+# commit, reset) increments it, so a stale worker can never commit against a
+# revision that reset/delete has already superseded — even when turn_count
+# happens to return to the same value. Legacy sessions without the field are
+# normalised to 0 on their next lease acquisition.
+SESSION_REVISION_FIELD = "session_revision"
 
 ACTION_CONFLICT_DETAIL = "An action is already in progress for this chronicle"
 _SESSION_NOT_FOUND_DETAIL = "Session not found"
@@ -44,10 +50,6 @@ class ActionLeaseConflict(Exception):
     """Another unexpired action owns this session."""
 
 
-class ActionLeaseLost(Exception):
-    """Lease or expected turn_count no longer matches before final persistence."""
-
-
 def utc_now() -> datetime:
     if _clock_override is not None:
         return _clock_override
@@ -60,15 +62,28 @@ def set_clock_for_tests(moment: Optional[datetime]) -> None:
     _clock_override = moment
 
 
+def _lease_floor_seconds() -> int:
+    """A lease (and request claim) must outlive one full generation + commit.
+
+    Otherwise a retry could take over a still-running action and pay for a
+    second generation. Imported lazily to avoid an import cycle.
+    """
+    import provider_budget
+
+    return int(provider_budget.ACTION_GENERATION_DEADLINE_SEC) + 60
+
+
 def resolve_lease_seconds() -> int:
     raw = os.environ.get(LEASE_ENV_VAR)
     if raw is None or str(raw).strip() == "":
-        return DEFAULT_LEASE_SECONDS
-    try:
-        value = int(str(raw).strip())
-    except ValueError:
-        return DEFAULT_LEASE_SECONDS
-    return max(MIN_LEASE_SECONDS, min(MAX_LEASE_SECONDS, value))
+        value = DEFAULT_LEASE_SECONDS
+    else:
+        try:
+            value = int(str(raw).strip())
+        except ValueError:
+            value = DEFAULT_LEASE_SECONDS
+        value = max(MIN_LEASE_SECONDS, min(MAX_LEASE_SECONDS, value))
+    return max(value, _lease_floor_seconds())
 
 
 def _lease_available_filter(now: datetime) -> Dict[str, Any]:
@@ -103,8 +118,14 @@ async def acquire_action_lease(
     device_id: str,
     *,
     now: Optional[datetime] = None,
+    purpose: str = "action",
 ) -> Tuple[Dict[str, Any], str]:
-    """Atomically acquire a per-session action lease. Returns (session, token)."""
+    """Atomically acquire a per-session lease. Returns (session, token).
+
+    The same lease guards player actions, reset, and delete so none of them can
+    overlap. The returned session always carries ``session_revision`` (legacy
+    documents are normalised to 0 in the same atomic update).
+    """
     await _verify_session_owner(db, session_id, device_id)
     moment = now or utc_now()
     token = str(uuid.uuid4())
@@ -116,19 +137,24 @@ async def acquire_action_lease(
     }
     locked = await db.sessions.find_one_and_update(
         acquire_filter,
-        {
-            "$set": {
-                ACTION_LOCK_TOKEN_FIELD: token,
-                ACTION_LOCK_ACQUIRED_AT_FIELD: moment,
-                ACTION_LOCK_EXPIRES_AT_FIELD: expires_at,
+        [
+            {
+                "$set": {
+                    ACTION_LOCK_TOKEN_FIELD: token,
+                    ACTION_LOCK_ACQUIRED_AT_FIELD: moment,
+                    ACTION_LOCK_EXPIRES_AT_FIELD: expires_at,
+                    SESSION_REVISION_FIELD: {
+                        "$ifNull": [f"${SESSION_REVISION_FIELD}", 0]
+                    },
+                }
             }
-        },
+        ],
         return_document=ReturnDocument.AFTER,
     )
     if not locked:
-        logger.info("action lease conflict for session %s", session_id)
+        logger.info("%s lease conflict for session %s", purpose, session_id)
         raise ActionLeaseConflict()
-    logger.info("action lease acquired for session %s", session_id)
+    logger.info("%s lease acquired for session %s", purpose, session_id)
     locked.pop("_id", None)
     return locked, token
 
@@ -143,30 +169,53 @@ async def release_action_lease(
         return False
     result = await db.sessions.update_one(
         {"id": session_id, ACTION_LOCK_TOKEN_FIELD: token},
-        {
-            "$unset": {
-                ACTION_LOCK_TOKEN_FIELD: "",
-                ACTION_LOCK_ACQUIRED_AT_FIELD: "",
-                ACTION_LOCK_EXPIRES_AT_FIELD: "",
-            }
-        },
+        {"$unset": lease_release_unset()},
     )
     if result.matched_count:
         logger.info("action lease released for session %s", session_id)
         return True
-    logger.warning("action lease release skipped for session %s", session_id)
+    # Normal after a committed transaction (the commit already cleared the
+    # lease) or after expiry; never an error for the caller.
+    logger.info("action lease release skipped for session %s", session_id)
     return False
+
+
+async def release_action_lease_quietly(db, session_id: str, token: str) -> None:
+    """Release a lease without letting a storage error mask the request outcome."""
+    try:
+        await release_action_lease(db, session_id, token)
+    except Exception:
+        logger.exception("lease release failed for session %s (lease will expire)", session_id)
 
 
 def build_persist_cas_filter(
     session_id: str,
     lease_token: str,
     expected_turn_count: int,
+    expected_revision: Optional[int] = None,
 ) -> Dict[str, Any]:
-    return {
+    """Compare-and-set filter for the final session write of one gameplay mutation.
+
+    Matches only when the caller still owns the lease, the turn count is the one
+    generation started from, and (when supplied) the session revision has not
+    been superseded by a reset/delete or competing commit.
+    """
+    cas: Dict[str, Any] = {
         "id": session_id,
         ACTION_LOCK_TOKEN_FIELD: lease_token,
         "turn_count": expected_turn_count,
+    }
+    if expected_revision is not None:
+        cas[SESSION_REVISION_FIELD] = expected_revision
+    return cas
+
+
+def lease_release_unset() -> Dict[str, Any]:
+    """``$unset`` payload that clears the lease fields (used inside commits)."""
+    return {
+        ACTION_LOCK_TOKEN_FIELD: "",
+        ACTION_LOCK_ACQUIRED_AT_FIELD: "",
+        ACTION_LOCK_EXPIRES_AT_FIELD: "",
     }
 
 

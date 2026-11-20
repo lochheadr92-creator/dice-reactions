@@ -25,6 +25,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
+import provider_budget
+
 from ai_config import (
     AUTOMATIC_FALLBACK_MODELS,
     DEFAULT_MODEL,
@@ -251,11 +253,14 @@ async def _call_model_once(
     temperature: float,
     max_tokens: int,
     extra_headers: Optional[Dict[str, str]] = None,
+    timeout_seconds: Optional[float] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """One HTTP call to the resolved provider for a single model. Returns (content, telemetry).
 
     OpenRouter is the default route for every existing model id (behaviour
     unchanged). Direct OpenAI is used only for explicitly namespaced ids.
+    ``timeout_seconds`` lets the caller cap the call at the time left in the
+    active generation deadline.
     """
     route = resolve_provider_route(model_id)
     label = route["label"]
@@ -278,8 +283,11 @@ async def _call_model_once(
 
     url = f"{route['base_url']}/chat/completions"
     started = time.monotonic()
+    timeout = DEFAULT_TIMEOUT_SECONDS
+    if timeout_seconds is not None:
+        timeout = max(1.0, min(float(DEFAULT_TIMEOUT_SECONDS), float(timeout_seconds)))
 
-    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(url, json=payload, headers=headers)
     latency_ms = int((time.monotonic() - started) * 1000)
 
@@ -358,7 +366,14 @@ async def chat_completion_with_meta(
     Raises AIServiceError only if EVERY model in the chain exhausts retries on
     a fallback-trigger error, OR a non-fallback-trigger error (bad_request) is
     raised by the primary call.
+
+    Budget contract (reliability release): an active ``provider_budget`` is
+    REQUIRED. Every attempt — per-model retries and fallback models alike —
+    reserves one unit of the shared per-request attempt budget, honours the
+    request deadline, and is recorded as a usage row. Budget exhaustion raises
+    ``ProviderBudgetError`` immediately (no further retries or fallbacks).
     """
+    budget = provider_budget.require_active()
     temp = float(temperature) if temperature is not None else DEFAULT_TEMPERATURE
     mt = int(max_tokens) if max_tokens is not None else DEFAULT_MAX_TOKENS
     per_model_retries = (
@@ -393,10 +408,19 @@ async def chat_completion_with_meta(
         attempts_per_model[model_id] = 0
         for attempt in range(1, per_model_retries + 1):
             attempts_per_model[model_id] = attempt
+            # Budget reservation sits OUTSIDE the retry handler: an exhausted
+            # budget must stop the whole chain, never trigger another model.
+            attempt_id = await budget.reserve_attempt(model_id)
             try:
                 content, telem = await _call_model_once(
-                    model_id, messages, temp, mt, extra_headers=extra_headers
+                    model_id,
+                    messages,
+                    temp,
+                    mt,
+                    extra_headers=extra_headers,
+                    timeout_seconds=budget.remaining_seconds(),
                 )
+                await budget.record_result(attempt_id, telemetry=telem)
                 logger.info(
                     "LLM completion ok · provider=%s · model=%s · attempt=%s · in_msgs=%s · out_chars=%s · latency=%sms · tokens=%s",
                     telem.get("provider_route"),
@@ -422,6 +446,7 @@ async def chat_completion_with_meta(
                     if isinstance(exc, AIServiceError)
                     else AIServiceError(str(exc), kind=kind)
                 )
+                await budget.record_result(attempt_id, error=last_error)
                 logger.warning(
                     "Model %s attempt %s/%s failed [%s]: %s",
                     model_id,

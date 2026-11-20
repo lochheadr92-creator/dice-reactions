@@ -2,32 +2,41 @@
 
 ## Prerequisites
 
-| Tool | Version (from repo) | Purpose |
+| Tool | Version (CI parity) | Purpose |
 |------|---------------------|---------|
-| Python | 3.12 (inferred from `.venv`) | Backend |
-| Node.js | — | Frontend (Expo) |
-| Yarn | 1.22.22 (`packageManager` in `package.json`) | Frontend deps |
-| MongoDB | — | Session/turn persistence |
-| OpenRouter API key | — | LLM completions |
+| Python | 3.12 | Backend |
+| Node.js | 20 (LTS) | Frontend (Expo) |
+| Yarn | 1.22.22 via Corepack (`packageManager` in `package.json`; no `package-lock.json`) | Frontend deps |
+| MongoDB | 7, **replica set or sharded cluster** (transactions required) | Session/turn persistence |
+| OpenRouter API key | — | LLM completions (leave empty for deterministic tests) |
+
+**MongoDB must be transaction-capable.** Turn commits, story creation, reset and delete run in multi-document transactions. On a standalone `mongod` the server starts, logs `TRANSACTION SUPPORT UNAVAILABLE`, and answers **503** on every paid write route while read-only story routes keep working. Start a local single-node replica set:
+
+```powershell
+mongod --replSet rs0 --bind_ip 127.0.0.1 --port 27017 --dbpath C:\data\rs0
+# then once, from a client (mongosh or Python/pymongo):
+#   rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "127.0.0.1:27017" }] })
+# connection string: mongodb://127.0.0.1:27017/?replicaSet=rs0
+```
 
 ## Backend setup
 
-```bash
-cd backend
-python -m venv .venv
-
-# Windows PowerShell
-.venv\Scripts\Activate.ps1
-
-pip install -r requirements.txt
+```powershell
+Set-Location backend
+py -3.12 -m venv .venv
+& .\.venv\Scripts\python.exe -m pip install -r requirements.txt -c constraints.txt
+& .\.venv\Scripts\python.exe -m pip check
 ```
 
-Create or edit `backend/.env`:
+`requirements.txt` declares the direct dependencies; `constraints.txt` pins the exact versions that were installed and verified (Windows dev + Linux CI, Python 3.12). Always install with `-c constraints.txt`; regenerate it only for an intentional upgrade (`python -m pip freeze --exclude-editable | grep -v "^pip==" > constraints.txt`).
+
+Copy `backend/.env.example` to `backend/.env` and fill in real values (never commit `.env`):
 
 ```env
-MONGO_URL=mongodb://127.0.0.1:27017
+MONGO_URL=mongodb://127.0.0.1:27017/?replicaSet=rs0
 DB_NAME=dice_reaction
 OPENROUTER_API_KEY=your-openrouter-api-key-here
+ADMIN_API_KEY=a-long-random-secret
 CORS_ORIGINS=*
 ENABLE_DEBUG_PANEL=true
 ```
@@ -51,6 +60,8 @@ Optional overrides (see `ai_config.py` / `ai_service.py`):
 | `APP_PUBLIC_URL` | example URL | OpenRouter referer header |
 | `APP_TITLE` | `Dice Reaction Story Engine` | OpenRouter title header |
 
+Paid-work limits (`RATE_LIMIT_*`, `PROVIDER_*`, `ACTION_GENERATION_DEADLINE_SEC`, `*_MAX_CHARS`) and their defaults are listed in [api.md](./api.md#paid-provider-controls) and `backend/.env.example`.
+
 Start the server:
 
 ```bash
@@ -65,10 +76,15 @@ curl http://localhost:8000/api/health
 
 ## Frontend setup
 
-```bash
-cd frontend
-yarn install
+```powershell
+Set-Location frontend
+node --version            # v20.x
+corepack enable           # or use `corepack.cmd yarn ...` without enabling shims
+corepack yarn --version   # 1.22.22 (from packageManager)
+corepack yarn install --frozen-lockfile
 ```
+
+Only `yarn.lock` is committed; do not add a `package-lock.json`. If `yarn install --frozen-lockfile` fails, fix the declaration rather than regenerating the lockfile to hide the failure.
 
 Create or edit `frontend/.env`:
 
@@ -89,18 +105,29 @@ yarn ios            # iOS
 
 ## Verification commands
 
-From `AGENTS.md` and `memory/PRD.md`:
+Backend (needs the replica set; the deterministic suite makes no provider calls):
 
-```bash
-# Backend tests (from backend/)
-pytest tests/ -q
-
-# Frontend typecheck (from frontend/)
-yarn tsc --noEmit
-
-# Frontend lint (from frontend/)
-yarn lint
+```powershell
+Set-Location backend
+$env:MONGO_URL = "mongodb://127.0.0.1:27017/?replicaSet=rs0"
+$env:DB_NAME = "dice_reactions_test"
+$env:ADMIN_API_KEY = "local-test-only"
+$env:OPENROUTER_API_KEY = ""
+& .\.venv\Scripts\python.exe -m pip check
+& .\.venv\Scripts\python.exe -m pytest -m "not live" -q
 ```
+
+Frontend (Node 20):
+
+```powershell
+Set-Location frontend
+corepack yarn test
+corepack yarn typecheck
+corepack yarn lint --max-warnings=0
+corepack yarn expo export --platform web --output-dir dist
+```
+
+See [verification.md](./verification.md) for the CI definition and the test inventory, and [reliability-release.md](./reliability-release.md) for the reliability-release evidence.
 
 ### Test layout
 
@@ -136,10 +163,13 @@ See `AGENTS.md`:
 
 ## Known tooling gaps
 
-- `test_story_engine.py` has a flake8 `E741` style issue and outdated assertions.
-- Generic JS lint may not parse TypeScript/TSX reliably for this Expo project.
-- `httpx` is required by `ai_service.py` but not explicitly pinned in `requirements.txt` (**Unknown** whether always installed transitively).
+- `test_story_engine.py` targets a live server (`live` marker) and has outdated assertions.
+- `expo lint` prints a benign `yarnpkg` shim warning on Windows.
 
-## Deployment
+## Deployment prerequisites
 
-**Unknown:** No Dockerfile, CI config, or deployment manifest was found in the inspected repository. `memory/PRD.md` references a preview URL (`chronicle-runtime.preview.emergentagent.com`) from a prior verification run; that is environment-specific and not defined in source.
+- MongoDB 7 **replica set or sharded cluster** (transactions). Verify after deploy: `GET /api/admin/consistency` → `transaction_support_error` must be `null`.
+- Node 20 / Yarn 1.22.22 for web export; Python 3.12 with `constraints.txt` for the backend.
+- `ADMIN_API_KEY` set; provider keys set only on the deployment that should make paid calls.
+- Rollback: the release adds collections (`action_requests`, `provider_usage`), indexes, and the `session_revision` / `turns.action_request_key` fields. Rolling the code back leaves those in place harmlessly; the previous code ignores them. Rolling forward again normalises `session_revision` lazily on the next lease acquisition. No data migration is required or performed.
+- No Dockerfile or deployment manifest exists in the repository; CI is `.github/workflows/deterministic-ci.yml`.

@@ -31,6 +31,7 @@ import re as _re
 from typing import Any, Dict, List, Optional
 
 from memory import _normalize_object_name, _status_rank, canonicalize_object_registry
+import provider_budget
 from ai_service import chat_completion_with_meta as _provider_call
 
 
@@ -40,7 +41,12 @@ from ai_service import chat_completion_with_meta as _provider_call
 # here so validation/guards can never be bypassed.
 # ---------------------------------------------------------------------------
 async def invoke_llm(**kwargs):
-    """The one and only entry point to the language model (Ch 31.11)."""
+    """The one and only entry point to the language model (Ch 31.11).
+
+    Requires an active provider budget (see provider_budget) so no caller can
+    reach the paid provider without attempt/deadline/quota enforcement.
+    """
+    provider_budget.require_active()
     return await _provider_call(**kwargs)
 
 # Object statuses that are irreversible. dropped / hidden / stored / lost are
