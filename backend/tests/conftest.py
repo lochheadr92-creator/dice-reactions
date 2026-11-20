@@ -19,6 +19,17 @@ apply_test_environment(os.environ)
 # Pin the new-story narration default so a local backend/.env setting
 # (DEFAULT_PROSE_MODE) cannot change test expectations.
 os.environ["DEFAULT_PROSE_MODE"] = "standard"
+# Same for the mature-content switches: tests that need them use monkeypatch.
+os.environ["MATURE_RENDERER_ENABLED"] = "false"
+os.environ["MATURE_MODEL_ID"] = ""
+os.environ["DISTRIBUTION_CHANNEL"] = "store"
+for _flag in (
+    "ENABLE_MATURE_CONTENT",
+    "ENABLE_MATURE_SEXUAL_CONTENT",
+    "ENABLE_MATURE_NONCONSENSUAL_CONTENT",
+    "ENABLE_GRAPHIC_SEXUAL_CONTENT",
+):
+    os.environ[_flag] = "false"
 
 # Explicit admin key for security/raw-export tests — do not rely on import order.
 os.environ.setdefault("ADMIN_API_KEY", "test-admin-key-for-live-suite")

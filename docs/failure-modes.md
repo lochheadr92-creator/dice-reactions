@@ -475,6 +475,6 @@ Historical pre-foundation scoring equivalence remains **N/A** because that imple
 
 **Symptom:** The optional mature prose rerender described an event or object ownership that contradicted authoritative state.
 
-**Mitigation:** The second-pass renderer is disabled for this release (`mature_rendering.MATURE_RENDERER_ENABLED = False`); the validated canonical narrative is served and no second provider call can run. A renderer redesign with a real factual-equivalence gate is separate future work.
+**Mitigation:** The second-pass renderer is off by default (`MATURE_RENDERER_ENABLED` unset). When an operator turns it on, the rewrite must keep the paragraph count, pass the 18+ boundary and pass the full turn validator, or the canonical narrative is served; the canonical narrative is always stored. This reduces but does not remove the risk: the validator catches state contradictions it knows about, not every changed event. A real factual-equivalence gate is separate future work.
 
 **Detection:** `tests/test_canonical_rendering.py`, `tests/test_mature_rendering.py`.

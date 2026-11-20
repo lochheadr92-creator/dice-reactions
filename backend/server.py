@@ -4351,12 +4351,14 @@ async def _create_new_story_inner(req: NewStoryRequest, attempt: Dict[str, Any])
     )
 
     canonical_narrative = parsed.narrative
-    parsed, rendering_policy = await _apply_presentation_rendering(
-        session.model_dump(),
-        parsed,
-        merged_rolling or parsed.rolling_state,
-        None,
-    )
+    # The renderer's provider call shares this request's budget.
+    async with provider_budget.active_budget(budget):
+        parsed, rendering_policy = await _apply_presentation_rendering(
+            session.model_dump(),
+            parsed,
+            merged_rolling or parsed.rolling_state,
+            None,
+        )
     session.rendering_policy = rendering_policy
     enriched_debug["rendering_status"] = str(
         rendering_policy.get("last_status") or "standard"
@@ -4721,12 +4723,14 @@ async def _execute_story_action(
         )
 
         canonical_narrative = parsed.narrative
-        parsed, rendering_policy = await _apply_presentation_rendering(
-            session,
-            parsed,
-            merged_rolling or parsed.rolling_state,
-            req.action_text,
-        )
+        # The renderer's provider call shares this action's budget.
+        async with provider_budget.active_budget(budget):
+            parsed, rendering_policy = await _apply_presentation_rendering(
+                session,
+                parsed,
+                merged_rolling or parsed.rolling_state,
+                req.action_text,
+            )
         enriched_debug["rendering_status"] = str(
             rendering_policy.get("last_status") or "standard"
         )

@@ -286,9 +286,11 @@ Every paid model call — story creation and player actions, including validatio
 
 Usage accounting: every attempt writes a `provider_usage` row (request key, model, status `started`→`ok`/`error`/`uncertain`, token counts when the provider reports them, `telemetry_missing` otherwise; 30-day TTL). Rows are never deleted on uncertain outcomes. These are hard request/attempt/concurrency caps with token accounting — **not a monetary spending ceiling** (no pricing is embedded). Limiter or usage storage failure → **503** for new paid work; read-only story routes keep working.
 
-### Mature renderer (disabled this release)
+### Mature renderer (off by default)
 
-The optional second-pass mature prose renderer is **disabled** (`mature_rendering.MATURE_RENDERER_ENABLED = False`). `GET /setup/capabilities` reports `mature_renderer_configured: false` regardless of `MATURE_MODEL_ID`; every session — including saved sessions whose `rendering_policy.route` is `mature_pinned` — receives the validated canonical narrative with `rendering_policy.last_status = "safe_fallback_renderer_disabled"` and `last_renderer = "standard"`. Stored `mature_content` preferences, saved stories and historical passages are not rewritten. No second provider call can execute.
+The optional second-pass mature prose renderer runs only when the operator sets `MATURE_RENDERER_ENABLED=true` and a pinned `MATURE_MODEL_ID` whose provider is configured. Off (the default), `GET /setup/capabilities` reports `mature_renderer_configured: false`; every session — including saved sessions whose `rendering_policy.route` is `mature_pinned` — receives the validated canonical narrative with `rendering_policy.last_status = "safe_fallback_renderer_disabled"` and `last_renderer = "standard"`, and no second provider call executes.
+
+On, a session whose `mature_content.adult_mode_enabled` is true gets one strict call to the mature model (no automatic fallback) inside the same provider budget as the turn. The rewrite is served only if it keeps the paragraph count, passes the 18+ boundary and passes the full turn validator; otherwise the canonical narrative is served with a `safe_fallback_*` status (`safe_fallback_provider_budget` when the budget is spent). The canonical narrative is always stored as `canonical_narrative`. Known risk: no complete factual-equivalence check exists (FM-30).
 
 ## Admin / AI settings
 

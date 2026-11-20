@@ -157,3 +157,87 @@ def test_disabled_renderer_never_reaches_provider_even_without_budget(monkeypatc
     )
     assert result.rendered is False
     assert result.narrative == "They sat beside the fire."
+
+
+# --------------------------------------------------------------------------- #
+# Operator switch ON (MATURE_RENDERER_ENABLED=true)
+# --------------------------------------------------------------------------- #
+def test_switch_reads_environment_and_defaults_off(monkeypatch):
+    import importlib
+
+    try:
+        for value, expected in (("true", True), ("1", True), ("", False), ("no", False)):
+            monkeypatch.setenv("MATURE_RENDERER_ENABLED", value)
+            assert importlib.reload(mature_rendering).MATURE_RENDERER_ENABLED is expected
+        monkeypatch.delenv("MATURE_RENDERER_ENABLED")
+        assert importlib.reload(mature_rendering).MATURE_RENDERER_ENABLED is False
+    finally:
+        monkeypatch.setenv("MATURE_RENDERER_ENABLED", "false")
+        importlib.reload(mature_rendering)
+
+
+def _enable_switch(monkeypatch):
+    _configure_renderer(monkeypatch)
+    monkeypatch.setattr(mature_rendering, "MATURE_RENDERER_ENABLED", True)
+
+
+def test_enabled_renderer_reports_configured(monkeypatch):
+    _enable_switch(monkeypatch)
+    assert mature_rendering.mature_renderer_is_configured() is True
+
+
+def test_enabled_renderer_serves_rewrite(monkeypatch):
+    _enable_switch(monkeypatch)
+    seen = {}
+
+    async def faithful(**kwargs):
+        seen["model"] = kwargs["model"]
+        return {"content": "<narrative>Mara waits, rigid, outside the locked gate. The key stays heavy in your pocket.</narrative>"}
+
+    monkeypatch.setattr(mature_rendering, "chat_completion_strict_with_meta", faithful)
+    result = _run_with_budget(
+        mature_rendering.render_mature_presentation(
+            _session(),
+            "Mara waits outside the locked gate. The key remains in your pocket.",
+            {"player_age": 30, "npcs": [{"name": "Mara", "age": 30}]},
+        )
+    )
+    assert seen["model"] == "x-ai/grok-pinned-2026-01"
+    assert result.rendered is True
+    assert result.narrative.startswith("Mara waits, rigid")
+    assert result.rendering_policy["last_status"] == "rendered_mature"
+    assert result.rendering_policy["last_renderer"] == "mature_pinned"
+
+
+def test_enabled_renderer_without_budget_fails_closed(monkeypatch):
+    """The real provider path refuses a call with no active budget."""
+    _enable_switch(monkeypatch)
+    result = asyncio.run(
+        mature_rendering.render_mature_presentation(_session(), "They sat beside the fire.", {"npcs": []})
+    )
+    assert result.rendered is False
+    assert result.narrative == "They sat beside the fire."
+    assert result.rendering_policy["last_status"] == "safe_fallback_provider_budget"
+
+
+def test_enabled_renderer_with_exhausted_budget_fails_closed(monkeypatch):
+    _enable_switch(monkeypatch)
+    called = {"n": 0}
+
+    async def never(*_a, **_k):
+        called["n"] += 1
+        raise AssertionError("provider must not be called")
+
+    monkeypatch.setattr(ai_service, "_call_model_once", never)
+
+    async def inner():
+        async with provider_budget.active_budget(provider_budget.offline_budget(max_attempts=0)):
+            return await mature_rendering.render_mature_presentation(
+                _session(), "They sat beside the fire.", {"npcs": []}
+            )
+
+    result = asyncio.run(inner())
+    assert called["n"] == 0
+    assert result.narrative == "They sat beside the fire."
+    assert result.rendering_policy["last_status"] == "safe_fallback_provider_budget"
+

@@ -4,24 +4,28 @@ The authoritative turn has already been generated and validated before this
 module runs.  Only prose may be replaced; state, choices, events, model locks,
 and replay inputs remain untouched.
 
-RELIABILITY RELEASE: the second-pass renderer is DISABLED
-(``MATURE_RENDERER_ENABLED = False``). Assessment showed the rewrite could
-change an event or object ownership while authoritative state stayed
-unchanged, and no reliable factual-equivalence check exists yet. Until a
-renderer redesign ships, every session — including existing sessions whose
-stored ``rendering_policy.route`` is ``mature_pinned`` — is served the
-validated canonical narrative. Stored content preferences, saved stories, and
-historical passages are not rewritten. ``mature_renderer_is_configured()``
-reports ``False`` so capability responses and the UI show the renderer as
-unavailable.
+The second-pass renderer is OFF unless the operator sets
+``MATURE_RENDERER_ENABLED=true`` (default off since the reliability release).
+Known risk when on: the rewrite can change an event or object ownership while
+authoritative state stays unchanged. The rendered prose is re-run through the
+engine's full turn validator before it is served, but no complete
+factual-equivalence check exists. While off, every session (including
+``mature_pinned`` ones) is served the validated canonical narrative and
+``mature_renderer_is_configured()`` reports ``False``.
+
+The renderer's provider call runs inside the action's provider budget (same
+attempt limit and deadline as the turn); an exhausted budget falls back to the
+canonical narrative.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+import os
 from typing import Any, Dict, Mapping
 
+import provider_budget
 from ai_config import get_mature_model_id
 from ai_service import (
     AIServiceError,
@@ -37,9 +41,10 @@ from mature_content import (
 )
 
 
-# Release switch. Not environment-driven on purpose: this release must not be
-# able to execute a second rendering-provider call under any configuration.
-MATURE_RENDERER_ENABLED = False
+# Operator switch, default off. Read once at import; tests pin it off.
+MATURE_RENDERER_ENABLED = os.environ.get(
+    "MATURE_RENDERER_ENABLED", ""
+).strip().lower() in ("1", "true", "yes", "on")
 RENDERER_DISABLED_STATUS = "safe_fallback_renderer_disabled"
 
 
@@ -193,6 +198,12 @@ async def render_mature_presentation(
             original,
             original_paragraphs,
             _policy(session, "safe_fallback_provider_error"),
+        )
+    except provider_budget.ProviderBudgetError:
+        return MatureRenderResult(
+            original,
+            original_paragraphs,
+            _policy(session, "safe_fallback_provider_budget"),
         )
 
     rendered = _extract_narrative(response.get("content") or "")
