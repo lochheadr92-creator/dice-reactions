@@ -108,3 +108,9 @@ from openai import OpenAI.txt
 
 # Transient git history-rewrite scratch (git filter-repo/filter-branch)
 .git-rewrite/
+
+# Windows launcher configuration, service logs and persistent local game database
+.local/launcher/
+.local/mongo-gameplay/
+.local/mongo-gameplay.log
+.local/backend-gameplay.*.log
