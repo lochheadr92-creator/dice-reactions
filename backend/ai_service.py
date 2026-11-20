@@ -71,6 +71,13 @@ OPENAI_PROVIDER_PREFIX = "openai-direct/"
 # off there. Unset (the default) sends nothing, so OpenRouter and real OpenAI
 # requests are unchanged.
 OPENAI_DIRECT_REASONING_EFFORT = os.environ.get("OPENAI_DIRECT_REASONING_EFFORT", "").strip()
+# When on, callers' ``assistant_prefill`` is sent on the openai-direct route as
+# a trailing assistant message that the server continues (Ollama does; real
+# OpenAI does not, so this stays off by default). The prefill is put back on
+# the front of the returned content.
+OPENAI_DIRECT_ASSISTANT_PREFILL = os.environ.get(
+    "OPENAI_DIRECT_ASSISTANT_PREFILL", ""
+).strip().lower() in ("1", "true", "yes", "on")
 
 DEFAULT_TEMPERATURE = float(os.environ.get("DEFAULT_TEMPERATURE", "0.85"))
 DEFAULT_MAX_TOKENS = int(os.environ.get("DEFAULT_MAX_TOKENS", "2048"))
@@ -280,6 +287,7 @@ async def _call_model_once(
     max_tokens: int,
     extra_headers: Optional[Dict[str, str]] = None,
     timeout_seconds: Optional[float] = None,
+    assistant_prefill: Optional[str] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """One HTTP call to the resolved provider for a single model. Returns (content, telemetry).
 
@@ -297,6 +305,14 @@ async def _call_model_once(
         # Direct OpenAI-compatible route (real OpenAI, NVIDIA NIM, local
         # Ollama): send one leading system message. OpenRouter is unchanged.
         messages = merge_leading_system_messages(messages)
+    prefill = ""
+    if (
+        assistant_prefill
+        and OPENAI_DIRECT_ASSISTANT_PREFILL
+        and model_id.startswith(OPENAI_PROVIDER_PREFIX)
+    ):
+        prefill = assistant_prefill
+        messages = list(messages) + [{"role": "assistant", "content": prefill}]
     payload: Dict[str, Any] = {
         "model": route["api_model"],
         "messages": messages,
@@ -360,6 +376,10 @@ async def _call_model_once(
         raise AIServiceError(
             f"{label} returned empty content: {data}", kind=KIND_MALFORMED
         )
+    # The server returns only the continuation; restore the prefill unless it
+    # echoed the whole message.
+    if prefill and not content.lstrip().startswith(prefill.strip()):
+        content = prefill + content
 
     usage = data.get("usage") or {}
     telemetry = {
@@ -373,6 +393,7 @@ async def _call_model_once(
         else data.get("provider"),
         "provider_route": route["provider"],
         "status": KIND_OK,
+        "assistant_prefill": bool(prefill),
     }
     return content, telemetry
 
@@ -389,6 +410,7 @@ async def chat_completion_with_meta(
     max_retries_per_model: Optional[int] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     allow_fallback: bool = True,
+    assistant_prefill: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run a completion, retrying within a model then falling back to the next.
 
@@ -462,6 +484,7 @@ async def chat_completion_with_meta(
                     mt,
                     extra_headers=extra_headers,
                     timeout_seconds=budget.remaining_seconds(),
+                    assistant_prefill=assistant_prefill,
                 )
                 await budget.record_result(attempt_id, telemetry=telem)
                 logger.info(

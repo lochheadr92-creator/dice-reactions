@@ -41,6 +41,45 @@ def test_choice_rejects_unknown_person_before_introduction():
     assert "Harwood" in reason
 
 
+def test_choice_accepts_known_npc_despite_state_name_case():
+    # Regression (2026-11-21, Qwen3.6): the model stored "mirek" in
+    # rolling_state npcs, then named "Mirek" in a choice. The exact-case
+    # comparison rejected a known character and forced a retry.
+    ok, reason = sc.validate_choices_named_entities(
+        [{"label": "A", "text": "Ask Mirek where the search party is heading"}],
+        narrative="Rain drums on the roof. You tighten the bandage on your knee.",
+        prior_rolling={"npcs": [{"name": "mirek", "alive": True}]},
+        scenario=None,
+    )
+    assert ok is True, reason
+
+
+def test_question_words_in_dialogue_choices_are_not_people():
+    # Regression (2026-11-21, Qwen3.6): "Who's fighting who?" in a quoted
+    # dialogue choice was read as an unknown person named "Who".
+    ok, reason = sc.validate_choices_named_entities(
+        [
+            {"label": "C", "text": '"What exactly is the unrest about? Who\u2019s fighting who?"'},
+            {"label": "D", "text": '"Why stay? How far is the river? Which road is safe?"'},
+        ],
+        narrative="The campfire crackles. The man with the scar watches you.",
+        prior_rolling=None,
+        scenario=None,
+    )
+    assert ok is True, reason
+
+
+def test_choice_still_rejects_unknown_person_when_state_has_other_names():
+    ok, reason = sc.validate_choices_named_entities(
+        [{"label": "A", "text": "Ask Harwood where the search party is heading"}],
+        narrative="Rain drums on the roof. You tighten the bandage on your knee.",
+        prior_rolling={"npcs": [{"name": "mirek", "alive": True}]},
+        scenario=None,
+    )
+    assert ok is False
+    assert "Harwood" in reason
+
+
 def test_choice_allows_scenario_npc_after_narrative_introduces_them():
     scenario = get_scenario("dinosaur-containment-breach")
     narrative = (

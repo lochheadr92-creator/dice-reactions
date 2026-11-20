@@ -245,3 +245,110 @@ def test_direct_route_sends_one_system_message_and_openrouter_is_unchanged(monke
     assert [m["role"] for m in direct] == ["system", "user"]
     openrouter = _send_messages(monkeypatch, ai_config.MODEL_SONNET, messages)
     assert openrouter == messages
+
+
+# --------------------------------------------------------------------------- #
+# Assistant prefill on the direct route (forces rolling_state first on Ollama)
+# --------------------------------------------------------------------------- #
+class _ReplyClient(_CapturingClient):
+    reply = "ok"
+
+    async def post(self, url, json=None, headers=None):
+        import httpx
+
+        _CapturingClient.sent.append({"url": url, "json": json})
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": _ReplyClient.reply}}]}
+        )
+
+
+def _send_prefill(monkeypatch, model_id, *, enabled, reply, prefill="<rolling_state>\n{"):
+    _CapturingClient.sent = []
+    _ReplyClient.reply = reply
+    monkeypatch.setattr(ai_service.httpx, "AsyncClient", _ReplyClient)
+    monkeypatch.setattr(ai_service, "OPENAI_DIRECT_ASSISTANT_PREFILL", enabled)
+    monkeypatch.setattr(ai_service, "OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(ai_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(ai_service, "NVIDIA_API_KEY", "")
+    content, telem = asyncio.run(
+        ai_service._call_model_once(
+            model_id,
+            [{"role": "system", "content": "rules"}, {"role": "user", "content": "act"}],
+            0.5,
+            16,
+            assistant_prefill=prefill,
+        )
+    )
+    return _CapturingClient.sent[0]["json"]["messages"], content, telem
+
+
+def test_prefill_sent_and_restored_on_direct_route_when_enabled(monkeypatch):
+    sent, content, telem = _send_prefill(
+        monkeypatch,
+        "openai-direct/dice-qwen36",
+        enabled=True,
+        reply='\n  "scene": "petrol station"\n}\n</rolling_state>\n<narrative>x</narrative>',
+    )
+    assert sent[-1] == {"role": "assistant", "content": "<rolling_state>\n{"}
+    assert content.startswith('<rolling_state>\n{\n  "scene"')
+    assert telem["assistant_prefill"] is True
+
+
+def test_prefill_not_doubled_when_server_echoes_whole_message(monkeypatch):
+    echoed = '<rolling_state>\n{"scene": "x"}</rolling_state>'
+    _sent, content, _telem = _send_prefill(
+        monkeypatch, "openai-direct/dice-qwen36", enabled=True, reply=echoed
+    )
+    assert content == echoed
+
+
+def test_prefill_not_sent_when_disabled(monkeypatch):
+    sent, content, telem = _send_prefill(
+        monkeypatch, "openai-direct/dice-qwen36", enabled=False, reply="plain"
+    )
+    assert [m["role"] for m in sent] == ["system", "user"]
+    assert content == "plain"
+    assert telem["assistant_prefill"] is False
+
+
+def test_prefill_never_reaches_openrouter(monkeypatch):
+    sent, content, _telem = _send_prefill(
+        monkeypatch, ai_config.MODEL_SONNET, enabled=True, reply="plain"
+    )
+    assert [m["role"] for m in sent] == ["system", "user"]
+    assert content == "plain"
+
+
+def test_turn_generation_requests_rolling_state_prefill(monkeypatch):
+    import uuid
+
+    import gateway
+    import server
+
+    captured = {}
+
+    async def fake_invoke_llm(**kwargs):
+        captured.update(kwargs)
+        return {
+            "content": "irrelevant",
+            "model_used": "test-model",
+            "model_requested": "test-model",
+            "telemetry": {},
+            "fallback_events": [],
+            "attempts_per_model": {},
+        }
+
+    async def fake_settings():
+        return {"max_tokens": 2048, "memory_depth": 3, "history_window": 30}
+
+    async def fake_build_messages(session, user_text, memory_depth,
+                                  history_window_fallback, **kwargs):
+        return [{"role": "user", "content": user_text}]
+
+    monkeypatch.setattr(gateway, "invoke_llm", fake_invoke_llm)
+    monkeypatch.setattr(server, "get_ai_settings", fake_settings)
+    monkeypatch.setattr(server, "_build_messages", fake_build_messages)
+    session = {"id": str(uuid.uuid4()), "turn_count": 5, "mode": "advanced"}
+    asyncio.run(server._generate_turn(session, "Continue"))
+    assert captured["assistant_prefill"] == server.TURN_REPLY_PREFILL
+    assert server.TURN_REPLY_PREFILL.startswith("<rolling_state>")

@@ -63,6 +63,22 @@ def test_unknown_or_missing_values_fail_safe_to_standard(value):
     assert prose_modes.resolve_prose_mode(value).name == "standard"
 
 
+@pytest.mark.parametrize("value", [None, "", "  "])
+def test_configured_default_empty_is_standard(value):
+    assert prose_modes.resolve_configured_default(value) == "standard"
+
+
+@pytest.mark.parametrize("value", ["story", " Story ", "brief", "cinematic"])
+def test_configured_default_accepts_mode_names(value):
+    assert prose_modes.resolve_configured_default(value) == value.strip().lower()
+
+
+@pytest.mark.parametrize("value", ["long", "L", "storey", "huge"])
+def test_configured_default_rejects_unknown_values(value):
+    with pytest.raises(ValueError):
+        prose_modes.resolve_configured_default(value)
+
+
 def test_mode_budgets_match_specification():
     b = prose_modes.PROSE_MODES["brief"]
     assert (b.min_paragraphs, b.max_paragraphs) == (1, 1)

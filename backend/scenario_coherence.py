@@ -101,6 +101,13 @@ _STOP_NAMES = frozenset(
         "South",
         "East",
         "West",
+        # Question words that open quoted dialogue choices ("Who's fighting who?")
+        "Who",
+        "Whom",
+        "Whose",
+        "Why",
+        "How",
+        "Which",
     }
 )
 
@@ -253,13 +260,17 @@ def validate_choices_named_entities(
         prior_rolling=prior_rolling,
         scenario=scenario,
     )
+    # Compare case-insensitively: models store state names inconsistently
+    # ("mirek" in rolling_state npcs, "Mirek" in the choice text).
+    known_folded = {k.casefold() for k in known}
     for choice in choices or []:
         text = str(choice.get("text") or "")
         for name in _names_in_choice_text(text):
-            if name in known:
+            folded = name.casefold()
+            if folded in known_folded:
                 continue
             # Allow if any known name contains this token or vice versa
-            if any(name in k or k in name for k in known):
+            if any(folded in k or k in folded for k in known_folded):
                 continue
             return (
                 False,

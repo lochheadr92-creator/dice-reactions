@@ -125,6 +125,15 @@ import world_state_consumers as world_consumers  # noqa: E402
 DEFAULT_MODE = "advanced"
 DEFAULT_COMPRESSION_LEVEL = "standard"  # light / standard / aggressive
 DEFAULT_MEMORY_DEPTH = 3  # how many recent assistant turns to replay verbatim alongside rolling state
+# Narration length for new stories whose request names no prose_mode
+# (brief / standard / story / cinematic). Invalid values stop startup.
+DEFAULT_SESSION_PROSE_MODE = prose_modes.resolve_configured_default(
+    os.environ.get("DEFAULT_PROSE_MODE")
+)
+# Start of every turn reply. Routes that support continuing an assistant
+# message (local Ollama, opt-in via OPENAI_DIRECT_ASSISTANT_PREFILL) begin the
+# reply here, so the model cannot skip the required rolling_state block.
+TURN_REPLY_PREFILL = "<rolling_state>\n{"
 
 MODE_PROFILES = {
     "basic":    {"max_tokens_cap": 1100, "min_choices": 3, "max_choices": 4},
@@ -688,6 +697,39 @@ def _extract_block(text: str, tag: str) -> str:
     m = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
     return m.group(1).strip() if m else ""
 
+_NARRATIVE_OPEN_RE = re.compile(r"<\s*narrative\s*>", re.IGNORECASE)
+_NEXT_TURN_BLOCK_RE = re.compile(
+    r"<\s*(?:choices|state|ledger|debug|rolling_state)\s*>", re.IGNORECASE
+)
+_TRAILING_CLOSE_TAG_RE = re.compile(r"<\s*/\s*[A-Za-z_]+\s*>\s*$")
+
+
+def _extract_narrative(raw: str) -> str:
+    """Return the <narrative> block, tolerating a missing or misspelled close.
+
+    Local models sometimes write "<narrative>...<choices>" with no
+    "</narrative>", or close with a typo ("</narrage>"). The narrative then
+    runs to the next known block opening; a stray closing tag at its end is
+    dropped. Recovery is logged so the model fault stays visible.
+    """
+    strict = _extract_block(raw, "narrative")
+    if strict:
+        return strict
+    opened = _NARRATIVE_OPEN_RE.search(raw or "")
+    if not opened:
+        return ""
+    rest = raw[opened.end():]
+    nxt = _NEXT_TURN_BLOCK_RE.search(rest)
+    body = rest[: nxt.start()] if nxt else rest
+    body = _TRAILING_CLOSE_TAG_RE.sub("", body.strip()).strip()
+    if body:
+        logger.info(
+            "Recovered <narrative> with missing or malformed closing tag (%s chars)",
+            len(body),
+        )
+    return body
+
+
 def _parse_choices(block: str) -> List[Dict[str, str]]:
     choices = []
     for line in block.splitlines():
@@ -809,7 +851,7 @@ def _log_validation_failure_diagnostic(
     logger.info("Turn validation diagnostic (%s): %s", attempt, diag)
 
 def parse_turn(raw: str) -> ParsedTurn:
-    narrative = _extract_block(raw, "narrative")
+    narrative = _extract_narrative(raw)
     choices_block = _extract_block(raw, "choices")
     state_block = _extract_block(raw, "state")
     ledger_block = _extract_block(raw, "ledger")
@@ -1553,7 +1595,17 @@ def _apply_room_audit(
     adjustments: List[str] = []
     drift: List[str] = []
     if prior and isinstance(prior.get("objects"), list):
-        prior_set = set(prior["objects"])
+        # The engine stores identity strings, but the model's rolling_state
+        # update can rewrite known_rooms with {"object"/"name": ...} rows.
+        # Unhashable rows crashed the action (TypeError, 2026-11-21).
+        prior_set: set = set()
+        for obj in prior["objects"]:
+            if isinstance(obj, str):
+                prior_set.add(obj)
+            elif isinstance(obj, dict):
+                ident = _normalize_object_identity(obj.get("object") or obj.get("name"))
+                if ident:
+                    prior_set.add(ident)
         now_set = set(here_now)
         # Drift = identity previously known here AND not present in here_now
         # AND has NO canonical truth row anywhere. If the object has ANY
@@ -2484,6 +2536,7 @@ async def _generate_turn(
         temperature=settings.get("temperature"),
         max_tokens=max_tokens,
         max_retries_per_model=MAX_RETRIES,
+        assistant_prefill=TURN_REPLY_PREFILL,
     )
     # Bolt the budget diagnostics onto the returned meta so the route can
     # surface them in the per-turn debug payload.
@@ -2548,8 +2601,11 @@ _INTERNAL_DIRECTIVE_PROSE_RE = re.compile(
 )
 _SOFT_META_PHRASE_RE = re.compile(
     r"\b(?:"
-    r"the\s+(?:system|engine|simulation|runtime|parser|mechanics)|"
-    r"this\s+(?:system|engine|simulation|runtime|parser)|"
+    # "the/this engine" is not listed: engines are in-world (vehicles,
+    # generators). The meta sense is caught as story/game/narrative engine.
+    r"the\s+(?:system|simulation|runtime|parser|mechanics)|"
+    r"this\s+(?:system|simulation|runtime|parser)|"
+    r"(?:story|game|narrative)\s+engine|"
     r"underlying\s+(?:system|engine|mechanics?|logic)|"
     r"internal\s+(?:system|mechanics?|state|logic)|"
     r"my\s+(?:prompt|programming|model|reasoning)|"
@@ -3195,6 +3251,7 @@ async def _generate_validated_turn(
             temperature=settings.get("temperature"),
             max_tokens=max_tokens,
             max_retries_per_model=MAX_RETRIES,
+            assistant_prefill=TURN_REPLY_PREFILL,
         )
         result2["budget"] = retry_budget_diag
         raw2 = result2["content"]
@@ -4088,7 +4145,9 @@ async def _create_new_story_inner(req: NewStoryRequest, attempt: Dict[str, Any])
         rendering_policy=rendering_policy,
         title=title,
         mode=effective_mode,
-        prose_mode=prose_modes.resolve_prose_mode_name(req.prose_mode),
+        prose_mode=prose_modes.resolve_prose_mode_name(
+            req.prose_mode or DEFAULT_SESSION_PROSE_MODE
+        ),
         scenario_id=resolved_scenario_id,
         creation_request_id=creation_request_id,
         replayability_state=replayability_state,

@@ -58,6 +58,8 @@ Optional overrides (see `ai_config.py` / `ai_service.py`):
 | `ADVANCED_CONTEXT_BUDGET_TOKENS` | `16000` | Advanced mode budget |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | API base |
 | `OPENAI_DIRECT_REASONING_EFFORT` | unset | Sent as `reasoning_effort` only for `openai-direct/*` models. Set `none` for local Ollama thinking models, which otherwise spend `max_tokens` on thinking and return empty content. On this route the engine also joins its leading system messages into one, because some local chat templates (Qwen in Ollama) reject more than one |
+| `OPENAI_DIRECT_ASSISTANT_PREFILL` | off | When `true`, story turns on `openai-direct/*` models send `<rolling_state>\n{` as the start of the model's reply, and the engine puts it back on the returned text. The model can no longer skip the required state block. Needs a server that continues a trailing assistant message (Ollama does; real OpenAI does not). Never applied to OpenRouter |
+| `DEFAULT_PROSE_MODE` | `standard` | Narration length for new stories when the app sends no `prose_mode`: `brief` (300-600 chars), `standard` (700-1200), `story` (1800-2400), `cinematic` (3000-4000). Only these four names are accepted; any other value stops the engine at startup. Existing stories keep the mode they were created with. Tests pin it to `standard` |
 | `APP_PUBLIC_URL` | example URL | OpenRouter referer header |
 | `APP_TITLE` | `Dice Reaction Story Engine` | OpenRouter title header |
 

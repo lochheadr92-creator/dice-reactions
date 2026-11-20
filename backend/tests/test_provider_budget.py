@@ -155,7 +155,7 @@ def test_deadline_blocks_before_any_call(monkeypatch):
 def test_each_call_timeout_is_capped_by_remaining_deadline(monkeypatch):
     seen = {}
 
-    async def capture(model_id, messages, temp, mt, extra_headers=None, timeout_seconds=None):
+    async def capture(model_id, messages, temp, mt, extra_headers=None, timeout_seconds=None, **_k):
         seen["timeout"] = timeout_seconds
         return "ok", _telemetry(model_id)
 

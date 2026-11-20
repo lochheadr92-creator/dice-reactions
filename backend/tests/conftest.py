@@ -16,6 +16,10 @@ from db_guard import apply_test_environment  # noqa: E402
 # continue otherwise. backend/.env is deliberately not loaded here.
 apply_test_environment(os.environ)
 
+# Pin the new-story narration default so a local backend/.env setting
+# (DEFAULT_PROSE_MODE) cannot change test expectations.
+os.environ["DEFAULT_PROSE_MODE"] = "standard"
+
 # Explicit admin key for security/raw-export tests — do not rely on import order.
 os.environ.setdefault("ADMIN_API_KEY", "test-admin-key-for-live-suite")
 

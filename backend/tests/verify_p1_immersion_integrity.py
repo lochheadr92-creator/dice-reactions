@@ -78,7 +78,7 @@ def scenario_leak_validator() -> bool:
     # Should-block soft-meta phrasing
     blocked_phrases = [
         "The system carries you forward.",
-        "This engine is harder than the last.",
+        "The story engine is harder than the last.",
         "Underlying mechanics shift somewhere out of sight.",
         "Internal logic resolves the moment.",
         "As an AI, I cannot describe further.",

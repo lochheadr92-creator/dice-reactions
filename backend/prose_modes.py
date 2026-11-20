@@ -134,6 +134,23 @@ def resolve_prose_mode_name(value: Optional[str]) -> str:
     return _ALIASES.get(key, DEFAULT_PROSE_MODE)
 
 
+def resolve_configured_default(value: Optional[str]) -> str:
+    """Validate an operator-configured default mode (e.g. DEFAULT_PROSE_MODE).
+
+    Empty/missing → DEFAULT_PROSE_MODE. Only canonical mode names are accepted;
+    anything else raises so a typo fails at startup instead of silently
+    falling back to standard.
+    """
+    key = str(value or "").strip().lower()
+    if not key:
+        return DEFAULT_PROSE_MODE
+    if key not in PROSE_MODES:
+        raise ValueError(
+            f"prose mode {value!r} is not one of {sorted(PROSE_MODES)}"
+        )
+    return key
+
+
 def resolve_prose_mode(value: Optional[str]) -> ProseMode:
     """Resolve a requested value (S/M/L, short/medium/long, mode name, None)."""
     return PROSE_MODES[resolve_prose_mode_name(value)]
