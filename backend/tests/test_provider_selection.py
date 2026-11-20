@@ -386,3 +386,28 @@ def test_provider_client_receives_configured_tls_verify(monkeypatch):
         ai_service._call_model_once("openai-direct/gpt-4o", [{"role": "user", "content": "x"}], 0.5, 16)
     )
     assert seen["verify"] is sentinel
+
+
+# --------------------------------------------------------------------------- #
+# OpenRouter reasoning effort (Grok 4.x thinking cost/latency)
+# --------------------------------------------------------------------------- #
+def _send_openrouter_effort(monkeypatch, model_id, effort):
+    monkeypatch.setattr(ai_service, "OPENROUTER_REASONING_EFFORT", effort)
+    return _send(monkeypatch, model_id, "")
+
+
+def test_openrouter_route_sends_configured_reasoning_effort(monkeypatch):
+    payload = _send_openrouter_effort(monkeypatch, "x-ai/grok-4.7", "low")
+    assert payload["reasoning"] == {"effort": "low"}
+    assert "reasoning_effort" not in payload
+
+
+def test_openrouter_reasoning_not_sent_when_unset(monkeypatch):
+    payload = _send_openrouter_effort(monkeypatch, "x-ai/grok-4.7", "")
+    assert "reasoning" not in payload
+
+
+def test_openrouter_reasoning_never_reaches_direct_route(monkeypatch):
+    payload = _send_openrouter_effort(monkeypatch, "openai-direct/gpt-4o", "low")
+    assert "reasoning" not in payload
+

@@ -71,6 +71,10 @@ OPENAI_PROVIDER_PREFIX = "openai-direct/"
 # off there. Unset (the default) sends nothing, so OpenRouter and real OpenAI
 # requests are unchanged.
 OPENAI_DIRECT_REASONING_EFFORT = os.environ.get("OPENAI_DIRECT_REASONING_EFFORT", "").strip()
+# Sent as OpenRouter's unified ``reasoning: {"effort": ...}`` on the OpenRouter
+# route only (e.g. "low" for Grok 4.x, which otherwise spends many billed
+# thinking tokens and seconds per turn). Unset: OpenRouter/model default.
+OPENROUTER_REASONING_EFFORT = os.environ.get("OPENROUTER_REASONING_EFFORT", "").strip()
 # When on, callers' ``assistant_prefill`` is sent on the openai-direct route as
 # a trailing assistant message that the server continues (Ollama does; real
 # OpenAI does not, so this stays off by default). The prefill is put back on
@@ -344,6 +348,8 @@ async def _call_model_once(
     }
     if OPENAI_DIRECT_REASONING_EFFORT and model_id.startswith(OPENAI_PROVIDER_PREFIX):
         payload["reasoning_effort"] = OPENAI_DIRECT_REASONING_EFFORT
+    if OPENROUTER_REASONING_EFFORT and route["provider"] == "openrouter":
+        payload["reasoning"] = {"effort": OPENROUTER_REASONING_EFFORT}
     headers = {
         "Authorization": f"Bearer {route['api_key']}",
         "Content-Type": "application/json",
