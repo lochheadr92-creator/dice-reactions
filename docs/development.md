@@ -57,6 +57,7 @@ Optional overrides (see `ai_config.py` / `ai_service.py`):
 | `LOW_COST_CONTEXT_BUDGET_TOKENS` | `7000` | Low-cost budget |
 | `ADVANCED_CONTEXT_BUDGET_TOKENS` | `16000` | Advanced mode budget |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | API base |
+| `OPENAI_DIRECT_REASONING_EFFORT` | unset | Sent as `reasoning_effort` only for `openai-direct/*` models. Set `none` for local Ollama thinking models, which otherwise spend `max_tokens` on thinking and return empty content. On this route the engine also joins its leading system messages into one, because some local chat templates (Qwen in Ollama) reject more than one |
 | `APP_PUBLIC_URL` | example URL | OpenRouter referer header |
 | `APP_TITLE` | `Dice Reaction Story Engine` | OpenRouter title header |
 

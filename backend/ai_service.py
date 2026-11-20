@@ -65,6 +65,12 @@ NVIDIA_BASE_URL = os.environ.get(
 # opt-in namespace (e.g. "openai-direct/gpt-4o"). Every other id stays on OpenRouter,
 # including OpenRouter's own "openai/..." catalogue ids.
 OPENAI_PROVIDER_PREFIX = "openai-direct/"
+# Optional "reasoning_effort" sent ONLY on the direct OpenAI-compatible route
+# (openai-direct/* ids). Local Ollama thinking models answer with an empty
+# content field when their thinking uses up max_tokens; "none" turns thinking
+# off there. Unset (the default) sends nothing, so OpenRouter and real OpenAI
+# requests are unchanged.
+OPENAI_DIRECT_REASONING_EFFORT = os.environ.get("OPENAI_DIRECT_REASONING_EFFORT", "").strip()
 
 DEFAULT_TEMPERATURE = float(os.environ.get("DEFAULT_TEMPERATURE", "0.85"))
 DEFAULT_MAX_TOKENS = int(os.environ.get("DEFAULT_MAX_TOKENS", "2048"))
@@ -244,6 +250,26 @@ def _classify_exc(exc: Exception) -> str:
     return KIND_OTHER
 
 
+def merge_leading_system_messages(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Join consecutive leading system messages into one, in order.
+
+    The engine sends its rules and per-turn directives as several system
+    messages at the start. Some local chat templates (Qwen family in Ollama)
+    accept only one system message and answer HTTP 500 otherwise. Joining them
+    with blank lines keeps the same text in the same order. Messages after the
+    first non-system message are left untouched.
+    """
+    leading: List[str] = []
+    index = 0
+    while index < len(messages) and messages[index].get("role") == "system":
+        leading.append(str(messages[index].get("content") or ""))
+        index += 1
+    if len(leading) <= 1:
+        return list(messages)
+    merged = {"role": "system", "content": "\n\n".join(part for part in leading if part)}
+    return [merged] + list(messages[index:])
+
+
 # ---------------------------------------------------------------------------
 # Core single-model call — returns (content, telemetry)
 # ---------------------------------------------------------------------------
@@ -267,12 +293,18 @@ async def _call_model_once(
     if not route["api_key"]:
         raise AIServiceError(f"{route['key_env']} is not configured", kind=KIND_OTHER)
 
+    if model_id.startswith(OPENAI_PROVIDER_PREFIX):
+        # Direct OpenAI-compatible route (real OpenAI, NVIDIA NIM, local
+        # Ollama): send one leading system message. OpenRouter is unchanged.
+        messages = merge_leading_system_messages(messages)
     payload: Dict[str, Any] = {
         "model": route["api_model"],
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+    if OPENAI_DIRECT_REASONING_EFFORT and model_id.startswith(OPENAI_PROVIDER_PREFIX):
+        payload["reasoning_effort"] = OPENAI_DIRECT_REASONING_EFFORT
     headers = {
         "Authorization": f"Bearer {route['api_key']}",
         "Content-Type": "application/json",

@@ -147,3 +147,101 @@ def test_openrouter_missing_key_still_raises(monkeypatch):
         )
     assert "OPENROUTER_API_KEY is not configured" in str(ei.value)
     assert ei.value.kind == ai_service.KIND_OTHER
+
+
+# --------------------------------------------------------------------------- #
+# Optional reasoning_effort on the direct route (local Ollama thinking models)
+# --------------------------------------------------------------------------- #
+class _CapturingClient:
+    sent = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def post(self, url, json=None, headers=None):
+        import httpx
+
+        _CapturingClient.sent.append({"url": url, "json": json})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+
+def _send(monkeypatch, model_id, effort):
+    _CapturingClient.sent = []
+    monkeypatch.setattr(ai_service.httpx, "AsyncClient", _CapturingClient)
+    monkeypatch.setattr(ai_service, "OPENAI_DIRECT_REASONING_EFFORT", effort)
+    monkeypatch.setattr(ai_service, "OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(ai_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(ai_service, "NVIDIA_API_KEY", "")
+    asyncio.run(
+        ai_service._call_model_once(model_id, [{"role": "user", "content": "x"}], 0.5, 16)
+    )
+    return _CapturingClient.sent[0]["json"]
+
+
+def test_direct_route_sends_configured_reasoning_effort(monkeypatch):
+    payload = _send(monkeypatch, "openai-direct/dice-gemma4-12b", "none")
+    assert payload["reasoning_effort"] == "none"
+    assert payload["model"] == "dice-gemma4-12b"
+
+
+def test_reasoning_effort_is_not_sent_when_unset(monkeypatch):
+    payload = _send(monkeypatch, "openai-direct/dice-gemma4-12b", "")
+    assert "reasoning_effort" not in payload
+
+
+def test_reasoning_effort_never_reaches_openrouter(monkeypatch):
+    payload = _send(monkeypatch, ai_config.MODEL_SONNET, "none")
+    assert "reasoning_effort" not in payload
+
+
+# --------------------------------------------------------------------------- #
+# One leading system message on the direct route (Qwen templates in Ollama)
+# --------------------------------------------------------------------------- #
+def test_merge_leading_system_messages_keeps_order_and_later_messages():
+    messages = [
+        {"role": "system", "content": "rules"},
+        {"role": "system", "content": "pacing"},
+        {"role": "system", "content": "scenario"},
+        {"role": "user", "content": "act"},
+        {"role": "assistant", "content": "reply"},
+        {"role": "user", "content": "retry note"},
+    ]
+    merged = ai_service.merge_leading_system_messages(messages)
+    assert merged[0] == {"role": "system", "content": "rules\n\npacing\n\nscenario"}
+    assert merged[1:] == messages[3:]
+    assert messages[1]["content"] == "pacing"  # input not mutated
+
+
+def test_merge_is_a_no_op_with_one_or_no_system_message():
+    one = [{"role": "system", "content": "rules"}, {"role": "user", "content": "act"}]
+    none = [{"role": "user", "content": "act"}]
+    assert ai_service.merge_leading_system_messages(one) == one
+    assert ai_service.merge_leading_system_messages(none) == none
+
+
+def _send_messages(monkeypatch, model_id, messages):
+    _CapturingClient.sent = []
+    monkeypatch.setattr(ai_service.httpx, "AsyncClient", _CapturingClient)
+    monkeypatch.setattr(ai_service, "OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(ai_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(ai_service, "NVIDIA_API_KEY", "")
+    asyncio.run(ai_service._call_model_once(model_id, messages, 0.5, 16))
+    return _CapturingClient.sent[0]["json"]["messages"]
+
+
+def test_direct_route_sends_one_system_message_and_openrouter_is_unchanged(monkeypatch):
+    messages = [
+        {"role": "system", "content": "rules"},
+        {"role": "system", "content": "pacing"},
+        {"role": "user", "content": "act"},
+    ]
+    direct = _send_messages(monkeypatch, "openai-direct/dice-qwen122", messages)
+    assert [m["role"] for m in direct] == ["system", "user"]
+    openrouter = _send_messages(monkeypatch, ai_config.MODEL_SONNET, messages)
+    assert openrouter == messages
