@@ -84,14 +84,10 @@ FIXED_ACTIONS: List[str] = [
     "I set off again toward the refuge.",
 ]
 
-# The fallback turn builds two player-facing lines from the first active
-# pressure label (server._build_fail_forward_parsed_turn and
-# server._grounded_fail_forward_choices). A label found there is an internal
-# mechanic name shown to the player.
-# The label is the clause right before "still presses"; paragraphs may be
-# joined by a blank line, a newline or a space depending on the store.
-_LEAK_NARRATIVE_RE = re.compile(r"(?:^|[.!?]\s+|\n)([^.!?\n]+?) still presses on the scene;")
-_LEAK_CHOICE_RE = re.compile(r"^Respond carefully to (.+)$")
+# Internal pressure labels are the engine's pressure-graph node labels and
+# their projection in rolling_state.active_pressures ("trust duty",
+# "information debt"). A leak is one of those labels appearing anywhere in a
+# turn's player-facing text.
 _QUOTED_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
 _NUMBER_RE = re.compile(r"\d+")
 
@@ -119,25 +115,53 @@ def cause_bucket(kind: Any, reason: Any) -> str:
     return f"{kind_text}: {reason_text}" if reason_text else kind_text
 
 
-def leaked_labels(turn: Dict[str, Any]) -> List[str]:
-    """Internal pressure labels shown in a fallback turn's player text."""
-    found: List[str] = []
-    match = _LEAK_NARRATIVE_RE.search(str(turn.get("narrative") or ""))
-    if match:
-        found.append(match.group(1).strip())
+def internal_pressure_labels(export: Dict[str, Any]) -> List[str]:
+    """Internal labels for one exported session. Only labels of two or more
+    words are kept, so an ordinary single word in prose is not a false hit."""
+    labels = set()
+    own_words = set()
+    session = export.get("session") or {}
+    graph = ((session.get("replayability_state") or {}).get("pressure_graph") or {})
+    for node in graph.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        label = str(node.get("label") or "").strip()
+        # custom_setup labels are the player's own words, not internal names.
+        (own_words if str(node.get("origin_type") or "") == "custom_setup" else labels).add(label)
+    for turn in export.get("turns") or []:
+        for row in ((turn.get("rolling_state") or {}).get("active_pressures") or []):
+            if isinstance(row, dict):
+                row = row.get("label") or row.get("name") or row.get("id") or ""
+            labels.add(str(row).strip())
+    return sorted(label for label in labels - own_words if len(label.split()) >= 2)
+
+
+def player_text(turn: Dict[str, Any]) -> str:
+    parts = [str(turn.get("narrative") or "")]
     for choice in turn.get("choices") or []:
         if isinstance(choice, dict):
-            hit = _LEAK_CHOICE_RE.match(str(choice.get("text") or "").strip())
-            if hit:
-                found.append(hit.group(1).strip())
-    return sorted(set(found))
+            parts.append(str(choice.get("text") or ""))
+    state = turn.get("state")
+    if isinstance(state, dict):
+        parts.extend(str(v) for v in state.values())
+    return "\n".join(parts)
+
+
+def leaked_labels(turn: Dict[str, Any], internal: List[str]) -> List[str]:
+    """Internal pressure labels found in a turn's player-facing text."""
+    text = player_text(turn).casefold()
+    return sorted({label for label in internal if label.casefold() in text})
 
 
 def summarise(
-    live: List[Dict[str, Any]], turns_by_number: Dict[int, Dict[str, Any]]
+    live: List[Dict[str, Any]],
+    turns_by_number: Dict[int, Dict[str, Any]],
+    internal_labels: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Pure summary of one run. ``live`` holds the HTTP result of each action;
-    ``turns_by_number`` holds the exported turn documents."""
+    ``turns_by_number`` holds the exported turn documents; ``internal_labels``
+    are the session's internal pressure labels (see internal_pressure_labels)."""
+    internal = list(internal_labels or [])
     per_turn: List[Dict[str, Any]] = []
     fallback_causes: Dict[str, int] = {}
     retry_causes: Dict[str, int] = {}
@@ -164,9 +188,9 @@ def summarise(
                 debug.get("validation_second_fail") or debug.get("validation_first_fail"),
             )
             fallback_causes[row["fallback_cause"]] = fallback_causes.get(row["fallback_cause"], 0) + 1
-            row["leaked_labels"] = leaked_labels(doc or {})
-            for label in row["leaked_labels"]:
-                leak_labels[label] = leak_labels.get(label, 0) + 1
+        row["leaked_labels"] = leaked_labels(doc, internal) if doc else []
+        for label in row["leaked_labels"]:
+            leak_labels[label] = leak_labels.get(label, 0) + 1
         per_turn.append(row)
 
     ok = [r for r in per_turn if r.get("http_status") == 200]
@@ -195,7 +219,8 @@ def summarise(
         "fallback_rate": rate(len(fallbacks), len(seen)),
         "fallback_by_cause": dict(sorted(fallback_causes.items(), key=lambda kv: -kv[1])),
         "first_failure_by_cause": dict(sorted(retry_causes.items(), key=lambda kv: -kv[1])),
-        "label_leak_turns": sum(1 for r in fallbacks if r.get("leaked_labels")),
+        "label_leak_turns": sum(1 for r in seen if r.get("leaked_labels")),
+        "internal_labels_checked": internal,
         "leaked_labels": dict(sorted(leak_labels.items(), key=lambda kv: -kv[1])),
         "seconds_per_turn_mean": round(statistics.fmean(http_seconds), 1) if http_seconds else None,
         "seconds_per_turn_median": round(statistics.median(http_seconds), 1) if http_seconds else None,
@@ -220,7 +245,10 @@ def format_summary(summary: Dict[str, Any]) -> str:
         lines.append(f"  fallback cause    : {count} x {cause}")
     for cause, count in summary["first_failure_by_cause"].items():
         lines.append(f"  first failure     : {count} x {cause}")
-    lines.append(f"label leak turns    : {summary['label_leak_turns']}")
+    lines.append(
+        f"label leak turns    : {summary['label_leak_turns']} "
+        f"(checked {len(summary['internal_labels_checked'])} internal labels in all player text)"
+    )
     for label, count in summary["leaked_labels"].items():
         lines.append(f"  leaked label      : {count} x {label!r}")
     lines.append(
@@ -324,7 +352,7 @@ def run(base_url: str, turns: int, timeout: float) -> Tuple[int, Dict[str, Any]]
     turns_by_number = {
         t["turn_number"]: t for t in body.get("turns") or [] if isinstance(t.get("turn_number"), int)
     }
-    summary = summarise(live, turns_by_number)
+    summary = summarise(live, turns_by_number, internal_pressure_labels(body))
     opening = turns_by_number.get(1) or {}
     summary.update(
         {

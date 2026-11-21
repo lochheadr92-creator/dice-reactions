@@ -77,7 +77,7 @@ def test_summary_counts_fallbacks_by_cause_and_leaks():
         5: _fallback(pressure="", second_kind="coherence",
                      second_fail="coherence/unknown person 'Wardens' in choice"),
     }
-    s = eval_turns.summarise(live, docs)
+    s = eval_turns.summarise(live, docs, ["information debt", "trust duty"])
     assert s["turns_requested"] == 5
     assert s["turns_http_ok"] == 4 and s["turns_http_failed"] == 1
     assert s["real_turns"] == 2 and s["real_turns_after_retry"] == 1
@@ -91,14 +91,35 @@ def test_summary_counts_fallbacks_by_cause_and_leaks():
     assert s["leaked_labels"] == {"information debt": 1}
 
 
-def test_leak_label_is_only_the_clause_before_still_presses():
-    for joiner in ("\n\n", "\n", " "):
-        turn = {
-            "narrative": "The moment holds. You remain as scout in a pass." + joiner
-            + "trust duty still presses on the scene; nothing new is invented to escape it.",
-            "choices": [],
-        }
-        assert eval_turns.leaked_labels(turn) == ["trust duty"]
+def test_leak_is_an_internal_label_anywhere_in_player_text():
+    internal = ["trust duty", "information debt"]
+    narrative = {"narrative": "Cold. Trust Duty still presses on the scene.", "choices": []}
+    choice = {"narrative": "x", "choices": [{"label": "D", "text": "Respond carefully to information debt"}]}
+    state = {"narrative": "x", "choices": [], "state": {"Pressure": "trust duty"}}
+    clean = {"narrative": "Heavy snowfall still presses on the scene.", "choices": []}
+    assert eval_turns.leaked_labels(narrative, internal) == ["trust duty"]
+    assert eval_turns.leaked_labels(choice, internal) == ["information debt"]
+    assert eval_turns.leaked_labels(state, internal) == ["trust duty"]
+    assert eval_turns.leaked_labels(clean, internal) == []
+
+
+def test_real_turns_are_checked_for_leaks_too():
+    docs = {2: _real()}
+    docs[2]["narrative"] = "You feel the information debt closing in."
+    s = eval_turns.summarise([_live(1, 2)], docs, ["information debt"])
+    assert s["label_leak_turns"] == 1 and s["fallback_turns"] == 0
+
+
+def test_internal_labels_come_from_the_graph_and_skip_the_players_own_words():
+    export = {
+        "session": {"replayability_state": {"pressure_graph": {"nodes": [
+            {"label": "trust duty", "origin_type": "opening_state"},
+            {"label": "my brother's debt", "origin_type": "custom_setup"},
+            {"label": "scarcity", "origin_type": "opening_state"},
+        ]}}},
+        "turns": [{"rolling_state": {"active_pressures": ["ammo social", "my brother's debt"]}}],
+    }
+    assert eval_turns.internal_pressure_labels(export) == ["ammo social", "trust duty"]
 
 
 def test_speed_uses_only_single_call_real_turns():

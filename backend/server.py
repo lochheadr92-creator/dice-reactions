@@ -2924,19 +2924,18 @@ def _fallback_scene_label(session: Dict[str, Any], rolling: Dict[str, Any]) -> s
 
 
 def _fallback_pressure_phrase(rolling: Dict[str, Any], session: Dict[str, Any]) -> str:
-    for row in rolling.get("active_pressures") or []:
-        if isinstance(row, dict):
-            label = str(row.get("label") or row.get("name") or row.get("id") or "").strip()
-            if label:
-                return label[:80]
-        elif row:
-            return str(row)[:80]
-    labels = creation_contract.active_seeded_pressure_labels(session)
-    if labels:
-        return str(labels[0])[:80]
+    """Player-facing pressure phrase for fallback text.
+
+    Only the Pressure line of the last validated turn is used: the player has
+    already been shown it. ``rolling_state.active_pressures`` and the seeded
+    pressure labels are engine projections of the pressure graph (ADR-023),
+    internal names such as "trust duty" or "information debt", and must never
+    reach the player (hidden-mechanics rule). With no Pressure line the
+    fallback text uses its generic wording.
+    """
     last_state = session.get("last_state") if isinstance(session.get("last_state"), dict) else {}
-    pressure = str(last_state.get("Pressure") or "").strip()
-    return pressure[:80] if pressure else ""
+    pressure = str(last_state.get("Pressure") or "").strip().strip("[]").strip()
+    return pressure[:80]
 
 
 def _grounded_fail_forward_choices(
