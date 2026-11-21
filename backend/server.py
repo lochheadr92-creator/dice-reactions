@@ -134,7 +134,11 @@ DEFAULT_SESSION_PROSE_MODE = prose_modes.resolve_configured_default(
 # Start of every turn reply. Routes that support continuing an assistant
 # message (local Ollama, opt-in via OPENAI_DIRECT_ASSISTANT_PREFILL) begin the
 # reply here, so the model cannot skip the required rolling_state block.
-TURN_REPLY_PREFILL = "<rolling_state>\n{"
+# The reply starts inside the minified object at its first key. A bare
+# "<rolling_state>\n{" made local Qwen pretty-print a state block several
+# times over the 1800 character limit, which used up the reply budget before
+# the choices (docs/eval, 2026-11-21).
+TURN_REPLY_PREFILL = '<rolling_state>{"scene":"'
 
 MODE_PROFILES = {
     "basic":    {"max_tokens_cap": 1100, "min_choices": 3, "max_choices": 4},

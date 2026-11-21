@@ -352,6 +352,26 @@ def test_turn_generation_requests_rolling_state_prefill(monkeypatch):
     asyncio.run(server._generate_turn(session, "Continue"))
     assert captured["assistant_prefill"] == server.TURN_REPLY_PREFILL
     assert server.TURN_REPLY_PREFILL.startswith("<rolling_state>")
+    # Minified start at the first key of the required shape: no newline or
+    # indentation for the model to continue as pretty-printed JSON.
+    assert server.TURN_REPLY_PREFILL == '<rolling_state>{"scene":"'
+    assert "\n" not in server.TURN_REPLY_PREFILL
+
+
+def test_prefilled_reply_parses_as_a_normal_turn():
+    import server
+
+    reply = (
+        server.TURN_REPLY_PREFILL
+        + 'ridge","character":"cold","objectives":["reach shelter"]}</rolling_state>\n'
+        "<narrative>Wind scours the ridge.</narrative>\n"
+        "<choices>\nA. Climb down\nB. Wait\nC. Call out\nD. Turn back\n</choices>\n"
+        "<state>\nHealth: stable\nPressure: cold\nPosition: ridge\n</state>\n"
+        "<ledger>\nCarried: staff\n</ledger>\n"
+    )
+    parsed = server.parse_turn(reply)
+    assert parsed.rolling_state["scene"] == "ridge"
+    assert [c["label"] for c in parsed.choices] == ["A", "B", "C", "D"]
 
 
 # --------------------------------------------------------------------------- #
