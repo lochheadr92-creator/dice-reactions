@@ -163,3 +163,122 @@ def test_run_coherence_blocks_harwood_opening_choice():
     )
     assert ok is False
     assert "Harwood" in reason or "unknown person" in reason
+
+
+# ---------------------------------------------------------------------------
+# Unknown person rule: false positives seen in the 2026-11-21 eval runs
+# ---------------------------------------------------------------------------
+
+
+def test_established_place_in_state_is_not_an_unknown_person():
+    # "Oakhaven" was the scene's own location and the stated objective, yet a
+    # choice naming it was rejected as an unknown person and the turn fell back.
+    prior = {
+        "scene": "Tree line edge near Oakhaven",
+        "objectives": ["Reach Oakhaven safely"],
+        "route_continuity": ["Oakhaven perimeter"],
+        "npcs": [{"name": "Elias", "alive": True}],
+    }
+    ok, reason = sc.validate_choices_named_entities(
+        [{"label": "D", "text": "Ignore him and hurry toward the visible lights of Oakhaven."}],
+        narrative="Rain drives sideways. Elias holds out a hand.",
+        prior_rolling=prior,
+        scenario=None,
+    )
+    assert ok is True, reason
+
+
+def test_group_name_from_established_state_is_not_an_unknown_person():
+    prior = {"scene": "Wardens checkpoint on the river road"}
+    choice = [{"label": "B", "text": "Ask the Wardens for safe passage"}]
+    narrative = "Rain drums on the roof of the lean-to."
+    ok, reason = sc.validate_choices_named_entities(
+        choice, narrative=narrative, prior_rolling=prior, scenario=None
+    )
+    assert ok is True, reason
+    # A group named nowhere is still an unintroduced name.
+    ok, reason = sc.validate_choices_named_entities(
+        choice, narrative=narrative, prior_rolling={"scene": "the river road"}, scenario=None
+    )
+    assert ok is False
+    assert "Wardens" in reason
+
+
+def test_hidden_mechanics_state_does_not_make_a_name_known():
+    prior = {
+        "scene": "a lean-to by the river road",
+        "secret_registry": [{"secret": "Harwood sold the map"}],
+        "simulation_hooks": [{"hook": "Harwood arrives at dusk"}],
+        "faction_pressure": [{"faction": "Wardens", "pressure": 2}],
+    }
+    for text in ("Ask Harwood about the map", "Ask the Wardens for passage"):
+        ok, reason = sc.validate_choices_named_entities(
+            [{"label": "A", "text": text}],
+            narrative="Rain drums on the roof.",
+            prior_rolling=prior,
+            scenario=None,
+        )
+        assert ok is False, text
+
+
+def test_sentence_openers_and_quoted_openers_are_not_people():
+    # "Before", "Help" and "Let" were each rejected as an unknown person.
+    choices = [
+        {"label": "A", "text": "Search the camp. Before moving on, check the fire"},
+        {"label": "B", "text": 'Shout "Help!" and run for the trees'},
+        {"label": "C", "text": 'Say "Let us rest here until dawn"'},
+        {"label": "D", "text": "Hold still: Listen for the sound again"},
+    ]
+    ok, reason = sc.validate_choices_named_entities(
+        choices, narrative="Rain on the roof.", prior_rolling=None, scenario=None
+    )
+    assert ok is True, reason
+
+
+def test_name_after_a_sentence_opener_is_still_checked():
+    ok, reason = sc.validate_choices_named_entities(
+        [{"label": "A", "text": "Search quickly. Before Harwood arrives, hide the map"}],
+        narrative="Rain on the roof.",
+        prior_rolling=None,
+        scenario=None,
+    )
+    assert ok is False
+    assert "Harwood" in reason
+
+
+def test_find_unknown_choice_names_reports_each_bad_choice_by_index():
+    choices = [
+        {"label": "A", "text": "Ask Mira about the road"},
+        {"label": "B", "text": "Follow Harwood into the trees"},
+        {"label": "C", "text": "Check the well carefully"},
+        {"label": "D", "text": "Trade with Brannock at the gate"},
+    ]
+    found = sc.find_unknown_choice_names(
+        choices,
+        narrative="Rain streaks the lane.",
+        prior_rolling={"npcs": [{"name": "Mira"}]},
+    )
+    assert found == [(1, "Harwood"), (3, "Brannock")]
+
+def test_titles_initials_and_dashes_do_not_hide_a_name():
+    narrative = "Rain on the roof."
+    for text in (
+        "Ask Dr. Kemal about the wound",
+        "Find J. Harwood before dusk",
+        "Ask Mira \u2014 Harwood knows the road",
+        "Ask Mira (Harwood's cousin) about the road",
+    ):
+        ok, reason = sc.validate_choices_named_entities(
+            [{"label": "A", "text": text}],
+            narrative=narrative,
+            prior_rolling={"npcs": [{"name": "Mira"}]},
+            scenario=None,
+        )
+        assert ok is False, text
+    ok, reason = sc.validate_choices_named_entities(
+        [{"label": "A", "text": "Ask Dr. Kemal about the wound"}],
+        narrative="Dr. Aris Kemal leans against the generator.",
+        prior_rolling=None,
+        scenario=None,
+    )
+    assert ok is True, reason

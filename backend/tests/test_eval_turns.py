@@ -136,3 +136,13 @@ def test_summary_handles_no_telemetry():
     assert s["fallback_rate"] is None
     assert s["completion_tokens_per_second"] is None
     assert "fallback turns      : 0" in eval_turns.format_summary(s)
+
+
+def test_choice_repairs_are_counted_on_real_turns_not_as_fallbacks():
+    repaired = _real()
+    repaired["debug"]["validation_choice_repair"] = "B:Harwood"
+    s = eval_turns.summarise([_live(1, 2), _live(2, 3)], {2: repaired, 3: _real()}, [])
+    assert s["choice_repair_turns"] == 1
+    assert s["choice_repairs"] == ["turn 2: B:Harwood"]
+    assert s["fallback_turns"] == 0 and s["real_turns"] == 2
+    assert "choice repairs      : 1" in eval_turns.format_summary(s)

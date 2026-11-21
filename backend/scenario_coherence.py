@@ -164,10 +164,49 @@ _UNSUPPORTED_TECH_BY_TOKEN = {
 }
 
 
-def _names_in_text(text: str) -> Set[str]:
+# A period after a title or an initial ends no sentence: "Ask Dr. Kemal".
+_TITLE_BEFORE_PERIOD_RE = re.compile(
+    r"(?:\b(?:Dr|Mr|Mrs|Ms|Mx|Prof|Capt|Cpt|Sgt|Lt|Col|Gen|Cmdr|Rev|Fr|Sr|Jr|St)|\b[A-Z])\.$"
+)
+
+
+def _is_clause_start(text: str, start: int) -> bool:
+    """True when the capital at ``start`` opens a sentence or a quotation.
+
+    A capital there is grammar, not a name signal ("Before moving on", a quoted
+    "Help!"), so it must not be read as a person. Dashes and brackets are not
+    treated as openers: a name after them is usually a real mention.
+    """
+    before = text[:start].rstrip()
+    if not before:
+        return True
+    last = before[-1]
+    if last == ".":
+        return not _TITLE_BEFORE_PERIOD_RE.search(before)
+    if last in "!?:“‘":
+        return True
+    if last == '"':
+        # A straight quote opens a quotation when an odd number precede it.
+        return before.count('"') % 2 == 1
+    if last == "'":
+        return len(before) < 2 or not before[-2].isalnum()
+    return False
+
+
+def _names_in_text(
+    text: str, *, skip_clause_starts: bool = False, start: int = 0
+) -> Set[str]:
     found: Set[str] = set()
-    for match in _PROPER_RE.finditer(text or ""):
+    text = text or ""
+    for match in _PROPER_RE.finditer(text, start):
         name = match.group(1).strip()
+        if skip_clause_starts and _is_clause_start(text, match.start(1)):
+            # Drop the sentence opener ("Before Harwood arrives") and keep
+            # whatever capitalised word follows it.
+            parts = name.split(None, 1)
+            if len(parts) < 2:
+                continue
+            name = parts[1]
         if name in _STOP_NAMES:
             continue
         # Single common adjectives / roles
@@ -218,6 +257,46 @@ def _scenario_npc_names(scenario: Optional[Mapping[str, Any]]) -> Set[str]:
     return names
 
 
+# Player-visible rolling_state fields whose proper names count as already
+# introduced: the scene, goals, routes and open questions the player has been
+# shown ("Tree line edge near Oakhaven"). Hidden mechanics (secret_registry,
+# simulation_hooks, faction_pressure, the pressure graph) are deliberately not
+# listed: a choice must never be the first place a hidden name reaches the
+# player.
+_ESTABLISHED_STATE_KEYS = (
+    "scene",
+    "objectives",
+    "route_continuity",
+    "known_rooms",
+    "recent_beats",
+    "unresolved",
+)
+
+
+def _strings_in(value: Any, depth: int = 0) -> Iterable[str]:
+    """Every string value inside a small JSON-like structure."""
+    if depth > 4:
+        return
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            yield from _strings_in(item, depth + 1)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _strings_in(item, depth + 1)
+
+
+def _established_state_names(rolling: Optional[Mapping[str, Any]]) -> Set[str]:
+    names: Set[str] = set()
+    if not isinstance(rolling, Mapping):
+        return names
+    for key in _ESTABLISHED_STATE_KEYS:
+        for text in _strings_in(rolling.get(key)):
+            names |= _names_in_text(text)
+    return names
+
+
 def known_person_names(
     *,
     narrative: str,
@@ -227,6 +306,7 @@ def known_person_names(
     """Names the player may legitimately act on this turn."""
     known = _names_in_text(narrative)
     known |= _npc_names_from_state(prior_rolling)
+    known |= _established_state_names(prior_rolling)
     known |= _scenario_npc_names(scenario)
     # Expand first/last parts of multi-word names
     expanded = set(known)
@@ -237,14 +317,54 @@ def known_person_names(
     return expanded
 
 
-def _names_in_choice_text(text: str) -> Set[str]:
-    """Proper names inside a choice, ignoring the leading imperative verb."""
-    words = (text or "").strip().split()
+def _names_in_choice_text(text: str, *, clause_aware: bool = False) -> Set[str]:
+    """Proper names inside a choice, ignoring the leading imperative verb.
+
+    With ``clause_aware`` a capital that opens a sentence or a quotation
+    ("Search the camp. Before moving on", 'Shout "Help!"') is not a name.
+    """
+    text = (text or "").strip()
+    words = text.split()
     if not words:
         return set()
     # "Leave the shelter and intercept Harwood" — skip "Leave"
-    rest = " ".join(words[1:])
-    return _names_in_text(rest)
+    if clause_aware:
+        return _names_in_text(text, skip_clause_starts=True, start=len(words[0]))
+    return _names_in_text(" ".join(words[1:]))
+
+
+UNKNOWN_PERSON_REASON_PREFIX = "choice introduces unknown person"
+
+
+def find_unknown_choice_names(
+    choices: Sequence[Mapping[str, Any]],
+    *,
+    narrative: str,
+    prior_rolling: Optional[Mapping[str, Any]] = None,
+    scenario: Optional[Mapping[str, Any]] = None,
+) -> List[Tuple[int, str]]:
+    """``(choice index, name)`` for every choice that names an unknown person."""
+    known = known_person_names(
+        narrative=narrative,
+        prior_rolling=prior_rolling,
+        scenario=scenario,
+    )
+    # Compare case-insensitively: models store state names inconsistently
+    # ("mirek" in rolling_state npcs, "Mirek" in the choice text).
+    known_folded = {k.casefold() for k in known}
+    found: List[Tuple[int, str]] = []
+    for index, choice in enumerate(choices or []):
+        text = str(choice.get("text") or "")
+        for name in sorted(_names_in_choice_text(text, clause_aware=True)):
+            folded = name.casefold()
+            if folded in known_folded:
+                continue
+            # Allow if any known name contains this token or vice versa
+            if any(folded in k or k in folded for k in known_folded):
+                continue
+            found.append((index, name))
+            break  # one finding per choice is enough
+    return found
 
 
 def validate_choices_named_entities(
@@ -255,27 +375,18 @@ def validate_choices_named_entities(
     scenario: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[bool, str]:
     """Choices may not introduce proper names absent from narrative / known state."""
-    known = known_person_names(
+    found = find_unknown_choice_names(
+        choices,
         narrative=narrative,
         prior_rolling=prior_rolling,
         scenario=scenario,
     )
-    # Compare case-insensitively: models store state names inconsistently
-    # ("mirek" in rolling_state npcs, "Mirek" in the choice text).
-    known_folded = {k.casefold() for k in known}
-    for choice in choices or []:
-        text = str(choice.get("text") or "")
-        for name in _names_in_choice_text(text):
-            folded = name.casefold()
-            if folded in known_folded:
-                continue
-            # Allow if any known name contains this token or vice versa
-            if any(folded in k or k in folded for k in known_folded):
-                continue
-            return (
-                False,
-                f"choice introduces unknown person '{name}' before narrative/state introduction",
-            )
+    if found:
+        _, name = found[0]
+        return (
+            False,
+            f"{UNKNOWN_PERSON_REASON_PREFIX} '{name}' before narrative/state introduction",
+        )
     return True, ""
 
 

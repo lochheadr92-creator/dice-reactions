@@ -3148,6 +3148,102 @@ def _json_dumps_compact(obj: Any) -> str:
         return "{}"
 
 
+# ----------------------------------------------------------------------
+# Choice repair: drop the bad choice, keep the turn
+# ----------------------------------------------------------------------
+# A choice that names an unknown person used to fail the whole turn, costing a
+# retry and, when the retry failed as well, the fail-forward fallback. The
+# narrative and state of such a turn are usually sound, so only the offending
+# choices are replaced, and only while most of the model's own choices remain.
+MAX_REPAIRED_CHOICES = 2
+_CHOICES_BLOCK_RE = re.compile(
+    r"(<choices>\s*)(.*?)(\s*</choices>)", re.DOTALL | re.IGNORECASE
+)
+
+
+def _fold_text(value: Any) -> str:
+    return " ".join(str(value or "").casefold().split())
+
+
+def _raw_with_choices(raw: str, choices: List[Dict[str, str]]) -> str:
+    """``raw`` with its <choices> block rewritten to match ``choices``."""
+    lines = "\n".join(f"{c.get('label', '')}. {c.get('text', '')}" for c in choices)
+    new_raw, count = _CHOICES_BLOCK_RE.subn(
+        lambda m: m.group(1) + lines + m.group(3), raw or "", count=1
+    )
+    return new_raw if count else raw
+
+
+def _repair_unknown_person_choices(
+    parsed: ParsedTurn,
+    raw: str,
+    session: Dict[str, Any],
+    player_action: Optional[str],
+    early_game_stage: Optional[int],
+    kind: str,
+    reason: str,
+) -> Optional[Tuple[ParsedTurn, str, str]]:
+    """Replace choices that name an unknown person; keep the rest of the turn.
+
+    Returns ``(repaired_parsed, repaired_raw, note)`` only when the repaired
+    turn passes full validation, otherwise ``None`` so the caller's normal
+    retry and fallback path runs unchanged. Not applied to openings (they keep
+    the strict rule), when more than ``MAX_REPAIRED_CHOICES`` choices are bad,
+    or when the model also wrote the unknown name into its own state, ledger or
+    state block (the person would enter the story without being shown to the
+    player). Replacements come from ``_grounded_fail_forward_choices``, which
+    only uses names the engine already knows.
+    """
+    if kind != "coherence" or not str(reason).startswith(
+        scenario_coherence.UNKNOWN_PERSON_REASON_PREFIX
+    ):
+        return None
+    # Mirror _full_validate: openings and the first early-game stage stay strict.
+    if (
+        not player_action and int(session.get("turn_count") or 0) <= 0
+    ) or early_game_stage == 1:
+        return None
+    prior = session.get("rolling_state")
+    prior = prior if isinstance(prior, dict) else None
+    found = scenario_coherence.find_unknown_choice_names(
+        parsed.choices,
+        narrative=parsed.narrative,
+        prior_rolling=prior,
+        scenario=None,
+    )
+    if not found or len(found) > MAX_REPAIRED_CHOICES:
+        return None
+    carried = _json_dumps_compact([parsed.rolling_state, parsed.state, parsed.ledger])
+    for _index, name in found:
+        if re.search(r"\b" + re.escape(name) + r"\b", carried, re.IGNORECASE):
+            return None
+
+    bad = {index for index, _name in found}
+    kept = {_fold_text(c.get("text")) for i, c in enumerate(parsed.choices) if i not in bad}
+    candidates = [
+        c["text"]
+        for c in _grounded_fail_forward_choices(copy.deepcopy(prior or {}), session)
+        if _fold_text(c["text"]) not in kept
+    ]
+    if len(candidates) < len(found):
+        return None
+    new_choices = [dict(c) for c in parsed.choices]
+    for slot, (index, _name) in enumerate(found):
+        new_choices[index] = {
+            "label": new_choices[index].get("label", ""),
+            "text": candidates[slot],
+        }
+    new_raw = _raw_with_choices(raw, new_choices)
+    repaired = parsed.model_copy(update={"choices": new_choices, "raw": new_raw})
+    ok, _why, _kind = _full_validate(
+        repaired, session, player_action, early_game_stage=early_game_stage
+    )
+    if not ok:
+        return None
+    note = "; ".join(f"{new_choices[i].get('label', '?')}:{name}" for i, name in found)
+    return repaired, new_raw, note
+
+
 def _select_soft_best_available(
     parsed: ParsedTurn,
     raw: str,
@@ -3207,6 +3303,15 @@ async def _generate_validated_turn(
     ok, reason, kind = _full_validate(
         parsed, session, player_action, early_game_stage=early_game_stage
     )
+    if not ok:
+        repaired = _repair_unknown_person_choices(
+            parsed, raw, session, player_action, early_game_stage, kind, reason
+        )
+        if repaired is not None:
+            parsed, raw, repair_note = repaired
+            meta["validation_choice_repair"] = repair_note
+            logger.info("Turn kept, bad choices replaced (%s)", repair_note)
+            ok = True
     if ok:
         if (
             dev_on
@@ -3325,8 +3430,18 @@ async def _generate_validated_turn(
         ok2, reason2, kind2 = _full_validate(
             parsed2, session, player_action, early_game_stage=early_game_stage
         )
+        repair_note2 = ""
+        if not ok2:
+            repaired2 = _repair_unknown_person_choices(
+                parsed2, raw2, session, player_action, early_game_stage, kind2, reason2
+            )
+            if repaired2 is not None:
+                parsed2, raw2, repair_note2 = repaired2
+                logger.info("Retry kept, bad choices replaced (%s)", repair_note2)
+                ok2 = True
 
         combined_meta: Dict[str, Any] = {
+            "validation_choice_repair": repair_note2 or None,
             "model_used": result2["model_used"],
             "model_requested": meta.get("model_requested"),
             "telemetry": result2.get("telemetry"),
@@ -3500,6 +3615,8 @@ def _meta_into_debug(
         debug["validation_soft_best_available"] = str(
             meta["validation_soft_best_available"]
         )
+    if meta.get("validation_choice_repair"):
+        debug["validation_choice_repair"] = str(meta["validation_choice_repair"])
     if meta.get("pacing_stage3_no_engine_development"):
         debug["pacing_stage3_no_engine_development"] = "true"
     if meta.get("secret_reveal_occurred"):

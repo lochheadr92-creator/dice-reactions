@@ -173,6 +173,7 @@ def summarise(
         row["has_telemetry"] = bool(doc)
         row["hard_fallback"] = _flag(debug.get("validation_hard_fallback"))
         row["retried"] = _flag(debug.get("validation_retried"))
+        row["choice_repair"] = str(debug.get("validation_choice_repair") or "")
         row["model_used"] = debug.get("model_used")
         row["provider_latency_ms"] = _num(debug.get("latency_ms"))
         row["completion_tokens"] = _num(debug.get("tokens_completion"))
@@ -215,6 +216,10 @@ def summarise(
         "turns_with_telemetry": len(seen),
         "real_turns": len(real),
         "real_turns_after_retry": sum(1 for r in real if r["retried"]),
+        "choice_repair_turns": sum(1 for r in real if r["choice_repair"]),
+        "choice_repairs": [
+            f"turn {r.get('turn_number')}: {r['choice_repair']}" for r in real if r["choice_repair"]
+        ],
         "fallback_turns": len(fallbacks),
         "fallback_rate": rate(len(fallbacks), len(seen)),
         "fallback_by_cause": dict(sorted(fallback_causes.items(), key=lambda kv: -kv[1])),
@@ -240,7 +245,11 @@ def format_summary(summary: Dict[str, Any]) -> str:
         f"real turns          : {summary['real_turns']} "
         f"({summary['real_turns_after_retry']} needed the retry)",
         f"fallback turns      : {summary['fallback_turns']} (rate {summary['fallback_rate']})",
+        f"choice repairs      : {summary.get('choice_repair_turns', 0)} turn(s) kept "
+        "with a bad choice replaced",
     ]
+    for item in summary.get("choice_repairs", []):
+        lines.append(f"  repaired          : {item}")
     for cause, count in summary["fallback_by_cause"].items():
         lines.append(f"  fallback cause    : {count} x {cause}")
     for cause, count in summary["first_failure_by_cause"].items():
