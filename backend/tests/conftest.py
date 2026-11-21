@@ -19,6 +19,8 @@ apply_test_environment(os.environ)
 # Pin the new-story narration default so a local backend/.env setting
 # (DEFAULT_PROSE_MODE) cannot change test expectations.
 os.environ["DEFAULT_PROSE_MODE"] = "standard"
+# Same for the retry style: tests that need "fresh" use monkeypatch.
+os.environ["VALIDATION_RETRY_STYLE"] = "show_rejected"
 # Same for the mature-content switches: tests that need them use monkeypatch.
 os.environ["MATURE_RENDERER_ENABLED"] = "false"
 os.environ["MATURE_MODEL_ID"] = ""

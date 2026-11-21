@@ -140,6 +140,54 @@ DEFAULT_SESSION_PROSE_MODE = prose_modes.resolve_configured_default(
 # the choices (docs/eval, 2026-11-21).
 TURN_REPLY_PREFILL = '<rolling_state>{"scene":"'
 
+# How a rejected reply is retried.
+#   show_rejected (default): the rejected reply and a rewrite instruction are
+#     appended to the conversation.
+#   fresh: the turn is requested again with one short correction line on the
+#     player's message; the rejected reply is not shown.
+# Local Qwen answers the first form with a state block and nothing else
+# (2 usable of 19 offline) and the second with a full turn (8 of 10); see
+# docs/eval, 2026-11-21. An unknown value stops startup.
+VALIDATION_RETRY_STYLES = ("show_rejected", "fresh")
+
+
+def resolve_retry_style(value: Optional[str]) -> str:
+    key = str(value or "").strip().lower()
+    if not key:
+        return "show_rejected"
+    if key not in VALIDATION_RETRY_STYLES:
+        raise ValueError(
+            f"VALIDATION_RETRY_STYLE {value!r} is not one of {list(VALIDATION_RETRY_STYLES)}"
+        )
+    return key
+
+
+VALIDATION_RETRY_STYLE = resolve_retry_style(os.environ.get("VALIDATION_RETRY_STYLE"))
+
+_FRESH_RETRY_LINE = (
+    "[Your previous attempt at this turn was rejected: {reason}. Write this turn "
+    "fresh and fix that. Do not reuse the previous turn's closing passage or its "
+    "choices. Keep <rolling_state> compact, then <narrative>, then <choices> A to D.]"
+)
+
+
+def fresh_retry_messages(
+    messages: List[Dict[str, str]], reason: str
+) -> List[Dict[str, str]]:
+    """Copy of ``messages`` with a short correction line on the last user turn.
+
+    The rejected reply is deliberately not included: shown its own rejected
+    reply, a local model copies it or stops after the state block.
+    """
+    line = _FRESH_RETRY_LINE.format(reason=str(reason or "invalid format").strip()[:200])
+    out = [dict(m) for m in messages]
+    for index in range(len(out) - 1, -1, -1):
+        if out[index].get("role") == "user":
+            out[index]["content"] = f"{out[index].get('content') or ''}\n\n{line}"
+            return out
+    out.append({"role": "user", "content": line})
+    return out
+
 MODE_PROFILES = {
     "basic":    {"max_tokens_cap": 1100, "min_choices": 3, "max_choices": 4},
     "advanced": {"max_tokens_cap": None, "min_choices": 4, "max_choices": 6},
@@ -3220,9 +3268,14 @@ async def _generate_validated_turn(
             secret_reveal_directive=secret_reveal_directive,
             replayability_directives=replayability_directives,
         )
-        # Show the model exactly what it produced, then ask it to rewrite.
-        messages.append({"role": "assistant", "content": raw[:6000]})
-        messages.append({"role": "user", "content": retry_note})
+        if VALIDATION_RETRY_STYLE == "fresh":
+            messages = fresh_retry_messages(messages, reason)
+            retry_extra_msgs = 0
+        else:
+            # Show the model exactly what it produced, then ask it to rewrite.
+            messages.append({"role": "assistant", "content": raw[:6000]})
+            messages.append({"role": "user", "content": retry_note})
+            retry_extra_msgs = 2
 
         # Apply context budget BEFORE the retry call too.
         cost_mode_for_budget = (
@@ -3233,7 +3286,8 @@ async def _generate_validated_turn(
         budget_tokens_retry = resolve_context_budget(
             cost_mode=cost_mode_for_budget, mode=mode
         )
-        protected_recent_msgs = max(1, memory_depth) * 2 + 2  # +2 = bad output + retry note
+        # +2 = bad output + retry note, when they are shown.
+        protected_recent_msgs = max(1, memory_depth) * 2 + retry_extra_msgs
         messages, retry_budget_diag = enforce_context_budget(
             messages,
             budget_tokens=budget_tokens_retry,

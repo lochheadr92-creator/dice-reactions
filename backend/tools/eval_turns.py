@@ -329,7 +329,7 @@ def run(base_url: str, turns: int, timeout: float) -> Tuple[int, Dict[str, Any]]
     # The export is one local read; a dropped connection is retried so a long
     # run is not lost at the last step.
     status, body = None, None
-    for _attempt in range(3):
+    for _attempt in range(6):
         try:
             status, body = _request(
                 "GET",
@@ -341,12 +341,13 @@ def run(base_url: str, turns: int, timeout: float) -> Tuple[int, Dict[str, Any]]
             break
         except OSError as exc:
             status, body = None, f"{type(exc).__name__}: {exc}"
-            time.sleep(2.0)
+            time.sleep(5.0)
     if status != 200 or not isinstance(body, dict):
         detail = "" if isinstance(body, dict) else str(body)[:200]
         return 3, {
             "error": f"raw export unavailable: {status} {detail}".strip(),
             "session_id": session_id,
+            "base_url": base_url,
             "live": live,
         }
     turns_by_number = {

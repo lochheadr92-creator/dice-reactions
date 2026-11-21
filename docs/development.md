@@ -63,6 +63,7 @@ Optional overrides (see `ai_config.py` / `ai_service.py`):
 | `MATURE_RENDERER_ENABLED` | off | `true` turns on the second-pass mature prose renderer (also needs `MATURE_MODEL_ID`, `DISTRIBUTION_CHANNEL=development` or `adult_web`, `ENABLE_MATURE_CONTENT=true`, and a story created with adult mode on). Known risk: the rewrite can change events (docs/failure-modes.md FM-30). Tests pin it off |
 | `MATURE_MODEL_ID` | unset | Pinned model id for the renderer, e.g. `openai-direct/dice-qwen36` (`:latest` ids are refused) |
 | `DEFAULT_PROSE_MODE` | `standard` | Narration length for new stories when the app sends no `prose_mode`: `brief` (300-600 chars), `standard` (700-1200), `story` (1800-2400), `cinematic` (3000-4000). Only these four names are accepted; any other value stops the engine at startup. Existing stories keep the mode they were created with. Tests pin it to `standard` |
+| `VALIDATION_RETRY_STYLE` | `show_rejected` | How a rejected turn is retried. `show_rejected` appends the rejected reply and a rewrite instruction. `fresh` asks for the turn again with one short correction line on the player's message and does not show the rejected reply. Use `fresh` for local Ollama models: shown its own rejected reply, Qwen writes only the state block and stops (docs/eval, 2026-11-21). Any other value stops the engine at startup. Tests pin `show_rejected` |
 | `APP_PUBLIC_URL` | example URL | OpenRouter referer header |
 | `APP_TITLE` | `Dice Reaction Story Engine` | OpenRouter title header |
 
