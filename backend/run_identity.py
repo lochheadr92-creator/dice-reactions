@@ -76,6 +76,58 @@ SCARCITY_AXES = (
     "information",
 )
 
+# The scarcity roll must fit the world. A "regular world" story once rolled
+# "ammo" and opened on a debt paid in bullets, because the roll ignored the world.
+#
+# Axes that fit any world. A world type the player typed rolls only these.
+UNIVERSAL_SCARCITY_AXES = ("food", "shelter", "time", "trust", "information")
+
+# Catalog genres (every genre the builders and scenario cards can send).
+CATALOG_GENRES = frozenset(
+    {
+        "fantasy",
+        "horror",
+        "cosmic horror",
+        "science fiction",
+        "post-apocalyptic",
+        "post-apocalypse",
+        "detective",
+        "mystery",
+        "modern",
+        "modern containment",
+        "cyberpunk",
+        "prehistoric survival",
+        "urban crime",
+        "war survival",
+        "noir",
+        "romance",
+    }
+)
+
+# Catalog genres where a shortage of ammunition belongs.
+AMMO_SCARCITY_GENRES = frozenset(
+    {
+        "post-apocalyptic",
+        "post-apocalypse",
+        "war survival",
+        "urban crime",
+        "noir",
+        "modern containment",
+        "cyberpunk",
+    }
+)
+
+
+def scarcity_axes_for_genre(genre: Any) -> Tuple[str, ...]:
+    """Scarcity axes a story in this world may roll, in SCARCITY_AXES order."""
+    g = str(genre or "").strip().lower()
+    if g not in CATALOG_GENRES:
+        return UNIVERSAL_SCARCITY_AXES
+    if g in AMMO_SCARCITY_GENRES:
+        return SCARCITY_AXES
+    return tuple(axis for axis in SCARCITY_AXES if axis != "ammo")
+
+
 RELATIONSHIP_FAULT_LINES = (
     "loyalty",
     "debt",
@@ -209,6 +261,8 @@ def derive_run_identity(run_seed: str, setup: Mapping[str, Any]) -> Dict[str, An
         "severity_multiplier": difficulty_severity_multiplier(setup),
     }
     for field, options in CLOSED_ENUM_FIELDS.items():
+        if field == "scarcity_axis":
+            options = scarcity_axes_for_genre(setup.get("genre"))
         identity[field] = select_from_namespace(mixed_seed, field, options)
     identity["setup_fingerprint"] = fingerprint
     return identity
