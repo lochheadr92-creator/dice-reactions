@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react-
 import NewStoryScreen from "../app/new-story";
 import {
   AdvancedBuilder,
+  applyStoryDefaults,
   buildAdvancedStartRequest,
   createDefaultAdvancedSetup,
 } from "../src/newstory/AdvancedBuilder";
@@ -19,6 +20,7 @@ import {
 import type { GuidedStartSelections } from "../src/newstory/types";
 import type { TalentValue } from "../src/newstory/options";
 import { HARSHNESS_LABELS, STORY_DIFFICULTIES } from "../src/newstory/options";
+import { TEXT_SIZES, TURN_LENGTHS, playSettingsFor, proseModeForTurnLength } from "../src/prose-length";
 
 jest.setTimeout(25000);
 
@@ -515,6 +517,114 @@ describe("new story onboarding redesign", () => {
         "An invented realm before machines, where magic exists. Expect: oaths, shortages and rival factions."
       )
     ).toBeTruthy();
+  });
+
+  it("keeps text size and turn length as separate settings", () => {
+    expect(TURN_LENGTHS.map((t) => [t.label, t.proseMode, t.paragraphs])).toEqual([
+      ["S", "brief", "1 to 2 paragraphs"],
+      ["M", "standard", "2 to 4 paragraphs"],
+      ["L", "story", "4 to 6 paragraphs"],
+      ["XL", "cinematic", "6 to 8 paragraphs"],
+    ]);
+    expect(TEXT_SIZES.map((t) => [t.label, t.fontScale])).toEqual([
+      ["S", 0.9],
+      ["M", 1],
+      ["L", 1.1],
+      ["XL", 1.25],
+    ]);
+    expect(proseModeForTurnLength("XL")).toBe("cinematic");
+    expect(proseModeForTurnLength(undefined)).toBe("standard");
+    expect(proseModeForTurnLength("huge")).toBe("standard");
+  });
+
+  it("turns the reading settings into the three engine fields", () => {
+    expect(playSettingsFor({})).toEqual({
+      prose_mode: "standard",
+      prose_style: "balanced",
+      thinking_effort: "low",
+    });
+    expect(playSettingsFor({ turnLength: "L", writingStyle: "plain", speed: "careful" })).toEqual({
+      prose_mode: "story",
+      prose_style: "plain",
+      thinking_effort: "high",
+    });
+    expect(playSettingsFor({ writingStyle: "purple", speed: "warp" })).toEqual({
+      prose_mode: "standard",
+      prose_style: "balanced",
+      thinking_effort: "low",
+    });
+  });
+
+  it("starts the Advanced builder from the story defaults in Settings", async () => {
+    mockGetSettings.mockResolvedValue({
+      debugDefault: false,
+      fontScale: 1,
+      developerUnlocked: false,
+      writingStyle: "rich",
+      speed: "balanced",
+      storyDefaults: {
+        storyFeel: "bleak",
+        consequenceSeverity: "severe",
+        mature: { violence_level: "graphic", horror_level: "not-a-level" },
+      },
+    });
+    render(<NewStoryScreen />);
+    await waitFor(() => expect(screen.getByTestId("creation-selection-screen")).toBeTruthy());
+    await openAdvanced();
+    for (let i = 0; i < 4; i += 1) {
+      fireEvent.press(screen.getByTestId("advanced-next-button"));
+    }
+    await screen.findByTestId("advanced-review-step");
+    fireEvent.press(screen.getByTestId("mature-content-expand"));
+    fireEvent.press(screen.getByTestId("mature-content-enable"));
+    fireEvent.press(screen.getByTestId("mature-age-confirmation"));
+    fireEvent.press(screen.getByTestId("begin-story-btn"));
+    await waitFor(() => expect(mockNewStory).toHaveBeenCalled());
+    const payload = mockNewStory.mock.calls[0][0];
+    expect(payload.tone).toBe("bleak");
+    expect(payload.difficulty).toBe("hard");
+    expect(payload.prose_style).toBe("rich");
+    expect(payload.thinking_effort).toBe("medium");
+    expect(payload.mature_content.violence_level).toBe("graphic");
+    // A saved level the builder does not offer is ignored.
+    expect(payload.mature_content.horror_level).not.toBe("not-a-level");
+  });
+
+  it("applies a story default only to an answer still at its preset", () => {
+    const untouched = applyStoryDefaults(createDefaultAdvancedSetup(), {
+      storyFeel: "bleak",
+      consequenceSeverity: "nonsense",
+    });
+    expect(untouched.storyFeel).toBe("bleak");
+    expect(untouched.consequenceSeverity).toBe("balanced");
+
+    const chosen = applyStoryDefaults(
+      { ...createDefaultAdvancedSetup(), storyFeel: "hopeful" },
+      { storyFeel: "bleak" }
+    );
+    expect(chosen.storyFeel).toBe("hopeful");
+  });
+
+  it("sends the turn length from settings, not the text size, when a story is created", async () => {
+    await renderScreen(1.25);
+    // Largest text, shortest turns: the two settings must not be tied together.
+    mockGetSettings.mockResolvedValue({
+      debugDefault: false,
+      fontScale: 1.25,
+      turnLength: "S",
+      developerUnlocked: false,
+    });
+    await openAdvanced();
+    for (let i = 0; i < 4; i += 1) {
+      fireEvent.press(screen.getByTestId("advanced-next-button"));
+    }
+    await screen.findByTestId("advanced-review-step");
+    fireEvent.press(screen.getByTestId("begin-story-btn"));
+    await waitFor(() => {
+      expect(mockNewStory).toHaveBeenCalledWith(
+        expect.objectContaining({ prose_mode: "brief" })
+      );
+    });
   });
 
   it("keeps mature age gate", async () => {

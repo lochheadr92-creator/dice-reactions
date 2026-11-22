@@ -14,6 +14,16 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONTS } from "../src/theme";
 import { getSettings, saveSettings, AppSettings } from "../src/storage";
+import {
+  DEFAULT_SPEED,
+  DEFAULT_TURN_LENGTH,
+  DEFAULT_WRITING_STYLE,
+  SPEEDS,
+  TEXT_SIZES,
+  TURN_LENGTHS,
+  WRITING_STYLES,
+} from "../src/prose-length";
+import { MATURE_COPY, MATURE_ROWS, SEVERITY, STORY_FEEL } from "../src/newstory/AdvancedBuilder";
 import { getAdminSettings, updateAdminSettings } from "../src/api";
 import type { AdminSettingsResponse } from "../src/api";
 
@@ -74,10 +84,29 @@ export default function SettingsScreen() {
     await saveSettings(updated);
   };
 
+  const turnLength = settings.turnLength ?? DEFAULT_TURN_LENGTH;
+  const writingStyle = settings.writingStyle ?? DEFAULT_WRITING_STYLE;
+  const speed = settings.speed ?? DEFAULT_SPEED;
+  const storyDefaults = settings.storyDefaults ?? {};
+
   const update = async (patch: Partial<AppSettings>) => {
     const next = { ...settings, ...patch };
     setSettings(next);
     await saveSettings(next);
+  };
+
+  const updateStoryDefault = (key: "storyFeel" | "consequenceSeverity", value: string | undefined) => {
+    const next = { ...storyDefaults };
+    if (value) next[key] = value;
+    else delete next[key];
+    return update({ storyDefaults: next });
+  };
+
+  const updateMatureDefault = (rowKey: string, value: string | undefined) => {
+    const mature = { ...(storyDefaults.mature ?? {}) };
+    if (value) mature[rowKey] = value;
+    else delete mature[rowKey];
+    return update({ storyDefaults: { ...storyDefaults, mature } });
   };
 
   const adminModelLabel = (modelId: string | undefined) => {
@@ -137,10 +166,10 @@ export default function SettingsScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-        <Text style={styles.section}>· READING ·</Text>
-        <Text style={styles.rowHelp}>Story prose size.</Text>
+        <Text style={styles.section}>· TEXT SIZE ·</Text>
+        <Text style={styles.rowHelp}>How big the story text is. This does not change how much is written.</Text>
         <View style={styles.scaleRow}>
-          {[0.9, 1, 1.1, 1.25].map((s) => (
+          {TEXT_SIZES.map(({ fontScale: s, label }) => (
             <TouchableOpacity
               key={s}
               style={[styles.scaleChip, settings.fontScale === s && styles.scaleChipActive]}
@@ -153,11 +182,173 @@ export default function SettingsScreen() {
                   settings.fontScale === s && styles.scaleChipTextActive,
                 ]}
               >
-                {s === 0.9 ? "S" : s === 1 ? "M" : s === 1.1 ? "L" : "XL"}
+                {label}
               </Text>
             </TouchableOpacity>
           ))}
         </View>
+
+        <Text style={[styles.section, styles.sectionSpaced]}>· TURN LENGTH ·</Text>
+        <Text style={styles.rowHelp}>
+          How many paragraphs each turn has. Longer turns take longer to arrive.
+        </Text>
+        <View style={styles.scaleRow}>
+          {TURN_LENGTHS.map(({ label }) => (
+            <TouchableOpacity
+              key={label}
+              style={[styles.scaleChip, turnLength === label && styles.scaleChipActive]}
+              onPress={() => update({ turnLength: label })}
+              testID={`turn-length-${label}`}
+            >
+              <Text
+                style={[styles.scaleChipText, turnLength === label && styles.scaleChipTextActive]}
+              >
+                {label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        {TURN_LENGTHS.map((t) => (
+          <Text
+            key={t.label}
+            style={[styles.rowHelp, turnLength === t.label && styles.lengthActive]}
+            testID={`prose-length-${t.label}`}
+          >
+            {t.label}: {t.paragraphs} a turn.
+          </Text>
+        ))}
+        <Text style={styles.rowHelp}>
+          Applies from the next turn of any story you open. Turns already written stay as they are.
+        </Text>
+
+        <Text style={[styles.section, styles.sectionSpaced]}>· WRITING STYLE ·</Text>
+        <Text style={styles.rowHelp}>How the story is worded. It does not change what happens.</Text>
+        <View style={styles.chipWrapRow}>
+          {WRITING_STYLES.map((o) => (
+            <TouchableOpacity
+              key={o.value}
+              style={[styles.scaleChip, writingStyle === o.value && styles.scaleChipActive]}
+              onPress={() => update({ writingStyle: o.value })}
+              testID={`writing-style-${o.value}`}
+            >
+              <Text style={[styles.scaleChipText, writingStyle === o.value && styles.scaleChipTextActive]}>
+                {o.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        {WRITING_STYLES.map((o) => (
+          <Text key={o.value} style={[styles.rowHelp, writingStyle === o.value && styles.lengthActive]}>
+            {o.label}: {o.explanation}
+          </Text>
+        ))}
+
+        <Text style={[styles.section, styles.sectionSpaced]}>· SPEED ·</Text>
+        <Text style={styles.rowHelp}>
+          How long the model thinks before it writes a turn. Less thinking means a shorter wait.
+        </Text>
+        <View style={styles.chipWrapRow}>
+          {SPEEDS.map((o) => (
+            <TouchableOpacity
+              key={o.value}
+              style={[styles.scaleChip, speed === o.value && styles.scaleChipActive]}
+              onPress={() => update({ speed: o.value })}
+              testID={`speed-${o.value}`}
+            >
+              <Text style={[styles.scaleChipText, speed === o.value && styles.scaleChipTextActive]}>
+                {o.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        {SPEEDS.map((o) => (
+          <Text key={o.value} style={[styles.rowHelp, speed === o.value && styles.lengthActive]}>
+            {o.label}: {o.explanation}
+          </Text>
+        ))}
+        <Text style={styles.rowHelp}>
+          Writing style and speed apply from the next turn of any story you open.
+        </Text>
+
+        <Text style={[styles.section, styles.sectionSpaced]}>· STORY DEFAULTS ·</Text>
+        <Text style={styles.rowHelp}>
+          What a new story starts from in the Advanced builder. You can still change any of these for one
+          story while building it. Press a selected choice again to clear it.
+        </Text>
+        {[
+          { key: "storyFeel" as const, title: "STORY FEEL", help: "The mood of the writing only.", options: STORY_FEEL },
+          {
+            key: "consequenceSeverity" as const,
+            title: "HARSHNESS",
+            help: "How much mistakes cost and how fast you recover.",
+            options: SEVERITY,
+          },
+        ].map((group) => {
+          const selected = storyDefaults[group.key];
+          const chosen = group.options.find((o) => o.value === selected);
+          return (
+            <View key={group.key} style={styles.defaultGroup}>
+              <Text style={styles.rowTitle}>{group.title}</Text>
+              <Text style={styles.rowHelp}>{group.help}</Text>
+              <View style={styles.chipWrapRow}>
+                {group.options.map((o) => (
+                  <TouchableOpacity
+                    key={o.value}
+                    style={[styles.scaleChip, selected === o.value && styles.scaleChipActive]}
+                    onPress={() => updateStoryDefault(group.key, selected === o.value ? undefined : o.value)}
+                    testID={`default-${group.key}-${o.value}`}
+                  >
+                    <Text style={[styles.scaleChipText, selected === o.value && styles.scaleChipTextActive]}>
+                      {o.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <Text style={[styles.rowHelp, chosen && styles.lengthActive]} testID={`default-copy-${group.key}`}>
+                {chosen
+                  ? `${chosen.label}: ${chosen.explanation ?? ""} ${chosen.consequence ?? ""}`.trim()
+                  : "Not set. New stories use the builder's own preset."}
+              </Text>
+            </View>
+          );
+        })}
+
+        <Text style={[styles.rowTitle, styles.sectionSpaced]}>18+ CONTENT LEVELS</Text>
+        <Text style={styles.rowHelp}>
+          The most a story may show. A level never forces content. These are filled in when you switch
+          mature content on for a story, where you still confirm your age each time. A level this release
+          does not offer is ignored.
+        </Text>
+        {MATURE_ROWS.map((row) => {
+          const selected = storyDefaults.mature?.[row.key];
+          return (
+            <View key={row.key} style={styles.defaultGroup}>
+              <Text style={styles.rowTitle}>{row.label.toUpperCase()}</Text>
+              <Text style={styles.rowHelp}>{MATURE_COPY[row.key].help}</Text>
+              <View style={styles.chipWrapRow}>
+                {row.choices.map((choice) => (
+                  <TouchableOpacity
+                    key={choice.value}
+                    style={[styles.scaleChip, selected === choice.value && styles.scaleChipActive]}
+                    onPress={() => updateMatureDefault(row.key, selected === choice.value ? undefined : choice.value)}
+                    testID={`default-mature-${row.key}-${choice.value}`}
+                  >
+                    <Text
+                      style={[styles.matureChipText, selected === choice.value && styles.scaleChipTextActive]}
+                    >
+                      {choice.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <Text style={[styles.rowHelp, selected ? styles.lengthActive : null]}>
+                {selected
+                  ? `${row.choices.find((c) => c.value === selected)?.label ?? selected}: ${MATURE_COPY[row.key].levels[selected] ?? ""}`
+                  : "Not set. The story's own starting level is used."}
+              </Text>
+            </View>
+          );
+        })}
 
         {devUnlocked && (
           <View style={[styles.row, { marginTop: 28 }]}>
@@ -334,7 +525,17 @@ const styles = StyleSheet.create({
     marginTop: 4,
     lineHeight: 18,
   },
+  lengthActive: { color: COLORS.textPrimary },
+  sectionSpaced: { marginTop: 30 },
   scaleRow: { flexDirection: "row", gap: 8, marginTop: 12 },
+  chipWrapRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 },
+  defaultGroup: { marginTop: 22 },
+  matureChipText: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.textSecondary,
+    fontSize: 11,
+    letterSpacing: 0.5,
+  },
   scaleChip: {
     paddingHorizontal: 18,
     paddingVertical: 10,

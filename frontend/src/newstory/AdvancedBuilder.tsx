@@ -26,13 +26,15 @@ import {
   STORY_DIFFICULTIES,
 } from "./options";
 
-type SetupOption = { value: string; label: string; explanation?: string; consequence?: string };
+export type SetupOption = { value: string; label: string; explanation?: string; consequence?: string };
 
 type AdvancedBuilderProps = {
   loading: boolean;
   fontScale: number;
   customSetup: CustomWorldSetup;
   matureContent: MatureContentPreferences;
+  /** 18+ levels saved in Settings. Applied when mature content is switched on. */
+  matureDefaults?: Record<string, string>;
   capabilities: DistributionCapabilities;
   onSetSetupField: (patch: Partial<CustomWorldSetup>) => void;
   onSetMatureContent: (patch: Partial<MatureContentPreferences>) => void;
@@ -116,7 +118,7 @@ const KNOWLEDGE_OPTIONS: SetupOption[] = [
   { value: "deeply_involved", label: "Deeply involved", explanation: "You already know disputes you have lived.", consequence: "Expect: history with the people around you." },
 ];
 
-const STORY_FEEL: SetupOption[] = [
+export const STORY_FEEL: SetupOption[] = [
   { value: "hopeful", label: "Hopeful", explanation: "Warm writing. People can be reached and things can improve.", consequence: "Expect: a change of mood only. Harshness is the next question." },
   { value: "grounded", label: "Grounded", explanation: "Plain, realistic writing.", consequence: "Expect: a change of mood only. Harshness is the next question." },
   { value: "grim", label: "Dark", explanation: "Cold, uncertain writing. Wins cost something.", consequence: "Expect: a change of mood only. Harshness is the next question." },
@@ -131,7 +133,7 @@ const SEVERITY_TO_DIFFICULTY = {
   brutal: "brutal",
 } as const;
 
-const SEVERITY: SetupOption[] = (
+export const SEVERITY: SetupOption[] = (
   Object.entries(SEVERITY_TO_DIFFICULTY) as [string, keyof typeof HARSHNESS_LABELS][]
 ).map(([value, difficulty]) => {
   const copy = STORY_DIFFICULTIES.find((d) => d.value === difficulty);
@@ -227,6 +229,32 @@ export function createDefaultAdvancedSetup(): CustomWorldSetup {
   return { ...DEFAULT_SETUP };
 }
 
+/**
+ * Start a setup from the defaults chosen in Settings. A default replaces only an
+ * answer still at its built-in preset, and only if the builder offers that value.
+ */
+export function applyStoryDefaults(
+  setup: CustomWorldSetup,
+  defaults: { storyFeel?: string; consequenceSeverity?: string }
+): CustomWorldSetup {
+  const next = { ...setup };
+  if (
+    defaults.storyFeel &&
+    next.storyFeel === DEFAULT_SETUP.storyFeel &&
+    STORY_FEEL.some((o) => o.value === defaults.storyFeel)
+  ) {
+    next.storyFeel = defaults.storyFeel;
+  }
+  if (
+    defaults.consequenceSeverity &&
+    next.consequenceSeverity === DEFAULT_SETUP.consequenceSeverity &&
+    SEVERITY.some((o) => o.value === defaults.consequenceSeverity)
+  ) {
+    next.consequenceSeverity = defaults.consequenceSeverity;
+  }
+  return next;
+}
+
 function optionLabel(options: SetupOption[] | undefined, value?: string) {
   return options?.find((o) => o.value === value)?.label || value || "Not set";
 }
@@ -302,7 +330,7 @@ export function buildAdvancedStartRequest(setup: CustomWorldSetup): AdvancedStar
   };
 }
 
-type MatureKey =
+export type MatureKey =
   | "violence_level"
   | "horror_level"
   | "sexual_content_level"
@@ -315,7 +343,7 @@ type MatureKey =
  * Plain-language copy for the 18+ rows. Each level is the most the story may
  * show. A level never forces content to appear.
  */
-const MATURE_COPY: Record<MatureKey, { help: string; levels: Record<string, string> }> = {
+export const MATURE_COPY: Record<MatureKey, { help: string; levels: Record<string, string> }> = {
   violence_level: {
     help: "The most detail the story may use for fights and injuries.",
     levels: {
@@ -381,7 +409,7 @@ const MATURE_COPY: Record<MatureKey, { help: string; levels: Record<string, stri
   },
 };
 
-const MATURE_ROWS: { key: MatureKey; label: string; choices: { value: string; label: string }[] }[] = [
+export const MATURE_ROWS: { key: MatureKey; label: string; choices: { value: string; label: string }[] }[] = [
   {
     key: "violence_level",
     label: "Violence and injury",
@@ -459,6 +487,7 @@ export function AdvancedBuilder({
   fontScale,
   customSetup,
   matureContent,
+  matureDefaults,
   capabilities,
   onSetSetupField,
   onSetMatureContent,
@@ -557,6 +586,16 @@ export function AdvancedBuilder({
       }
       return true;
     });
+
+  /** Saved 18+ levels this release offers. Anything else is left at its current value. */
+  const allowedMatureDefaults = (): Partial<MatureContentPreferences> => {
+    const out: Record<string, string> = {};
+    for (const row of visibleMatureRows) {
+      const saved = matureDefaults?.[row.key];
+      if (saved && choicesFor(row).some((choice) => choice.value === saved)) out[row.key] = saved;
+    }
+    return out as Partial<MatureContentPreferences>;
+  };
 
   return (
     <View testID="advanced-builder-panel">
@@ -775,6 +814,8 @@ export function AdvancedBuilder({
                     style={styles.checkboxRow}
                     onPress={() =>
                       onSetMatureContent({
+                        // Switching on starts from the levels saved in Settings.
+                        ...(matureContent.adult_mode_enabled ? {} : allowedMatureDefaults()),
                         adult_mode_enabled: !matureContent.adult_mode_enabled,
                         adult_age_confirmed: matureContent.adult_mode_enabled
                           ? false

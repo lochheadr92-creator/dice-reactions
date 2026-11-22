@@ -55,6 +55,95 @@ describe("Settings admin AI engine", () => {
     expect(screen.queryByTestId("admin-ai-engine")).toBeNull();
   });
 
+  it("says how many paragraphs each S/M/L/XL length gives", async () => {
+    mockGetSettings.mockResolvedValue({
+      debugDefault: false,
+      fontScale: 1,
+      developerUnlocked: false,
+    });
+
+    render(<SettingsScreen />);
+    await waitFor(() => expect(screen.getByTestId("prose-length-M")).toBeTruthy());
+
+    const lines = ["S", "M", "L", "XL"].map((label) =>
+      [screen.getByTestId(`prose-length-${label}`).props.children].flat().join("")
+    );
+    expect(lines).toEqual([
+      "S: 1 to 2 paragraphs a turn.",
+      "M: 2 to 4 paragraphs a turn.",
+      "L: 4 to 6 paragraphs a turn.",
+      "XL: 6 to 8 paragraphs a turn.",
+    ]);
+  });
+
+  it("saves writing style, speed and story defaults", async () => {
+    mockGetSettings.mockResolvedValue({
+      debugDefault: false,
+      fontScale: 1,
+      developerUnlocked: false,
+    });
+
+    render(<SettingsScreen />);
+    await waitFor(() => expect(screen.getByTestId("writing-style-plain")).toBeTruthy());
+
+    fireEvent.press(screen.getByTestId("writing-style-plain"));
+    await waitFor(() =>
+      expect(mockSaveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ writingStyle: "plain" }))
+    );
+
+    fireEvent.press(screen.getByTestId("speed-careful"));
+    await waitFor(() =>
+      expect(mockSaveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ writingStyle: "plain", speed: "careful" })
+      )
+    );
+
+    fireEvent.press(screen.getByTestId("default-consequenceSeverity-severe"));
+    await waitFor(() =>
+      expect(mockSaveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ storyDefaults: { consequenceSeverity: "severe" } })
+      )
+    );
+    expect(
+      [screen.getByTestId("default-copy-consequenceSeverity").props.children].flat().join("")
+    ).toContain("Severe:");
+
+    fireEvent.press(screen.getByTestId("default-mature-violence_level-graphic"));
+    await waitFor(() =>
+      expect(mockSaveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          storyDefaults: { consequenceSeverity: "severe", mature: { violence_level: "graphic" } },
+        })
+      )
+    );
+
+    // Pressing a selected default again clears it.
+    fireEvent.press(screen.getByTestId("default-consequenceSeverity-severe"));
+    await waitFor(() =>
+      expect(mockSaveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ storyDefaults: { mature: { violence_level: "graphic" } } })
+      )
+    );
+  });
+
+  it("changes turn length without touching text size", async () => {
+    mockGetSettings.mockResolvedValue({
+      debugDefault: false,
+      fontScale: 1.25,
+      developerUnlocked: false,
+    });
+
+    render(<SettingsScreen />);
+    await waitFor(() => expect(screen.getByTestId("turn-length-S")).toBeTruthy());
+    fireEvent.press(screen.getByTestId("turn-length-S"));
+
+    await waitFor(() => {
+      expect(mockSaveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ fontScale: 1.25, turnLength: "S" })
+      );
+    });
+  });
+
   it("developer unlock reveals admin controls", async () => {
     mockGetSettings.mockResolvedValue({
       debugDefault: false,

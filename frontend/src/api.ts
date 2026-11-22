@@ -208,6 +208,12 @@ export type NewStoryPayload = {
   debug_mode: boolean;
   custom_premise?: string;
   mode?: string;
+  /** Narration length: brief / standard / story / cinematic (the S/M/L/XL setting). */
+  prose_mode?: string;
+  /** Writing style: plain / balanced / rich. */
+  prose_style?: string;
+  /** How long the model thinks before writing: low / medium / high. */
+  thinking_effort?: string;
   scenario_id?: string;
   /** Quick Start only — backend selects scenario_id from this card's pool. */
   quick_start_key?: string;
@@ -241,6 +247,26 @@ export async function setSessionMode(
     method: "POST",
     headers: { "Content-Type": "application/json", ...deviceHeaders(deviceId) },
     body: JSON.stringify({ mode }),
+  });
+  return handle(res);
+}
+
+export type SessionPlaySettings = {
+  prose_mode?: string;
+  prose_style?: string;
+  thinking_effort?: string;
+};
+
+/** Turn length, writing style and speed for an existing story. The next turn uses them. */
+export async function setSessionPlaySettings(
+  sessionId: string,
+  deviceId: string,
+  settings: SessionPlaySettings
+): Promise<SessionPlaySettings> {
+  const res = await fetch(`${API}/story/session/${sessionId}/play-settings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...deviceHeaders(deviceId) },
+    body: JSON.stringify(settings),
   });
   return handle(res);
 }

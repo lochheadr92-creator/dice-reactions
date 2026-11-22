@@ -13,6 +13,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONTS } from "../src/theme";
 import { getDeviceId, getSettings } from "../src/storage";
+import type { AppSettings } from "../src/storage";
+import { playSettingsFor } from "../src/prose-length";
+import type { StoryDefaults } from "../src/prose-length";
 import {
   getSetupCapabilities,
   newStory,
@@ -28,6 +31,7 @@ import {
   AdvancedBuilder,
   buildAdvancedStartRequest,
   createDefaultAdvancedSetup,
+  applyStoryDefaults,
 } from "../src/newstory/AdvancedBuilder";
 import {
   QuickStart,
@@ -109,6 +113,7 @@ export default function NewStoryScreen() {
   const [launchingGenreKey, setLaunchingGenreKey] = useState<string | null>(null);
   const [guidedSelections, setGuidedSelections] = useState<GuidedStartSelections>({});
   const [customSetup, setCustomSetup] = useState<CustomWorldSetup>(createDefaultAdvancedSetup);
+  const [storyDefaults, setStoryDefaults] = useState<StoryDefaults>({});
   const [matureContent, setMatureContent] = useState<MatureContentPreferences>(
     SAFE_SETUP_CAPABILITIES.mature_content_defaults
   );
@@ -131,7 +136,12 @@ export default function NewStoryScreen() {
       });
     getSettings()
       .then((settings) => {
-        if (active) setFontScale(settings.fontScale || 1);
+        if (!active) return;
+        setFontScale(settings.fontScale || 1);
+        const defaults = settings.storyDefaults || {};
+        setStoryDefaults(defaults);
+        // Start the Advanced builder from the defaults chosen in Settings.
+        setCustomSetup((prev) => applyStoryDefaults(prev, defaults));
       })
       .catch(() => {});
     return () => {
@@ -219,6 +229,7 @@ export default function NewStoryScreen() {
         device_id,
         ...payload,
         debug_mode: settings.debugDefault,
+        ...playSettingsFor(settings),
         mature_content: matureContent,
       };
       const res = await newStory(withCreationRequestId(requestPayload));
@@ -236,7 +247,7 @@ export default function NewStoryScreen() {
     if (!beginSubmit()) return;
     setLaunchingGenreKey(option.key);
     try {
-      const settings = await getSettings().catch(() => ({
+      const settings = await getSettings().catch((): AppSettings => ({
         debugDefault: false,
         fontScale: 1,
         developerUnlocked: false,
@@ -257,6 +268,7 @@ export default function NewStoryScreen() {
         tone: payload.tone,
         difficulty: payload.difficulty,
         debug_mode: settings.debugDefault,
+        ...playSettingsFor(settings),
         mode: payload.mode,
         role: payload.role,
         quick_start_key: payload.quick_start_key,
@@ -277,7 +289,7 @@ export default function NewStoryScreen() {
 
   const handleGuidedStart = async () => {
     if (!beginSubmit()) return;
-    const settings = await getSettings().catch(() => ({
+    const settings = await getSettings().catch((): AppSettings => ({
       debugDefault: false,
       fontScale: 1,
       developerUnlocked: false,
@@ -296,6 +308,7 @@ export default function NewStoryScreen() {
         tone: payload.tone,
         difficulty: payload.difficulty,
         debug_mode: settings.debugDefault,
+        ...playSettingsFor(settings),
         mode: payload.mode,
         custom_world_setup: payload.custom_world_setup,
       };
@@ -403,6 +416,7 @@ export default function NewStoryScreen() {
               fontScale={fontScale}
               customSetup={customSetup}
               matureContent={matureContent}
+              matureDefaults={storyDefaults.mature}
               capabilities={setupCapabilities}
               onSetSetupField={(patch) => {
                 clearError();

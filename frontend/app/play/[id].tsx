@@ -28,6 +28,7 @@ import {
   deleteSession,
   exportSession,
   setSessionMode,
+  setSessionPlaySettings,
   getActionRequestStatus,
   Turn,
   SessionSummary,
@@ -44,6 +45,7 @@ import {
   savePendingAction,
 } from "../../src/pending-action";
 import { getDeviceId, getSettings as getAppSettings } from "../../src/storage";
+import { playSettingsFor } from "../../src/prose-length";
 import {
   friendlyError,
   ACTION_CONFLICT_EXHAUSTION_MESSAGE,
@@ -267,6 +269,17 @@ export default function PlayScreen() {
         }
         if (!cancelled && deviceIdRef.current && sessionId) {
           await refreshSessionReadOnly();
+        }
+        // Keep this story on the turn length, writing style and speed chosen in
+        // Settings; a failure here only leaves the previous values.
+        try {
+          const s = await getAppSettings();
+          const deviceId = deviceIdRef.current || (await getDeviceId());
+          if (!cancelled && sessionId) {
+            await setSessionPlaySettings(sessionId, deviceId, playSettingsFor(s));
+          }
+        } catch {
+          // Presentation preference only.
         }
       })();
       return () => {

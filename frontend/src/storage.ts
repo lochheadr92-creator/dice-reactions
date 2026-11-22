@@ -1,4 +1,16 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  DEFAULT_SPEED,
+  DEFAULT_TURN_LENGTH,
+  DEFAULT_WRITING_STYLE,
+  isSpeed,
+  isTurnLength,
+  isWritingStyle,
+  Speed,
+  StoryDefaults,
+  TurnLength,
+  WritingStyle,
+} from "./prose-length";
 
 const DEVICE_ID_KEY = "dice_device_id";
 const SETTINGS_KEY = "dice_settings";
@@ -32,12 +44,52 @@ export async function getDeviceId(): Promise<string> {
 export type AppSettings = {
   debugDefault: boolean;
   fontScale: number;
+  /** How many paragraphs each turn has. Separate from text size. Missing = M. */
+  turnLength?: TurnLength;
+  /** Plain, balanced or rich writing. Missing = balanced. */
+  writingStyle?: WritingStyle;
+  /** How long the model thinks before writing. Missing = fast. */
+  speed?: Speed;
+  /** What a new story starts from in the Advanced builder. */
+  storyDefaults?: StoryDefaults;
   developerUnlocked?: boolean;
 };
+
+const MAX_DEFAULT_VALUE_CHARS = 60;
+const MAX_MATURE_DEFAULTS = 12;
+
+function shortString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_DEFAULT_VALUE_CHARS
+    ? value
+    : undefined;
+}
+
+/** Keep only short string values. The builder ignores any value it does not offer. */
+function sanitizeStoryDefaults(raw: unknown): StoryDefaults {
+  const source = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const out: StoryDefaults = {};
+  const storyFeel = shortString(source.storyFeel);
+  if (storyFeel) out.storyFeel = storyFeel;
+  const severity = shortString(source.consequenceSeverity);
+  if (severity) out.consequenceSeverity = severity;
+  if (source.mature && typeof source.mature === "object") {
+    const mature: Record<string, string> = {};
+    for (const [key, value] of Object.entries(source.mature as Record<string, unknown>).slice(0, MAX_MATURE_DEFAULTS)) {
+      const level = shortString(value);
+      if (shortString(key) && level) mature[key] = level;
+    }
+    if (Object.keys(mature).length) out.mature = mature;
+  }
+  return out;
+}
 
 const DEFAULT_SETTINGS: AppSettings = {
   debugDefault: false,
   fontScale: 1,
+  turnLength: DEFAULT_TURN_LENGTH,
+  writingStyle: DEFAULT_WRITING_STYLE,
+  speed: DEFAULT_SPEED,
+  storyDefaults: {},
   developerUnlocked: false,
 };
 
@@ -60,9 +112,44 @@ function sanitizeSettings(raw: any): { settings: AppSettings; repaired: boolean 
   const developerUnlocked = source.developerUnlocked === true;
   if (source.developerUnlocked !== undefined && typeof source.developerUnlocked !== "boolean") repaired = true;
 
-  const cleaned: AppSettings = { debugDefault, fontScale, developerUnlocked };
+  // Settings saved before turn length existed have no value: that is M, not damage.
+  let turnLength: TurnLength = DEFAULT_TURN_LENGTH;
+  if (isTurnLength(source.turnLength)) {
+    turnLength = source.turnLength;
+  } else if (source.turnLength !== undefined) {
+    repaired = true;
+  }
 
-  const allowedKeys = new Set(["debugDefault", "fontScale", "developerUnlocked"]);
+  // Like turn length, these are absent from older saved settings.
+  let writingStyle: WritingStyle = DEFAULT_WRITING_STYLE;
+  if (isWritingStyle(source.writingStyle)) writingStyle = source.writingStyle;
+  else if (source.writingStyle !== undefined) repaired = true;
+
+  let speed: Speed = DEFAULT_SPEED;
+  if (isSpeed(source.speed)) speed = source.speed;
+  else if (source.speed !== undefined) repaired = true;
+
+  const storyDefaults = sanitizeStoryDefaults(source.storyDefaults);
+
+  const cleaned: AppSettings = {
+    debugDefault,
+    fontScale,
+    turnLength,
+    writingStyle,
+    speed,
+    storyDefaults,
+    developerUnlocked,
+  };
+
+  const allowedKeys = new Set([
+    "debugDefault",
+    "fontScale",
+    "turnLength",
+    "writingStyle",
+    "speed",
+    "storyDefaults",
+    "developerUnlocked",
+  ]);
   for (const k of Object.keys(source)) {
     if (!allowedKeys.has(k)) {
       repaired = true;
