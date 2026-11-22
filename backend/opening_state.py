@@ -145,6 +145,19 @@ OPENING_ARCHETYPES: Dict[str, Dict[str, str]] = {
     },
 }
 
+# Always part of the turn 1 request. Not a player setting: an opening the player
+# cannot follow is a defect, whatever the story's tone or mystery level.
+OPENING_ORIENTATION_RULE = (
+    "OPENING ORIENTATION — always required. By the end of the first paragraph the "
+    "reader must know, without guessing: who the player character is, where they are, "
+    "why they are there or how they arrived, and what they need right now.\n"
+    "Work these into the scene itself, through action, thought and concrete detail, "
+    "in the story's own voice. Do not list them, announce them, or open with a summary.\n"
+    "Use everyday words. If a specialist term is needed, make its meaning clear where "
+    "it appears. Other things may stay unknown; these four may not. Where this "
+    "conflicts with an instruction to withhold, imply, or preserve mystery, this wins."
+)
+
 DEFAULT_GENRE = "general"
 
 GENRE_ARCHETYPE_CATALOG: Dict[str, List[str]] = {

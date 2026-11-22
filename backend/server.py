@@ -1158,6 +1158,40 @@ def _clean_setup(value: Any) -> Any:
     return _short_text(value, 700)
 
 
+def _build_opening_prompt(
+    setup_text: str,
+    *,
+    debug_marker: str,
+    difficulty_marker: str,
+    mode_marker: str,
+    dev_mode: bool,
+) -> str:
+    """The player-message for turn 1. Ends with the orientation rule so it is read last."""
+    return (
+        f"{debug_marker}\n"
+        f"{difficulty_marker}\n"
+        f"{mode_marker}\n\n"
+        f"Begin the story now. Use the following setup:\n{setup_text}\n\n"
+        f"Open in medias res with a specific immediate situation — not pure setup, routine, or generic exploration. "
+        f"Before any choices, establish: where the player is, why they are there or how they arrived, "
+        f"the dominant active pressure from the scenario, important visible objects, and introduce every "
+        f"named person in narrative prose before any choice may reference them. "
+        f"Give the player a reason to decide now and connect first choices to that situation. "
+        f"Choices must express one intention each (short, scannable) and must not invent people, "
+        f"contracts, debt claims, or objects absent from the scenario seed and this turn's narrative. "
+        f"Populate state Pressure and at least one objectives or unresolved stake. "
+        f"Preserve hidden-threat secrecy; do not reveal latent threats merely to create pace. "
+        f"Populate the inventory ledger with the starting kit. "
+        f"Present the appropriate number of meaningful first choices for the mode. "
+        f"Honour the difficulty modifier on this very first roll. "
+        f"Emit <rolling_state> first, close it completely, then emit all remaining required blocks"
+        + (", <debug>" if dev_mode else "")
+        + "."
+        + "\n\n"
+        + opening_state.OPENING_ORIENTATION_RULE
+    )
+
+
 def _build_custom_world_setup_block(setup: Optional[Dict[str, Any]]) -> str:
     if not setup:
         return ""
@@ -4403,26 +4437,12 @@ async def _create_new_story_inner(req: NewStoryRequest, attempt: Dict[str, Any])
     difficulty_marker = f"[DIFFICULTY: {effective_difficulty}]"
     mode_marker = f"[MODE: {effective_mode}]"
 
-    opening_prompt = (
-        f"{debug_marker}\n"
-        f"{difficulty_marker}\n"
-        f"{mode_marker}\n\n"
-        f"Begin the story now. Use the following setup:\n{setup_text}\n\n"
-        f"Open in medias res with a specific immediate situation — not pure setup, routine, or generic exploration. "
-        f"Before any choices, establish: where the player is, why they are there or how they arrived, "
-        f"the dominant active pressure from the scenario, important visible objects, and introduce every "
-        f"named person in narrative prose before any choice may reference them. "
-        f"Give the player a reason to decide now and connect first choices to that situation. "
-        f"Choices must express one intention each (short, scannable) and must not invent people, "
-        f"contracts, debt claims, or objects absent from the scenario seed and this turn's narrative. "
-        f"Populate state Pressure and at least one objectives or unresolved stake. "
-        f"Preserve hidden-threat secrecy; do not reveal latent threats merely to create pace. "
-        f"Populate the inventory ledger with the starting kit. "
-        f"Present the appropriate number of meaningful first choices for the mode. "
-        f"Honour the difficulty modifier on this very first roll. "
-        f"Emit <rolling_state> first, close it completely, then emit all remaining required blocks"
-        + (", <debug>" if dev_mode else "")
-        + "."
+    opening_prompt = _build_opening_prompt(
+        setup_text,
+        debug_marker=debug_marker,
+        difficulty_marker=difficulty_marker,
+        mode_marker=mode_marker,
+        dev_mode=dev_mode,
     )
 
     try:
