@@ -82,6 +82,9 @@ CONDITION_STABILITY = {
 
 MAX_HOOK_LEN = 120
 MAX_ELEMENTS_LEN = 320
+
+# Era / technology value for a world type the player typed (no catalog frame).
+PLAYER_AUTHORED_FRAME_VALUE = "as_the_world_type_implies"
 MAX_PRESSURES = 3
 MAX_LATER_TURN_LINES = 14
 
@@ -224,6 +227,20 @@ def resolve_recent_disruption(setup: Mapping[str, Any]) -> str:
     return _humanize(raw)
 
 
+def _player_authored_world_frame(world_type: str) -> Dict[str, Any]:
+    """Frame for a world type the player typed, which has no catalog entry.
+
+    The typed text is the setting. Falling back to the modern frame told the
+    model the world was contemporary and realistic, whatever the player wrote.
+    """
+    return {
+        "era": PLAYER_AUTHORED_FRAME_VALUE,
+        "setting": _short(world_type, MAX_HOOK_LEN),
+        "technology": PLAYER_AUTHORED_FRAME_VALUE,
+        "player_authored": True,
+    }
+
+
 def derive_world_frame(
     genre: Optional[str],
     *,
@@ -231,8 +248,12 @@ def derive_world_frame(
     setup: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Minimal world_frame for non-scenario creation. SF ≠ cyberpunk."""
-    g = str(genre or "modern").strip().lower()
-    base = dict(_GENRE_WORLD_FRAMES.get(g) or _GENRE_WORLD_FRAMES["modern"])
+    world_type = str(genre or "").strip()
+    g = world_type.lower() or "modern"
+    if g in _GENRE_WORLD_FRAMES:
+        base = dict(_GENRE_WORLD_FRAMES[g])
+    else:
+        base = _player_authored_world_frame(world_type)
     if groundedness:
         base["groundedness"] = str(groundedness).strip().lower()[:40]
     if isinstance(setup, dict):
@@ -806,6 +827,12 @@ def build_opening_setup_lines(contract: Mapping[str, Any]) -> List[str]:
         lines.append(
             f"World frame: era={frame.get('era', '')}; setting={frame.get('setting', '')}; "
             f"technology={frame.get('technology', '')}."
+        )
+    if frame.get("player_authored") and frame.get("setting"):
+        lines.append(
+            f"The player wrote this world type themselves: \"{frame['setting']}\". "
+            "What defines that world must appear on the page in the opening scene, "
+            "shown plainly and named, not only hinted at."
         )
     return lines
 
