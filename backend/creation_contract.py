@@ -750,7 +750,12 @@ def build_later_turn_creation_directive(contract: Mapping[str, Any]) -> str:
     if genre or role:
         lines.append(f"Identity: genre={genre or '—'}; role={role or '—'}.")
     if contract.get("premise"):
-        lines.append(f"Player's premise (stays true): {_short(contract['premise'], 240)}")
+        lines.append(
+            f"Player's premise (stays true): {_short(contract['premise'], 240)} "
+            "The premise decides what this story is about. Keep what defines it active in the "
+            "scene, acting or being used, not only mentioned. Pressure and scarcity rolls shape "
+            "scenes; they never replace the premise."
+        )
 
     frame = contract.get("world_frame") if isinstance(contract.get("world_frame"), dict) else {}
     if frame:
@@ -833,7 +838,9 @@ def build_opening_setup_lines(contract: Mapping[str, Any]) -> List[str]:
         return lines
     if contract.get("premise"):
         lines.append(
-            f"Player's premise — build the story around this and show it on the page: {contract['premise']}"
+            f"Player's premise — build the story around this and show it on the page: {contract['premise']} "
+            "Where the opening situation and the premise pull apart, the premise wins: what defines "
+            "it must be active in the first scene, not background."
         )
     if contract.get("starting_location"):
         lines.append(f"Starting place: {contract['starting_location']}")

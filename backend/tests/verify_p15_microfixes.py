@@ -255,7 +255,7 @@ def scenario_f4_live_output_contract() -> bool:
     )
     ok &= _expect(
         "Format retry note carries the active prose-mode budget",
-        "(2-3 paragraphs, approx 700-1200 characters)" in format_retry
+        "(2-4 paragraphs, approx 700-1200 characters)" in format_retry
         and "never omit rolling_state" in format_retry,
         detail=format_retry,
     )

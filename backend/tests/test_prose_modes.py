@@ -81,12 +81,12 @@ def test_configured_default_rejects_unknown_values(value):
 
 def test_mode_budgets_match_specification():
     b = prose_modes.PROSE_MODES["brief"]
-    assert (b.min_paragraphs, b.max_paragraphs) == (1, 1)
+    assert (b.min_paragraphs, b.max_paragraphs) == (1, 2)
     assert (b.min_sentences, b.max_sentences) == (2, 4)
     assert (b.min_chars, b.max_chars) == (300, 600)
 
     s = prose_modes.PROSE_MODES["standard"]
-    assert (s.min_paragraphs, s.max_paragraphs) == (2, 3)
+    assert (s.min_paragraphs, s.max_paragraphs) == (2, 4)
     assert (s.min_sentences, s.max_sentences) == (5, 9)
     assert (s.min_chars, s.max_chars) == (700, 1200)
 
@@ -96,7 +96,7 @@ def test_mode_budgets_match_specification():
     assert (st.min_chars, st.max_chars) == (1800, 2400)
 
     c = prose_modes.PROSE_MODES["cinematic"]
-    assert (c.min_paragraphs, c.max_paragraphs) == (6, 10)
+    assert (c.min_paragraphs, c.max_paragraphs) == (6, 8)
     assert (c.min_chars, c.max_chars) == (3000, 4000)
 
 
@@ -106,12 +106,13 @@ def test_mode_budgets_match_specification():
 def test_prompt_directives_contain_structural_instructions():
     d_brief = prose_modes.PROSE_MODES["brief"].directive
     assert "[PROSE MODE: BRIEF]" in d_brief
-    assert "1 paragraph" in d_brief and "2-4 sentences" in d_brief
+    assert "1-2 short paragraphs" in d_brief and "2-4 sentences" in d_brief
     assert "immediate outcome" in d_brief
 
     d_std = prose_modes.PROSE_MODES["standard"].directive
     assert "[PROSE MODE: STANDARD]" in d_std
-    assert "2-3 paragraphs" in d_std and "5-9 sentences" in d_std
+    assert "2-4 short paragraphs" in d_std and "5-9 sentences" in d_std
+    assert "blank line between paragraphs" in d_std
     assert "consequences" in d_std
 
     d_story = prose_modes.PROSE_MODES["story"].directive
@@ -128,7 +129,7 @@ def test_prompt_directives_contain_structural_instructions():
 
     d_cin = prose_modes.PROSE_MODES["cinematic"].directive
     assert "[PROSE MODE: CINEMATIC]" in d_cin
-    assert "6-10 paragraphs" in d_cin
+    assert "6-8 paragraphs" in d_cin
     assert "emotional pacing" in d_cin
     assert "Do not summarise" in d_cin
 
@@ -529,8 +530,8 @@ def test_format_retry_note_uses_mode_budget():
     note = server._build_format_retry_instruction(
         "missing required choice labels: D", "", prose_mode="cinematic"
     )
-    assert "(6-10 paragraphs, approx 3000-4000 characters)" in note
+    assert "(6-8 paragraphs, approx 3000-4000 characters)" in note
     note_default = server._build_format_retry_instruction(
         "missing required choice labels: D", ""
     )
-    assert "(2-3 paragraphs, approx 700-1200 characters)" in note_default
+    assert "(2-4 paragraphs, approx 700-1200 characters)" in note_default

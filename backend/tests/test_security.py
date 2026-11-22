@@ -193,6 +193,35 @@ class TestSessionOwnership:
         )
         assert r.status_code == 404
 
+    def test_other_device_cannot_change_play_settings(self, client, mongo_env):
+        owner = f"dev-owner-{uuid.uuid4()}"
+        other = f"dev-other-{uuid.uuid4()}"
+        sid = _seed_session(mongo_env, owner)
+        r = client.post(
+            f"/api/story/session/{sid}/play-settings",
+            headers=_device_headers(other),
+            json={"prose_mode": "story"},
+        )
+        assert r.status_code == 404
+
+    def test_owner_changes_play_settings_and_unknown_values_are_refused(self, client, mongo_env):
+        owner = f"dev-owner-{uuid.uuid4()}"
+        sid = _seed_session(mongo_env, owner)
+        url = f"/api/story/session/{sid}/play-settings"
+        r = client.post(
+            url,
+            headers=_device_headers(owner),
+            json={"prose_mode": "XL", "prose_style": "plain", "thinking_effort": "high"},
+        )
+        assert r.status_code == 200
+        assert r.json() == {"prose_mode": "cinematic", "prose_style": "plain", "thinking_effort": "high"}
+        r = client.post(url, headers=_device_headers(owner), json={"prose_style": "rich"})
+        assert r.status_code == 200
+        assert r.json() == {"prose_style": "rich"}
+        for bad in ({"prose_mode": "huge"}, {"prose_style": "purple"}, {"thinking_effort": "none"}, {}):
+            r = client.post(url, headers=_device_headers(owner), json=bad)
+            assert r.status_code == 400, bad
+
     def test_other_device_cannot_export(self, client, mongo_env):
         owner = f"dev-owner-{uuid.uuid4()}"
         other = f"dev-other-{uuid.uuid4()}"

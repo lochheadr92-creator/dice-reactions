@@ -18,6 +18,7 @@ Features:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import os
 import time
@@ -86,6 +87,34 @@ OPENROUTER_REASONING_EFFORT = os.environ.get("OPENROUTER_REASONING_EFFORT", "").
 SSL_USE_SYSTEM_TRUST_STORE = os.environ.get(
     "SSL_USE_SYSTEM_TRUST_STORE", ""
 ).strip().lower() in ("1", "true", "yes", "on")
+
+
+# Per-story thinking effort (the "Speed" setting). Task-local, so one story's
+# choice never leaks into another request.
+REASONING_EFFORT_LEVELS = ("low", "medium", "high")
+_story_reasoning_effort: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "story_reasoning_effort", default=None
+)
+
+
+def use_story_reasoning_effort(effort: Optional[str]) -> None:
+    """Set the effort for model calls made by the current request. Unknown values clear it."""
+    value = str(effort or "").strip().lower()
+    _story_reasoning_effort.set(value if value in REASONING_EFFORT_LEVELS else None)
+
+
+def effective_direct_reasoning_effort() -> str:
+    """Effort sent on the direct route.
+
+    A story's choice applies only when the configured value is itself a level
+    (low / medium / high), which is how the operator says the provider accepts
+    levels. Unset stays unset, and "none" stays "none": a local thinking model
+    needs thinking switched off and must not have that overridden.
+    """
+    configured = OPENAI_DIRECT_REASONING_EFFORT
+    if configured not in REASONING_EFFORT_LEVELS:
+        return configured
+    return _story_reasoning_effort.get() or configured
 
 
 def _build_tls_verify(use_system_store: bool):
@@ -346,8 +375,9 @@ async def _call_model_once(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
-    if OPENAI_DIRECT_REASONING_EFFORT and model_id.startswith(OPENAI_PROVIDER_PREFIX):
-        payload["reasoning_effort"] = OPENAI_DIRECT_REASONING_EFFORT
+    direct_effort = effective_direct_reasoning_effort()
+    if direct_effort and model_id.startswith(OPENAI_PROVIDER_PREFIX):
+        payload["reasoning_effort"] = direct_effort
     if OPENROUTER_REASONING_EFFORT and route["provider"] == "openrouter":
         payload["reasoning"] = {"effort": OPENROUTER_REASONING_EFFORT}
     headers = {

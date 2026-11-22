@@ -46,31 +46,32 @@ PROSE_MODES: Dict[str, ProseMode] = {
     "brief": ProseMode(
         name="brief",
         min_paragraphs=1,
-        max_paragraphs=1,
+        max_paragraphs=2,
         min_sentences=2,
         max_sentences=4,
         min_chars=300,
         max_chars=600,
         max_tokens_floor=0,
         directive=(
-            "[PROSE MODE: BRIEF] Write exactly 1 paragraph of 2-4 sentences "
-            "(approx 300-600 characters). Deliver the immediate outcome and "
-            "essential dialogue only; minimal description. Do not pad."
+            "[PROSE MODE: BRIEF] Write 1-2 short paragraphs, 2-4 sentences total "
+            "(approx 300-600 characters), with a blank line between paragraphs. "
+            "Deliver the immediate outcome and essential dialogue only; minimal "
+            "description. Do not pad."
         ),
     ),
     "standard": ProseMode(
         name="standard",
         min_paragraphs=2,
-        max_paragraphs=3,
+        max_paragraphs=4,
         min_sentences=5,
         max_sentences=9,
         min_chars=700,
         max_chars=1200,
         max_tokens_floor=0,
         directive=(
-            "[PROSE MODE: STANDARD] Write 2-3 paragraphs, 5-9 sentences total "
-            "(approx 700-1200 characters). Cover action, environment, character "
-            "reactions, and consequences."
+            "[PROSE MODE: STANDARD] Write 2-4 short paragraphs, 5-9 sentences total "
+            "(approx 700-1200 characters), with a blank line between paragraphs. "
+            "Cover action, environment, character reactions, and consequences."
         ),
     ),
     "story": ProseMode(
@@ -96,14 +97,14 @@ PROSE_MODES: Dict[str, ProseMode] = {
     "cinematic": ProseMode(
         name="cinematic",
         min_paragraphs=6,
-        max_paragraphs=10,
+        max_paragraphs=8,
         min_sentences=None,
         max_sentences=None,
         min_chars=3000,
         max_chars=4000,
         max_tokens_floor=4096,
         directive=(
-            "[PROSE MODE: CINEMATIC] Write 6-10 paragraphs (approx 3000-4000 "
+            "[PROSE MODE: CINEMATIC] Write 6-8 paragraphs (approx 3000-4000 "
             "characters). Compose a full scene: detailed description, multiple "
             "actors, dialogue, emotional pacing, environment, action, reaction, "
             "and consequence. Fill the length with the world and other people, "
@@ -115,6 +116,32 @@ PROSE_MODES: Dict[str, ProseMode] = {
 }
 
 DEFAULT_PROSE_MODE = "standard"
+
+# Writing style (the "Writing style" setting). Presentation only, like the
+# modes above. "balanced" adds no directive. The always-on turn rules still win
+# over "rich": richer description never excuses unclear stakes.
+PROSE_STYLES: Dict[str, str] = {
+    "plain": (
+        "[WRITING STYLE: PLAIN] Short, direct sentences. Concrete nouns and verbs. "
+        "No metaphor or simile. Describe only what matters to the decision."
+    ),
+    "balanced": "",
+    "rich": (
+        "[WRITING STYLE: RICH] Fuller description is welcome: sensory detail, mood "
+        "and imagery. The turn rules on plain stakes and plain words still apply."
+    ),
+}
+DEFAULT_PROSE_STYLE = "balanced"
+
+
+def resolve_prose_style(value: Optional[str]) -> str:
+    """Canonical style name. Unknown or missing values give the default."""
+    key = str(value or "").strip().lower()
+    return key if key in PROSE_STYLES else DEFAULT_PROSE_STYLE
+
+
+def build_style_directive(style: Optional[str]) -> str:
+    return PROSE_STYLES[resolve_prose_style(style)]
 
 # Legacy S/M/L compatibility. Unknown / missing values resolve to standard so
 # existing sessions and callers keep today's behaviour (700-1200 chars).
@@ -138,6 +165,11 @@ def resolve_prose_mode_name(value: Optional[str]) -> str:
     """Map any legacy or new value onto a canonical mode name (deterministic)."""
     key = str(value or "").strip().lower()
     return _ALIASES.get(key, DEFAULT_PROSE_MODE)
+
+
+def is_known_mode(value: Optional[str]) -> bool:
+    """True for a canonical mode name or a legacy S/M/L/XL alias."""
+    return str(value or "").strip().lower() in _ALIASES
 
 
 def resolve_configured_default(value: Optional[str]) -> str:

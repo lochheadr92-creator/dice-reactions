@@ -66,6 +66,8 @@ import hud  # noqa: E402  — player-facing HUD shaping (status chips + Pressure
 import pacing  # noqa: E402  — Early-Game Pacing Governor v1 (deterministic)
 import repetition_guard  # noqa: E402
 import prose_modes  # noqa: E402  — Prose Length System v2 (presentation-only)
+import ai_service  # noqa: E402  — per-story thinking effort
+import turn_rules  # noqa: E402  — always-on clarity and movement rules
 import story_secrets as secrets  # deterministic story secret engine
 import replayability  # noqa: E402  — Replayability Engine v1 (deterministic)
 import stress  # noqa: E402  — Ch 14 Stress substrate v1 (deterministic)
@@ -384,9 +386,9 @@ NARRATIVE IMMERSION GOVERNOR
 The simulation engine MUST STOP exposing internal game structure through narration. The player must feel they are inside a living world — not reading generated setup text, status briefs, or system summaries.
 
 PRIORITY ORDER (highest first):
-  1. Atmosphere
+  1. Readability
   2. Causality
-  3. Readability
+  3. Atmosphere
   4. Mechanical clarity
   5. Explicit information
 
@@ -402,7 +404,7 @@ CORE RULES — INSTEAD:
   • Weave inventory naturally into environmental narration.
   • Reveal tools, supplies, and resources only when contextually noticed, remembered, used, or needed.
   • Treat the world as already existing before the player arrived — places have history, NPCs have routines, objects have prior owners.
-  • Preserve mystery and incomplete information. Not everything is known. Not everything is true.
+  • Preserve mystery about facts the character cannot know. Never be unclear about what is happening in front of them or what a choice costs.
   • Let players infer danger from tone, detail, silence, behaviour, and implication.
 
 EXAMPLES:
@@ -638,6 +640,10 @@ class NewStoryRequest(BaseModel):
     # Presentation-only narration budget. Accepts new mode names
     # (brief/standard/story/cinematic) and legacy S/M/L aliases.
     prose_mode: Optional[str] = None
+    # Writing style (plain / balanced / rich) and thinking effort (low / medium /
+    # high, the "Speed" setting). Presentation and provider speed only.
+    prose_style: Optional[str] = Field(default=None, max_length=32)
+    thinking_effort: Optional[str] = Field(default=None, max_length=32)
     scenario_id: Optional[str] = None
     # Quick Start category key — when set, backend is sole scenario-selection authority.
     quick_start_key: Optional[str] = Field(default=None, max_length=64)
@@ -713,6 +719,9 @@ class SessionRecord(BaseModel):
     # Presentation-only narration budget (Prose Length System v2). Never
     # affects simulation truth, canonical events, or replay.
     prose_mode: str = prose_modes.DEFAULT_PROSE_MODE
+    prose_style: str = prose_modes.DEFAULT_PROSE_STYLE
+    # None = use the configured effort.
+    thinking_effort: Optional[str] = None
     scenario_id: Optional[str] = None
     # Client idempotency key for safe creation retry (engine-only; excluded from
     # all player-facing payloads by the player_api allowlists).
@@ -742,6 +751,23 @@ class AdminSettingsRequest(BaseModel):
 
 class SessionModeRequest(BaseModel):
     mode: str
+
+
+class SessionPlaySettingsRequest(BaseModel):
+    """Settings a player may change on a story in progress. All optional; only
+    the fields sent are changed. None of them touch simulation truth."""
+
+    # brief / standard / story / cinematic, or the S / M / L / XL aliases.
+    prose_mode: Optional[str] = Field(default=None, max_length=32)
+    # plain / balanced / rich.
+    prose_style: Optional[str] = Field(default=None, max_length=32)
+    # low / medium / high.
+    thinking_effort: Optional[str] = Field(default=None, max_length=32)
+
+
+def _known_thinking_effort(value: Optional[str]) -> Optional[str]:
+    key = str(value or "").strip().lower()
+    return key if key in ai_service.REASONING_EFFORT_LEVELS else None
 
 # ======================================================================
 # PARSER
@@ -2615,6 +2641,11 @@ async def _generate_turn(
         )
     # Structural narration guidance — presentation only, engine-only marker.
     hint_lines.append(prose_modes.build_prose_directive(prose_mode))
+    style_directive = prose_modes.build_style_directive(session.get("prose_style"))
+    if style_directive:
+        hint_lines.append(style_directive)
+    # Always on, every turn. Last of the engine hints so it is read last.
+    hint_lines.append(turn_rules.TURN_CLARITY_RULES)
     augmented_user_text = (
         ("\n".join(hint_lines) + "\n\n" + user_text) if hint_lines else user_text
     )
@@ -3352,6 +3383,8 @@ async def _generate_validated_turn(
     """
     early_game_stage = pacing.get_early_game_stage(session.get("turn_count", 0))
     dev_on = "[DEV_MODE: ON]" in user_text
+    # The story's "Speed" setting, for every model call this request makes.
+    ai_service.use_story_reasoning_effort(session.get("thinking_effort"))
 
     raw, meta = await _generate_turn(
         session,
@@ -3736,9 +3769,12 @@ async def _apply_presentation_rendering(
     """Apply a provider-isolated prose rerender after authoritative processing."""
 
     try:
+        # The renderer splits on blank lines and must return the same number of
+        # paragraphs. parsed.narrative joins paragraphs with single newlines, so
+        # passing it collapsed every rendered turn into one paragraph.
         result = await mature_rendering.render_mature_presentation(
             session,
-            parsed.narrative,
+            "\n\n".join(parsed.paragraphs) if parsed.paragraphs else parsed.narrative,
             authoritative_rolling,
         )
     except Exception:
@@ -3758,7 +3794,8 @@ async def _apply_presentation_rendering(
 
     candidate = parsed.model_copy(
         update={
-            "narrative": result.narrative,
+            # Same join as every stored turn: one newline between paragraphs.
+            "narrative": "\n".join(result.paragraphs) if result.paragraphs else result.narrative,
             "paragraphs": result.paragraphs,
         }
     )
@@ -4388,6 +4425,8 @@ async def _create_new_story_inner(req: NewStoryRequest, attempt: Dict[str, Any])
         prose_mode=prose_modes.resolve_prose_mode_name(
             req.prose_mode or DEFAULT_SESSION_PROSE_MODE
         ),
+        prose_style=prose_modes.resolve_prose_style(req.prose_style),
+        thinking_effort=_known_thinking_effort(req.thinking_effort),
         scenario_id=resolved_scenario_id,
         creation_request_id=creation_request_id,
         replayability_state=replayability_state,
@@ -5083,6 +5122,53 @@ async def set_session_mode(
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"mode": req.mode}
+
+
+@api_router.post("/story/session/{session_id}/play-settings")
+async def set_session_play_settings(
+    session_id: str,
+    req: SessionPlaySettingsRequest,
+    device_id: str = Depends(require_device_id),
+):
+    """Change turn length, writing style or thinking effort for an existing story.
+
+    The next turn uses the new values; nothing already written changes. An
+    unknown value is refused, so a typo never silently becomes the default.
+    """
+    await fetch_owned_session(db, session_id, device_id)
+    changes: Dict[str, Any] = {}
+    if req.prose_mode is not None:
+        if not prose_modes.is_known_mode(req.prose_mode):
+            raise HTTPException(
+                status_code=400,
+                detail=f"prose_mode must be one of {sorted(prose_modes.PROSE_MODES)} or S, M, L, XL",
+            )
+        changes["prose_mode"] = prose_modes.resolve_prose_mode_name(req.prose_mode)
+    if req.prose_style is not None:
+        style = req.prose_style.strip().lower()
+        if style not in prose_modes.PROSE_STYLES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"prose_style must be one of {sorted(prose_modes.PROSE_STYLES)}",
+            )
+        changes["prose_style"] = style
+    if req.thinking_effort is not None:
+        effort = _known_thinking_effort(req.thinking_effort)
+        if effort is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"thinking_effort must be one of {list(ai_service.REASONING_EFFORT_LEVELS)}",
+            )
+        changes["thinking_effort"] = effort
+    if not changes:
+        raise HTTPException(status_code=400, detail="no play setting was sent")
+    result = await db.sessions.update_one(
+        {"id": session_id},
+        {"$set": {**changes, "updated_at": datetime.now(timezone.utc)}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return changes
 
 
 # Most turns any single read returns. Reads keep the NEWEST turns: an
