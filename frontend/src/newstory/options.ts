@@ -197,28 +197,45 @@ export type QuickToneValue = (typeof QUICK_TONES)[number]["value"];
 // Existing backend contract still expects top-level `difficulty`.
 // --------------------------------------------------------------------------- //
 
+/**
+ * The one set of words for how harsh consequences are. Every builder and card
+ * shows these labels for the engine's difficulty values.
+ */
+export const HARSHNESS_LABELS = {
+  soft: "Forgiving",
+  standard: "Balanced",
+  hard: "Severe",
+  brutal: "Brutal",
+} as const;
+
+export type HarshnessValue = keyof typeof HARSHNESS_LABELS;
+
+export function harshnessLabel(difficulty: string): string {
+  return HARSHNESS_LABELS[difficulty as HarshnessValue] ?? difficulty;
+}
+
 export const STORY_DIFFICULTIES = [
   {
     value: "soft",
-    label: "Soft",
+    label: HARSHNESS_LABELS.soft,
     explanation: "The world still bites, but it gives you room to recover.",
     consequence: "Expect: more breathing room, more help, and clearer warning signs.",
   },
   {
     value: "standard",
-    label: "Standard",
+    label: HARSHNESS_LABELS.standard,
     explanation: "Consequences land fairly and the world keeps moving.",
     consequence: "Expect: hard choices, but no easy cruelty from the world itself.",
   },
   {
     value: "hard",
-    label: "Hard",
+    label: HARSHNESS_LABELS.hard,
     explanation: "Pressure escalates faster and safety is harder to hold onto.",
     consequence: "Expect: colder people, scarcer resources, and sharper setbacks.",
   },
   {
     value: "brutal",
-    label: "Brutal",
+    label: HARSHNESS_LABELS.brutal,
     explanation: "Survival is fragile and mistakes can leave permanent marks.",
     consequence: "Expect: little mercy, compounding damage, and a harsher world.",
   },

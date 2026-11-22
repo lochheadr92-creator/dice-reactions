@@ -8,7 +8,7 @@ import {
 import { COLORS, FONTS } from "../theme";
 import type { CustomWorldSetup } from "../api";
 import { ReviewSummary } from "./ReviewSummary";
-import { HOOK_FEAR } from "./options";
+import { HARSHNESS_LABELS, HOOK_FEAR, HOOK_WANT, HOOK_WHO_MATTERS } from "./options";
 import type {
   GuidedDesireValue,
   GuidedExperienceValue,
@@ -117,6 +117,46 @@ const GUIDED_EXPERIENCE: {
   { value: "brutal", label: "Brutal", tone: "bleak", difficulty: "brutal", explanation: "Little mercy; damage lasts." },
 ];
 
+/** Both description lines from the shared hook copy, as one sentence pair. */
+function hookCopy(
+  catalog: readonly { value: string; explanation: string; consequence: string }[],
+  value: string
+): string | undefined {
+  const hit = catalog.find((o) => o.value === value);
+  return hit ? `${hit.explanation} ${hit.consequence}` : undefined;
+}
+
+const WORLD_COPY: Record<GuidedWorldValue, string> = {
+  fantasy: "An invented realm before machines, where magic exists. Expect: oaths, shortages and rival factions.",
+  horror: "A cut-off place with a threat you do not understand yet. Expect: isolation and dread.",
+  "science-fiction": "The near or far future with advanced technology. Expect: large systems and people with authority over you.",
+  "post-apocalyptic": "After a collapse, living on what can be salvaged. Expect: shortages, violence and trust being tested.",
+  "mystery-crime": "A place with something to investigate. Expect: secrets and people who want them kept.",
+  modern: "The present day, kept realistic. Expect: social pressure and trouble with authority.",
+  surprise: "The game picks one of the six worlds above for you, once.",
+};
+
+const ROLE_COPY: Record<GuidedRoleValue, string> = {
+  survivor: "You have already lived through the worst. Expect: hard instincts and old scars.",
+  wanderer: "You have no fixed home. Expect: few ties and outsider status.",
+  investigator: "You find out what is hidden. Expect: leads, and danger for following them.",
+  soldier: "You are trained for violence and orders. Expect: discipline, enemies and commands that cost.",
+  outcast: "Your own people pushed you out. Expect: distrust and freedom.",
+  scholar: "You rely on knowledge over force. Expect: insight and physical risk.",
+  worker: "You do practical work people need. Expect: people wanting your labour.",
+  local: "You live here and people know you. Expect: existing ties and a reputation.",
+};
+
+const PRESSURE_COPY: Record<GuidedPressureValue, string> = {
+  scarcity: "Something people need is running short. Expect: an opening about a shortage, a debt or a last chance.",
+  violence: "Fights and threats are close. Expect: an opening about an injury, an unwelcome visitor or a demand from authority.",
+  isolation: "You are cut off from help. Expect: an opening about being stuck, worsening conditions or a blocked departure.",
+  betrayal: "Someone may have turned on you. Expect: an opening about broken trust, a witness or a debt.",
+  illness: "Sickness or injury is pressing. Expect: an opening about a wound or a missing supply.",
+  authority: "People in power are tightening their grip. Expect: an opening about a demand, a deadline or a watcher.",
+  unknown: "Something unexplained is closing in. Expect: an opening about a message or a visitor tied to it.",
+};
+
 const STEPS: {
   key: GuidedStepKey;
   label: string;
@@ -128,53 +168,53 @@ const STEPS: {
     key: "world",
     label: "World",
     question: "What kind of world is this?",
-    helper: "Choose the broad setting. Local details and people emerge during play.",
-    options: GUIDED_WORLDS.map((o) => ({ value: o.value, label: o.label })),
+    helper: "The kind of setting. Places and people are filled in as you play.",
+    options: GUIDED_WORLDS.map((o) => ({ value: o.value, label: o.label, explanation: WORLD_COPY[o.value] })),
   },
   {
     key: "role",
     label: "Role",
     question: "Who are you in this world?",
-    helper: "Your practical position when the story begins, not a promised destiny.",
-    options: GUIDED_ROLES.map((o) => ({ value: o.value, label: o.label })),
+    helper: "Who you are when the story opens. What you become is decided in play.",
+    options: GUIDED_ROLES.map((o) => ({ value: o.value, label: o.label, explanation: ROLE_COPY[o.value] })),
   },
   {
     key: "pressure",
     label: "Pressure",
     question: "What pressure is closest to you?",
-    helper: "Instability already near you. This establishes a condition, not a guaranteed scene.",
-    options: GUIDED_PRESSURES.map((o) => ({ value: o.value, label: o.label })),
+    helper: "The trouble already near you when the story opens. The opening grows out of it.",
+    options: GUIDED_PRESSURES.map((o) => ({ value: o.value, label: o.label, explanation: PRESSURE_COPY[o.value] })),
   },
   {
     key: "want",
     label: "Desire",
     question: "What do you want most right now?",
-    helper: "What you are willing to spend effort, safety or trust to gain.",
-    options: GUIDED_DESIRES.map((o) => ({ value: o.value, label: o.label })),
+    helper: "What drives your character. The story keeps putting it within reach and at risk.",
+    options: GUIDED_DESIRES.map((o) => ({ value: o.value, label: o.label, explanation: hookCopy(HOOK_WANT, o.value) })),
   },
   {
     key: "fear",
     label: "Fear",
     question: "What are you most afraid of?",
-    helper: "What the world can use against you.",
-    options: HOOK_FEAR.map((o) => ({ value: o.value, label: o.label, explanation: o.explanation })),
+    helper: "What your character dreads. The story will test it.",
+    options: HOOK_FEAR.map((o) => ({ value: o.value, label: o.label, explanation: `${o.explanation} ${o.consequence}` })),
   },
   {
     key: "whoMatters",
     label: "Relationship",
     question: "Who matters most to you?",
-    helper: "A kind of bond—or no one yet. The story will name people only when you meet them.",
-    options: GUIDED_WHO.map((o) => ({ value: o.value, label: o.label })),
+    helper: "The kind of person you care about most. They get no name until they appear in play.",
+    options: GUIDED_WHO.map((o) => ({ value: o.value, label: o.label, explanation: hookCopy(HOOK_WHO_MATTERS, o.value) })),
   },
   {
     key: "experience",
     label: "Experience",
     question: "What kind of experience do you want?",
-    helper: "How merciful the world is, and how it feels.",
+    helper: "One choice sets two things: the mood of the writing, and how harsh consequences are.",
     options: GUIDED_EXPERIENCE.map((o) => ({
       value: o.value,
       label: o.label,
-      explanation: o.explanation,
+      explanation: `Mood: ${o.tone}. Consequences: ${HARSHNESS_LABELS[o.difficulty as keyof typeof HARSHNESS_LABELS]}. ${o.explanation}`,
     })),
   },
 ];

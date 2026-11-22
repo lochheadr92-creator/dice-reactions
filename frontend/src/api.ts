@@ -73,6 +73,10 @@ export type CustomWorldSetup = {
   /** Maps to top-level genre at submit; stripped from seed bag if needed. */
   worldGenre?: string;
   customGenre?: string;
+  /** The player's own idea for the story. Stays true for the whole chronicle. */
+  premise?: string;
+  /** present_day | past | future. Absent = the world type decides. */
+  timePeriod?: string;
   /** Maps to top-level tone at submit. */
   storyFeel?: string;
   startingLocation?: string;

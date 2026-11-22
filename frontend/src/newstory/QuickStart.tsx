@@ -9,6 +9,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONTS } from "../theme";
+import { harshnessLabel } from "./options";
 
 /**
  * Quick Start world cards — one tap creates a chronicle.
@@ -272,6 +273,13 @@ export function QuickStart({
                 <Text style={styles.genreTag} numberOfLines={2}>
                   {option.tagline}
                 </Text>
+                <Text
+                  style={styles.genreMeta}
+                  numberOfLines={2}
+                  testID={`quick-start-meta-${option.key}`}
+                >
+                  You are: {option.role}. Consequences: {harshnessLabel(option.difficulty)}.
+                </Text>
               </View>
             </TouchableOpacity>
           );
@@ -367,6 +375,13 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     fontSize: 18,
     lineHeight: 22,
+  },
+  genreMeta: {
+    marginTop: 4,
+    fontFamily: FONTS.body,
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
   },
   genreTag: {
     marginTop: 4,

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import {
   ActivityIndicator,
   StyleSheet,
@@ -22,9 +22,11 @@ import {
   HOOK_TALENT,
   HOOK_WANT,
   HOOK_WHO_MATTERS,
+  HARSHNESS_LABELS,
+  STORY_DIFFICULTIES,
 } from "./options";
 
-type SetupOption = { value: string; label: string; explanation?: string };
+type SetupOption = { value: string; label: string; explanation?: string; consequence?: string };
 
 type AdvancedBuilderProps = {
   loading: boolean;
@@ -49,77 +51,107 @@ export type AdvancedStartRequest = {
 };
 
 const WORLD_GENRES: SetupOption[] = [
-  { value: "fantasy", label: "Fantasy" },
-  { value: "horror", label: "Horror" },
-  { value: "science fiction", label: "Science fiction" },
-  { value: "post-apocalyptic", label: "Post-apocalyptic" },
-  { value: "detective", label: "Mystery or crime" },
-  { value: "modern", label: "Modern" },
-  { value: "custom", label: "Custom" },
+  { value: "fantasy", label: "Fantasy", explanation: "An invented realm before machines, where magic exists.", consequence: "Expect: oaths, shortages and rival factions." },
+  { value: "horror", label: "Horror", explanation: "A cut-off place with a threat you do not understand yet.", consequence: "Expect: isolation, dread and safety you cannot rely on." },
+  { value: "science fiction", label: "Science fiction", explanation: "The near or far future with advanced technology. It is not forced to be cyberpunk.", consequence: "Expect: large systems, shortages and people with authority over you." },
+  { value: "post-apocalyptic", label: "Post-apocalyptic", explanation: "After a collapse. People live in scattered settlements on what they salvage.", consequence: "Expect: shortages, violence and trust being tested." },
+  { value: "detective", label: "Mystery or crime", explanation: "A place with something to investigate, in the present or an earlier period.", consequence: "Expect: secrets, violence and authority in your way." },
+  { value: "modern", label: "Modern", explanation: "The present day, kept realistic.", consequence: "Expect: social pressure, shortages and trouble with authority." },
+  { value: "custom", label: "Custom", explanation: "Type your own kind of world in a few words, such as haunted oil rig.", consequence: "Expect: the setting is built from your words. Put the story idea itself in the premise box." },
+];
+
+const TIME_PERIOD_OPTIONS: SetupOption[] = [
+  { value: "world_decides", label: "Let the world type decide", explanation: "No fixed time. The kind of world sets it.", consequence: "Expect: with a custom world, the story picks the period for you." },
+  { value: "present_day", label: "Present day", explanation: "Now. Phones, cars, cities as you know them.", consequence: "Expect: modern streets, jobs and technology." },
+  { value: "past", label: "The past", explanation: "An earlier period of history.", consequence: "Expect: older tools, travel and customs." },
+  { value: "future", label: "The future", explanation: "A time that has not happened yet.", consequence: "Expect: technology and ways of living beyond today." },
 ];
 
 const LOCATION_OPTIONS: SetupOption[] = [
-  { value: "small_settlement", label: "Small settlement", explanation: "A close community where shortages are hard to ignore." },
-  { value: "crowded_city", label: "Crowded city", explanation: "Many people, routes, and competing needs nearby." },
-  { value: "remote_wilderness", label: "Remote wilderness", explanation: "Distance and limited support shape the opening." },
-  { value: "isolated_location", label: "Isolated location", explanation: "Cut off from ordinary help." },
-  { value: "travelling_group", label: "Travelling group", explanation: "Already moving between places." },
-  { value: "custom_location", label: "Custom location" },
+  { value: "small_settlement", label: "Small settlement", explanation: "A close community where shortages are hard to ignore.", consequence: "Expect: everyone knows you and there are few places to hide." },
+  { value: "crowded_city", label: "Crowded city", explanation: "Many people, routes, and competing needs nearby.", consequence: "Expect: strangers, crowds and more than one way out." },
+  { value: "remote_wilderness", label: "Remote wilderness", explanation: "Distance and limited support shape the opening.", consequence: "Expect: weather, travel and supplies to matter." },
+  { value: "isolated_location", label: "Isolated location", explanation: "Cut off from ordinary help.", consequence: "Expect: a small group and no one coming to assist." },
+  { value: "travelling_group", label: "Travelling group", explanation: "Already moving between places.", consequence: "Expect: the people you travel with to be your whole world at first." },
+  { value: "custom_location", label: "Custom location", explanation: "Type where the story opens.", consequence: "Expect: the opening scene is set there." },
 ];
 
 const CONDITION_OPTIONS: SetupOption[] = [
-  { value: "stable", label: "Stable" },
-  { value: "uneasy", label: "Uneasy" },
-  { value: "divided", label: "Fracturing" },
-  { value: "collapsing", label: "Collapsing" },
+  { value: "stable", label: "Stable", explanation: "Daily life works. Trouble is local and personal.", consequence: "Expect: steady people and services that still function." },
+  { value: "uneasy", label: "Uneasy", explanation: "Things still work, but people are on edge.", consequence: "Expect: suspicion, and small problems that spread." },
+  { value: "divided", label: "Fracturing", explanation: "The community is splitting into sides.", consequence: "Expect: pressure to pick a side." },
+  { value: "collapsing", label: "Collapsing", explanation: "Order is failing right now.", consequence: "Expect: shortages, desperate people and little help." },
 ];
 
 const CHANGE_OPTIONS_FIXED: SetupOption[] = [
-  { value: "nothing_major", label: "Nothing major" },
-  { value: "someone_disappeared", label: "A leader disappeared" },
-  { value: "resources_became_scarce", label: "An important resource became scarce" },
-  { value: "conflict_intensified", label: "Violence increased" },
-  { value: "disaster_occurred", label: "A route or supply line failed" },
-  { value: "important_discovery", label: "Something unexplained occurred" },
-  { value: "custom_event", label: "Custom" },
+  { value: "nothing_major", label: "Nothing major", explanation: "Nothing big has happened lately.", consequence: "Expect: the story picks the opening problem on its own." },
+  { value: "someone_disappeared", label: "A leader disappeared", explanation: "Someone people relied on is gone.", consequence: "Expect: an opening about a witness, a message, a demand from authority or a suspected betrayal." },
+  { value: "resources_became_scarce", label: "An important resource became scarce", explanation: "Something people need has run short.", consequence: "Expect: an opening about a shortage, a debt or a last chance." },
+  { value: "conflict_intensified", label: "Violence increased", explanation: "Fights and threats have become more common.", consequence: "Expect: an opening about an injury, an unwelcome visitor, a demand from authority or being trapped." },
+  { value: "disaster_occurred", label: "A route or supply line failed", explanation: "A road, route or supply line has been cut.", consequence: "Expect: an opening about being stuck, a shortage, worsening conditions or a blocked departure." },
+  { value: "important_discovery", label: "Something unexplained occurred", explanation: "Something happened that nobody can account for.", consequence: "Expect: an opening about a message, a watcher or a visitor tied to it." },
+  { value: "custom_event", label: "Custom", explanation: "Type what changed.", consequence: "Expect: the story picks the opening problem and must fit it to your words." },
 ];
 
 const GROUNDEDNESS_OPTIONS: SetupOption[] = [
-  { value: "realistic", label: "Realistic" },
-  { value: "mostly_grounded", label: "Mostly grounded" },
-  { value: "openly_speculative", label: "Speculative" },
+  { value: "realistic", label: "Realistic", explanation: "Only things that could happen in real life.", consequence: "Expect: supernatural causes are rejected, unless you list them under what belongs in this world." },
+  { value: "mostly_grounded", label: "Mostly grounded", explanation: "Real-world rules, with room for a small number of strange things.", consequence: "Expect: the strange stays rare." },
+  { value: "openly_speculative", label: "Speculative", explanation: "Strange or impossible things are a normal part of this world.", consequence: "Expect: the unusual shows up openly." },
 ];
 
 const ROLE_OPTIONS: SetupOption[] = [
-  { value: "local_resident", label: "Local resident" },
-  { value: "outsider", label: "Outsider" },
-  { value: "worker_or_specialist", label: "Worker or specialist" },
-  { value: "leader", label: "Leader" },
-  { value: "prisoner_or_captive", label: "Prisoner or captive" },
-  { value: "traveller", label: "Traveller" },
-  { value: "custom_role", label: "Custom role" },
+  { value: "local_resident", label: "Local resident", explanation: "You live here and people know you.", consequence: "Expect: existing ties and a reputation." },
+  { value: "outsider", label: "Outsider", explanation: "You are new here.", consequence: "Expect: suspicion, and nobody owing you anything." },
+  { value: "worker_or_specialist", label: "Worker or specialist", explanation: "You have a trade or skill people need.", consequence: "Expect: people wanting your work, and blame when it fails." },
+  { value: "leader", label: "Leader", explanation: "People look to you for decisions.", consequence: "Expect: responsibility for others and challenges to your position." },
+  { value: "prisoner_or_captive", label: "Prisoner or captive", explanation: "Someone else holds you.", consequence: "Expect: limited movement, and people who control what you get." },
+  { value: "traveller", label: "Traveller", explanation: "You are passing through.", consequence: "Expect: few ties and an easy exit, until something stops you." },
+  { value: "custom_role", label: "Custom role", explanation: "Type who you are in a few words.", consequence: "Expect: your words become your position in the story." },
 ];
 
 const KNOWLEDGE_OPTIONS: SetupOption[] = [
-  { value: "very_little", label: "Very little", explanation: "Most facts must be learned in play." },
-  { value: "basic_local_knowledge", label: "Basic local knowledge", explanation: "Ordinary public places and risks." },
-  { value: "well_connected", label: "Well connected", explanation: "Useful contacts—not hidden truth." },
-  { value: "deeply_involved", label: "Deeply involved", explanation: "You already know disputes you have lived." },
+  { value: "very_little", label: "Very little", explanation: "Most facts must be learned in play.", consequence: "Expect: people and places introduced as new to you." },
+  { value: "basic_local_knowledge", label: "Basic local knowledge", explanation: "Ordinary public places and risks.", consequence: "Expect: you know your way around, and nothing private." },
+  { value: "well_connected", label: "Well connected", explanation: "Useful contacts—not hidden truth.", consequence: "Expect: people you can ask, who may want something back." },
+  { value: "deeply_involved", label: "Deeply involved", explanation: "You already know disputes you have lived.", consequence: "Expect: history with the people around you." },
 ];
 
 const STORY_FEEL: SetupOption[] = [
-  { value: "hopeful", label: "Hopeful" },
-  { value: "grounded", label: "Grounded" },
-  { value: "grim", label: "Dark" },
-  { value: "bleak", label: "Bleak" },
+  { value: "hopeful", label: "Hopeful", explanation: "Warm writing. People can be reached and things can improve.", consequence: "Expect: a change of mood only. Harshness is the next question." },
+  { value: "grounded", label: "Grounded", explanation: "Plain, realistic writing.", consequence: "Expect: a change of mood only. Harshness is the next question." },
+  { value: "grim", label: "Dark", explanation: "Cold, uncertain writing. Wins cost something.", consequence: "Expect: a change of mood only. Harshness is the next question." },
+  { value: "bleak", label: "Bleak", explanation: "Little comfort anywhere in the writing.", consequence: "Expect: a change of mood only. Harshness is the next question." },
 ];
 
-const SEVERITY: SetupOption[] = [
-  { value: "forgiving", label: "Forgiving" },
-  { value: "balanced", label: "Balanced" },
-  { value: "severe", label: "Severe" },
-  { value: "brutal", label: "Brutal" },
-];
+/** Advanced answer → engine difficulty. One set of words everywhere (HARSHNESS_LABELS). */
+const SEVERITY_TO_DIFFICULTY = {
+  forgiving: "soft",
+  balanced: "standard",
+  severe: "hard",
+  brutal: "brutal",
+} as const;
+
+const SEVERITY: SetupOption[] = (
+  Object.entries(SEVERITY_TO_DIFFICULTY) as [string, keyof typeof HARSHNESS_LABELS][]
+).map(([value, difficulty]) => {
+  const copy = STORY_DIFFICULTIES.find((d) => d.value === difficulty);
+  return {
+    value,
+    label: HARSHNESS_LABELS[difficulty],
+    explanation: copy?.explanation,
+    consequence: copy?.consequence,
+  };
+});
+
+/** Closed-catalog hook copy from options.ts, with both description lines kept. */
+function withCopy(options: readonly { value: string; label: string; explanation: string; consequence: string }[]): SetupOption[] {
+  return options.map((o) => ({
+    value: o.value,
+    label: o.label,
+    explanation: o.explanation,
+    consequence: o.consequence,
+  }));
+}
 
 type StepDef = {
   key: string;
@@ -134,28 +166,48 @@ type StepDef = {
 };
 
 const STEPS: StepDef[] = [
-  { key: "worldGenre", section: "World", question: "What kind of world is this?", helper: "Compact world type—not a scenario card.", options: WORLD_GENRES, setupKey: "worldGenre" },
-  { key: "startingLocation", section: "World", question: "Where does this begin?", helper: "Place and access to help.", options: LOCATION_OPTIONS, setupKey: "startingLocation" },
-  { key: "worldCondition", section: "World", question: "How strained is the world?", helper: "Baseline stability—not the next cutscene.", options: CONDITION_OPTIONS, setupKey: "worldCondition" },
-  { key: "recentChange", section: "World", question: "What recently shifted?", helper: "Existing disruption, not a promised event.", options: CHANGE_OPTIONS_FIXED, setupKey: "recentChange" },
-  { key: "settingGroundedness", section: "World", question: "How real or strange is the setting?", helper: "Ordinary limits of this world.", options: GROUNDEDNESS_OPTIONS, setupKey: "settingGroundedness" },
-  { key: "worldElements", section: "World", question: "What belongs in this world?", helper: "Optional themes or elements.", optional: true, freeText: true, placeholder: "Optional…", setupKey: "worldElements" },
-  { key: "worldExclusions", section: "World", question: "What must not appear?", helper: "Optional boundaries.", optional: true, freeText: true, placeholder: "Optional…", setupKey: "worldExclusions" },
-  { key: "startingRole", section: "Character", question: "Who are you at the start?", helper: "Social position when the chronicle opens.", options: ROLE_OPTIONS, setupKey: "startingRole" },
-  { key: "characterKnowledge", section: "Character", question: "How much do you already know?", helper: "Only what your character knows—not hidden people or secrets.", options: KNOWLEDGE_OPTIONS, setupKey: "characterKnowledge" },
-  { key: "want", section: "Character", question: "What do you want most?", helper: "Core desire.", options: HOOK_WANT.map((o) => ({ value: o.value, label: o.label })), setupKey: "want" },
-  { key: "fear", section: "Character", question: "What are you most afraid of?", helper: "Core fear.", options: HOOK_FEAR.map((o) => ({ value: o.value, label: o.label })), setupKey: "fear" },
-  { key: "whoMatters", section: "Relationships", question: "Who matters most to you?", helper: "An archetype only—no names.", options: HOOK_WHO_MATTERS.map((o) => ({ value: o.value, label: o.label })), setupKey: "whoMatters" },
-  { key: "ghost", section: "Optional depth", question: "What past still presses?", helper: "Optional.", optional: true, options: HOOK_GHOST.map((o) => ({ value: o.value, label: o.label })), setupKey: "ghost" },
-  { key: "talent", section: "Optional depth", question: "What are you unusually good at?", helper: "Optional.", optional: true, options: HOOK_TALENT.map((o) => ({ value: o.value, label: o.label })), setupKey: "talent" },
-  { key: "flaw", section: "Optional depth", question: "What gets you into trouble?", helper: "Optional.", optional: true, options: HOOK_FLAW.map((o) => ({ value: o.value, label: o.label })), setupKey: "flaw" },
-  { key: "line", section: "Optional depth", question: "What won’t you do?", helper: "Optional.", optional: true, options: HOOK_LINE.map((o) => ({ value: o.value, label: o.label })), setupKey: "line" },
-  { key: "storyFeel", section: "Experience", question: "What should this feel like?", helper: "Tone only.", options: STORY_FEEL, setupKey: "storyFeel" },
-  { key: "consequenceSeverity", section: "Experience", question: "How harsh are consequences?", helper: "Cost and recovery room.", options: SEVERITY, setupKey: "consequenceSeverity" },
+  { key: "worldGenre", section: "World", question: "What kind of world is this?", helper: "The kind of setting. Pick one, or choose Custom and type your own in a few words.", options: WORLD_GENRES, setupKey: "worldGenre" },
+  { key: "premise", section: "World", question: "What is this story about?", helper: "Optional. One or two sentences on what makes this world or your character different. The story is built around it and it stays true.", optional: true, freeText: true, placeholder: "Example: I am the only person who can read minds, and nobody knows.", setupKey: "premise" },
+  { key: "timePeriod", section: "World", question: "When is this set?", helper: "The time period. This matters most for a custom world, which has no period of its own.", options: TIME_PERIOD_OPTIONS, setupKey: "timePeriod" },
+  { key: "startingLocation", section: "World", question: "Where does this begin?", helper: "The kind of place the story opens in.", options: LOCATION_OPTIONS, setupKey: "startingLocation" },
+  { key: "worldCondition", section: "World", question: "How strained is the world?", helper: "The lasting state of daily life before the story starts. The next question covers one recent event.", options: CONDITION_OPTIONS, setupKey: "worldCondition" },
+  { key: "recentChange", section: "World", question: "What recently shifted?", helper: "One thing that already happened before the story starts. The opening grows out of it.", options: CHANGE_OPTIONS_FIXED, setupKey: "recentChange" },
+  { key: "settingGroundedness", section: "World", question: "How real or strange is the setting?", helper: "How far this world may go beyond real life.", options: GROUNDEDNESS_OPTIONS, setupKey: "settingGroundedness" },
+  { key: "worldElements", section: "World", question: "What belongs in this world?", helper: "Optional. Things you want to exist here, such as trains or a ruling church.", optional: true, freeText: true, placeholder: "Optional…", setupKey: "worldElements" },
+  { key: "worldExclusions", section: "World", question: "What must not appear?", helper: "Optional. Things that must never show up, such as guns or magic.", optional: true, freeText: true, placeholder: "Optional…", setupKey: "worldExclusions" },
+  { key: "startingRole", section: "Character", question: "Who are you at the start?", helper: "Your place among the people around you when the story opens.", options: ROLE_OPTIONS, setupKey: "startingRole" },
+  { key: "characterKnowledge", section: "Character", question: "How much do you already know?", helper: "What your character already knows about this place. Secrets still have to be found in play.", options: KNOWLEDGE_OPTIONS, setupKey: "characterKnowledge" },
+  { key: "want", section: "Character", question: "What do you want most?", helper: "What drives your character. The story keeps putting it within reach and at risk.", options: withCopy(HOOK_WANT), setupKey: "want" },
+  { key: "fear", section: "Character", question: "What are you most afraid of?", helper: "What your character dreads. The story will test it.", options: withCopy(HOOK_FEAR), setupKey: "fear" },
+  { key: "whoMatters", section: "Relationships", question: "Who matters most to you?", helper: "The kind of person you care about most. They get no name until they appear in play.", options: withCopy(HOOK_WHO_MATTERS), setupKey: "whoMatters" },
+  { key: "ghost", section: "Optional depth", question: "What past still presses?", helper: "Optional. Something from your past that comes back.", optional: true, options: withCopy(HOOK_GHOST), setupKey: "ghost" },
+  { key: "talent", section: "Optional depth", question: "What are you unusually good at?", helper: "Optional. One thing you do better than most people.", optional: true, options: withCopy(HOOK_TALENT), setupKey: "talent" },
+  { key: "flaw", section: "Optional depth", question: "What gets you into trouble?", helper: "Optional. The habit that causes you problems.", optional: true, options: withCopy(HOOK_FLAW), setupKey: "flaw" },
+  { key: "line", section: "Optional depth", question: "What won’t you do?", helper: "Optional. The thing you refuse to do. The story will tempt you to do it.", optional: true, options: withCopy(HOOK_LINE), setupKey: "line" },
+  { key: "storyFeel", section: "Experience", question: "What should this feel like?", helper: "The mood of the writing only. It does not make the game easier or harder.", options: STORY_FEEL, setupKey: "storyFeel" },
+  { key: "consequenceSeverity", section: "Experience", question: "How harsh are consequences?", helper: "How much mistakes cost and how fast you recover. The same four words are used everywhere in the game.", options: SEVERITY, setupKey: "consequenceSeverity" },
 ];
+
+/** The builder shows one page per group of questions, then the review. */
+const PAGES: { key: string; title: string; sections: string[] }[] = [
+  { key: "world", title: "World", sections: ["World"] },
+  { key: "character", title: "Character", sections: ["Character"] },
+  { key: "depth", title: "People and past", sections: ["Relationships", "Optional depth"] },
+  { key: "experience", title: "Experience", sections: ["Experience"] },
+];
+
+function stepsForPage(pageIndex: number): StepDef[] {
+  const page = PAGES[pageIndex];
+  return page ? STEPS.filter((s) => page.sections.includes(s.section)) : [];
+}
+
+function pageIndexForStep(step: StepDef): number {
+  return PAGES.findIndex((p) => p.sections.includes(step.section));
+}
 
 const DEFAULT_SETUP: CustomWorldSetup = {
   worldGenre: "modern",
+  timePeriod: "world_decides",
   startingLocation: "small_settlement",
   startingRole: "local_resident",
   worldCondition: "uneasy",
@@ -205,6 +257,8 @@ function omitEmptySetup(setup: CustomWorldSetup): CustomWorldSetup {
   delete out.secret;
   delete out.worldPace;
   delete (out as Record<string, unknown>).storyFocus;
+  // "Let the world type decide" is the absence of a time period, so nothing is sent.
+  if (out.timePeriod === "world_decides") delete out.timePeriod;
   out.creationFlow = "advanced";
   return out;
 }
@@ -223,14 +277,8 @@ export function buildAdvancedStartRequest(setup: CustomWorldSetup): AdvancedStar
 
   const tone = value.storyFeel || "grounded";
 
-  const difficultyBySeverity = {
-    forgiving: "soft",
-    balanced: "standard",
-    severe: "hard",
-    brutal: "brutal",
-  } as const;
   const difficulty =
-    difficultyBySeverity[value.consequenceSeverity as keyof typeof difficultyBySeverity] ||
+    SEVERITY_TO_DIFFICULTY[value.consequenceSeverity as keyof typeof SEVERITY_TO_DIFFICULTY] ||
     "standard";
 
   const recentChange =
@@ -262,6 +310,76 @@ type MatureKey =
   | "player_involvement"
   | "language_level"
   | "substance_content_level";
+
+/**
+ * Plain-language copy for the 18+ rows. Each level is the most the story may
+ * show. A level never forces content to appear.
+ */
+const MATURE_COPY: Record<MatureKey, { help: string; levels: Record<string, string> }> = {
+  violence_level: {
+    help: "The most detail the story may use for fights and injuries.",
+    levels: {
+      mild: "Fights and injuries happen and are described briefly.",
+      realistic: "Injuries are described as they would really look and feel.",
+      graphic: "Wounds and violence are described in detail.",
+      extreme_gore: "No limit on bloody detail.",
+    },
+  },
+  horror_level: {
+    help: "How far frightening scenes may go.",
+    levels: {
+      atmospheric: "Unease and tension. Little is shown directly.",
+      disturbing: "Upsetting scenes are shown directly.",
+      graphic: "Horror is described in detail.",
+      extreme_psychological_or_body_horror: "Severe psychological horror and body horror are allowed.",
+    },
+  },
+  sexual_content_level: {
+    help: "The most sexual content the story may show.",
+    levels: {
+      off: "No sexual content.",
+      romance_only: "Romance and affection. Nothing sexual.",
+      suggestive: "Sex may be implied and is never shown.",
+      fade_to_black: "A scene may begin, then the story cuts away.",
+      explicit: "Sexual scenes are shown.",
+      graphic: "Sexual scenes are shown in full detail.",
+    },
+  },
+  consent_boundary: {
+    help: "Whether sexual content without consent may exist in the story, and how much of it is shown.",
+    levels: {
+      consensual_only: "Only consensual sexual content between adults.",
+      coercion_referenced: "Coercion may be mentioned as something that happened. It is not shown.",
+      nonconsensual_implied: "Non-consensual acts may be implied. They are not shown.",
+      nonconsensual_on_screen: "Non-consensual acts may be shown.",
+      graphic_nonconsensual: "Non-consensual acts may be shown in detail.",
+    },
+  },
+  player_involvement: {
+    help: "Who sexual content may involve.",
+    levels: {
+      npcs_only: "Other characters only. Never your character.",
+      player_character: "Your character may be involved.",
+      either: "Your character or other characters.",
+    },
+  },
+  language_level: {
+    help: "How strong the swearing may get.",
+    levels: {
+      mild: "Light swearing only.",
+      strong: "Strong swearing where it fits the character.",
+      unrestricted: "No limit on language.",
+    },
+  },
+  substance_content_level: {
+    help: "How drugs and alcohol may appear.",
+    levels: {
+      mentioned: "They exist in the background.",
+      present: "Characters use them on the page.",
+      graphic_and_consequential: "Use, addiction and their effects are shown in detail.",
+    },
+  },
+};
 
 const MATURE_ROWS: { key: MatureKey; label: string; choices: { value: string; label: string }[] }[] = [
   {
@@ -347,33 +465,47 @@ export function AdvancedBuilder({
   onStart,
   onChangePath,
 }: AdvancedBuilderProps) {
-  const [stepIndex, setStepIndex] = useState(0);
+  const [pageIndex, setPageIndex] = useState(0);
+  // Answers the player set in this visit. Anything else still holds its preset value.
+  const [touched, setTouched] = useState<ReadonlySet<string>>(new Set());
   const [matureExpanded, setMatureExpanded] = useState(false);
   const [hardLimitDraft, setHardLimitDraft] = useState("");
-  const reviewVisible = stepIndex >= STEPS.length;
-  const step = STEPS[Math.min(stepIndex, STEPS.length - 1)];
+  const reviewVisible = pageIndex >= PAGES.length;
+  const pageSteps = stepsForPage(Math.min(pageIndex, PAGES.length - 1));
   const setup = resolvedSetup(customSetup);
   const safeFontScale = fontScale > 0 ? fontScale : 1;
   const canStart =
     (!matureContent.adult_mode_enabled || matureContent.adult_age_confirmed) && !loading;
 
-  const setupKey = step.setupKey as keyof CustomWorldSetup;
-  const selectedValue = String(setup[setupKey] ?? "");
+  const setField = (patch: Partial<CustomWorldSetup>) => {
+    setTouched((prev) => new Set([...prev, ...Object.keys(patch)]));
+    onSetSetupField(patch);
+  };
 
-  const customRequired =
-    (step.key === "worldGenre" && selectedValue === "custom" && !setup.customGenre?.trim()) ||
-    (step.key === "startingLocation" &&
-      selectedValue === "custom_location" &&
-      !setup.customLocation?.trim()) ||
-    (step.key === "startingRole" && selectedValue === "custom_role" && !setup.customRole?.trim()) ||
-    (step.key === "recentChange" &&
-      selectedValue === "custom_event" &&
-      !setup.customRecentChange?.trim());
+  const isUntouchedDefault = (step: StepDef) => {
+    const key = step.setupKey as keyof CustomWorldSetup;
+    const preset = DEFAULT_SETUP[key];
+    return Boolean(step.options && preset && !touched.has(String(key)) && setup[key] === preset);
+  };
 
-  const stepReady = Boolean(step.optional || (selectedValue && !customRequired));
+  const isStepReady = (step: StepDef) => {
+    if (step.optional) return true;
+    const value = String(setup[step.setupKey as keyof CustomWorldSetup] ?? "");
+    if (!value) return false;
+    if (step.key === "worldGenre" && value === "custom") return Boolean(setup.customGenre?.trim());
+    if (step.key === "startingLocation" && value === "custom_location") {
+      return Boolean(setup.customLocation?.trim());
+    }
+    if (step.key === "startingRole" && value === "custom_role") return Boolean(setup.customRole?.trim());
+    if (step.key === "recentChange" && value === "custom_event") {
+      return Boolean(setup.customRecentChange?.trim());
+    }
+    return true;
+  };
 
-  const reviewRows = useMemo(() => {
-    return STEPS.filter((s) => {
+  const pageReady = pageSteps.every(isStepReady);
+
+  const reviewRows = STEPS.filter((s) => {
       if (!s.optional) return true;
       const v = setup[s.setupKey as keyof CustomWorldSetup];
       return Boolean(v && String(v).trim());
@@ -392,9 +524,8 @@ export function AdvancedBuilder({
       if ((s.key === "worldElements" || s.key === "worldExclusions") && !String(value).trim()) {
         value = "None";
       }
-      return { step: s, index: STEPS.indexOf(s), value };
+      return { step: s, index: pageIndexForStep(s), value, preset: isUntouchedDefault(s) };
     });
-  }, [setup]);
 
   const addHardLimit = () => {
     const value = hardLimitDraft.trim();
@@ -442,107 +573,128 @@ export function AdvancedBuilder({
 
       <View style={styles.progressWrap} testID="advanced-progress">
         <Text style={styles.progressText} testID="advanced-progress-text">
-          {reviewVisible ? "Review" : `${stepIndex + 1} of ${STEPS.length}`}
+          {reviewVisible ? "Review" : `Page ${pageIndex + 1} of ${PAGES.length}`}
         </Text>
         <View style={styles.progressTrack}>
           <View
             style={[
               styles.progressFill,
-              { width: `${reviewVisible ? 100 : ((stepIndex + 1) / STEPS.length) * 100}%` },
+              { width: `${reviewVisible ? 100 : ((pageIndex + 1) / PAGES.length) * 100}%` },
             ]}
           />
         </View>
       </View>
 
       {!reviewVisible ? (
-        <View testID={`advanced-step-${stepIndex + 1}`}>
-          <Text style={styles.sectionTag}>{step.section.toUpperCase()}</Text>
-          <Text style={styles.question}>{step.question}</Text>
-          <Text style={styles.questionHelp}>{step.helper}</Text>
-          {step.optional ? <Text style={styles.optionalText}>OPTIONAL</Text> : null}
+        <View testID={`advanced-step-${pageIndex + 1}`}>
+          <Text style={styles.sectionTag}>{PAGES[pageIndex].title.toUpperCase()}</Text>
+          {pageSteps.map((step) => {
+            const setupKey = step.setupKey as keyof CustomWorldSetup;
+            const selectedValue = String(setup[setupKey] ?? "");
+            return (
+              <View key={step.key} style={styles.questionBlock} testID={`advanced-question-${step.key}`}>
+                <Text style={styles.question}>{step.question}</Text>
+                <Text style={styles.questionHelp}>{step.helper}</Text>
+                {step.optional ? <Text style={styles.optionalText}>OPTIONAL</Text> : null}
+                {isUntouchedDefault(step) ? (
+                  <Text style={styles.defaultText} testID={`advanced-default-${step.key}`}>
+                    PRESET. YOU HAVE NOT CHOSEN THIS YET.
+                  </Text>
+                ) : null}
 
-          {step.freeText ? (
-            <TextInput
-              value={selectedValue}
-              onChangeText={(v) => onSetSetupField({ [setupKey]: v })}
-              placeholder={step.placeholder}
-              placeholderTextColor={COLORS.textMuted}
-              multiline
-              style={styles.textArea}
-              testID={`advanced-input-${step.key}`}
-            />
-          ) : (
-            <View style={styles.optionList}>
-              {step.options?.map((option) => {
-                const selected = selectedValue === option.value;
-                return (
-                  <TouchableOpacity
-                    key={`${step.key}-${option.value}-${option.label}`}
-                    style={[styles.optionCard, selected && styles.optionCardSelected]}
-                    onPress={() => onSetSetupField({ [setupKey]: option.value })}
-                    disabled={loading}
-                    accessibilityState={{ selected, disabled: loading }}
-                    testID={`advanced-option-${step.key}-${option.value}`}
-                  >
-                    <Text style={[styles.optionTitle, selected && styles.optionTitleSelected]}>
-                      {option.label}
+                {step.freeText ? (
+                  <TextInput
+                    value={selectedValue}
+                    onChangeText={(v) => setField({ [setupKey]: v })}
+                    placeholder={step.placeholder}
+                    placeholderTextColor={COLORS.textMuted}
+                    multiline
+                    style={styles.textArea}
+                    testID={`advanced-input-${step.key}`}
+                  />
+                ) : (
+                  <View style={styles.optionList}>
+                    {step.options?.map((option) => {
+                      const selected = selectedValue === option.value;
+                      return (
+                        <TouchableOpacity
+                          key={`${step.key}-${option.value}-${option.label}`}
+                          style={[styles.optionCard, selected && styles.optionCardSelected]}
+                          onPress={() => setField({ [setupKey]: option.value })}
+                          disabled={loading}
+                          accessibilityState={{ selected, disabled: loading }}
+                          testID={`advanced-option-${step.key}-${option.value}`}
+                        >
+                          <Text style={[styles.optionTitle, selected && styles.optionTitleSelected]}>
+                            {option.label}
+                          </Text>
+                          {option.explanation ? (
+                            <Text style={styles.optionExplanation}>{option.explanation}</Text>
+                          ) : null}
+                          {option.consequence ? (
+                            <Text style={styles.optionConsequence}>{option.consequence}</Text>
+                          ) : null}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+
+                {step.key === "worldGenre" && selectedValue === "custom" ? (
+                  <>
+                    <TextInput
+                      value={setup.customGenre || ""}
+                      onChangeText={(v) => setField({ customGenre: v })}
+                      placeholder="A few words, such as haunted oil rig"
+                      placeholderTextColor={COLORS.textMuted}
+                      style={styles.input}
+                      testID="advanced-custom-genre"
+                    />
+                    <Text style={styles.inputHelp}>
+                      Keep this to a few words. It also becomes the story title. Put the story idea in the next box.
                     </Text>
-                    {option.explanation ? (
-                      <Text style={styles.optionExplanation}>{option.explanation}</Text>
-                    ) : null}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          )}
-
-          {step.key === "worldGenre" && selectedValue === "custom" ? (
-            <TextInput
-              value={setup.customGenre || ""}
-              onChangeText={(v) => onSetSetupField({ customGenre: v })}
-              placeholder="Describe the world type"
-              placeholderTextColor={COLORS.textMuted}
-              style={styles.input}
-              testID="advanced-custom-genre"
-            />
-          ) : null}
-          {step.key === "startingLocation" && selectedValue === "custom_location" ? (
-            <TextInput
-              value={setup.customLocation || ""}
-              onChangeText={(v) => onSetSetupField({ customLocation: v })}
-              placeholder="Describe the starting location"
-              placeholderTextColor={COLORS.textMuted}
-              style={styles.input}
-              testID="advanced-custom-location"
-            />
-          ) : null}
-          {step.key === "startingRole" && selectedValue === "custom_role" ? (
-            <TextInput
-              value={setup.customRole || ""}
-              onChangeText={(v) => onSetSetupField({ customRole: v })}
-              placeholder="Describe the starting role"
-              placeholderTextColor={COLORS.textMuted}
-              style={styles.input}
-              testID="advanced-custom-role"
-            />
-          ) : null}
-          {step.key === "recentChange" && selectedValue === "custom_event" ? (
-            <TextInput
-              value={setup.customRecentChange || ""}
-              onChangeText={(v) => onSetSetupField({ customRecentChange: v })}
-              placeholder="Describe what recently changed"
-              placeholderTextColor={COLORS.textMuted}
-              style={styles.input}
-              testID="advanced-custom-event"
-            />
-          ) : null}
+                  </>
+                ) : null}
+                {step.key === "startingLocation" && selectedValue === "custom_location" ? (
+                  <TextInput
+                    value={setup.customLocation || ""}
+                    onChangeText={(v) => setField({ customLocation: v })}
+                    placeholder="Describe the starting location"
+                    placeholderTextColor={COLORS.textMuted}
+                    style={styles.input}
+                    testID="advanced-custom-location"
+                  />
+                ) : null}
+                {step.key === "startingRole" && selectedValue === "custom_role" ? (
+                  <TextInput
+                    value={setup.customRole || ""}
+                    onChangeText={(v) => setField({ customRole: v })}
+                    placeholder="Describe the starting role"
+                    placeholderTextColor={COLORS.textMuted}
+                    style={styles.input}
+                    testID="advanced-custom-role"
+                  />
+                ) : null}
+                {step.key === "recentChange" && selectedValue === "custom_event" ? (
+                  <TextInput
+                    value={setup.customRecentChange || ""}
+                    onChangeText={(v) => setField({ customRecentChange: v })}
+                    placeholder="Describe what recently changed"
+                    placeholderTextColor={COLORS.textMuted}
+                    style={styles.input}
+                    testID="advanced-custom-event"
+                  />
+                ) : null}
+              </View>
+            );
+          })}
 
           <View style={styles.navRow}>
             <TouchableOpacity
               style={styles.secondaryButton}
               onPress={() => {
-                if (stepIndex === 0) onChangePath();
-                else setStepIndex((v) => Math.max(0, v - 1));
+                if (pageIndex === 0) onChangePath();
+                else setPageIndex((v) => Math.max(0, v - 1));
               }}
               disabled={loading}
               testID="advanced-back-button"
@@ -550,15 +702,13 @@ export function AdvancedBuilder({
               <Text style={styles.secondaryText}>BACK</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.primaryButton, !stepReady && styles.disabledButton]}
-              onPress={() =>
-                stepReady && setStepIndex((v) => Math.min(STEPS.length, v + 1))
-              }
-              disabled={!stepReady || loading}
+              style={[styles.primaryButton, !pageReady && styles.disabledButton]}
+              onPress={() => pageReady && setPageIndex((v) => Math.min(PAGES.length, v + 1))}
+              disabled={!pageReady || loading}
               testID="advanced-next-button"
             >
               <Text style={styles.primaryText}>
-                {stepIndex === STEPS.length - 1 ? "REVIEW" : "CONTINUE"}
+                {pageIndex === PAGES.length - 1 ? "REVIEW" : "CONTINUE"}
               </Text>
             </TouchableOpacity>
           </View>
@@ -568,16 +718,21 @@ export function AdvancedBuilder({
           <Text style={styles.question}>Review starting conditions.</Text>
           <Text style={styles.questionHelp}>Change any answer before creating the chronicle.</Text>
           <View style={styles.reviewList}>
-            {reviewRows.map(({ step: item, index, value }) => (
+            {reviewRows.map(({ step: item, index, value, preset }) => (
               <View key={item.key} style={styles.reviewRow}>
                 <View style={styles.reviewBody}>
                   <Text style={styles.reviewLabel}>{item.question}</Text>
                   <Text style={styles.reviewValue} testID={`advanced-review-${item.key}`}>
                     {value}
                   </Text>
+                  {preset ? (
+                    <Text style={styles.defaultText} testID={`advanced-review-default-${item.key}`}>
+                      PRESET. YOU DID NOT CHOOSE THIS.
+                    </Text>
+                  ) : null}
                 </View>
                 <TouchableOpacity
-                  onPress={() => setStepIndex(index)}
+                  onPress={() => setPageIndex(index)}
                   disabled={loading}
                   testID={`advanced-change-${item.key}`}
                 >
@@ -677,6 +832,7 @@ export function AdvancedBuilder({
                       {visibleMatureRows.map((row) => (
                         <View key={row.key} style={styles.matureRow}>
                           <Text style={styles.matureRowLabel}>{row.label}</Text>
+                          <Text style={styles.matureRowHelp}>{MATURE_COPY[row.key].help}</Text>
                           <View style={styles.chipWrap}>
                             {choicesFor(row).map((choice) => {
                               const selected = matureContent[row.key] === choice.value;
@@ -700,11 +856,26 @@ export function AdvancedBuilder({
                               );
                             })}
                           </View>
+                          {choicesFor(row).map((choice) => (
+                            <Text
+                              key={`${choice.value}-copy`}
+                              style={[
+                                styles.matureLevelCopy,
+                                matureContent[row.key] === choice.value && styles.matureLevelCopySelected,
+                              ]}
+                              testID={`mature-copy-${row.key}-${choice.value}`}
+                            >
+                              {choice.label}: {MATURE_COPY[row.key].levels[choice.value]}
+                            </Text>
+                          ))}
                         </View>
                       ))}
 
                       <View style={styles.matureRow}>
                         <Text style={styles.matureRowLabel}>Hard limits</Text>
+                        <Text style={styles.matureRowHelp}>
+                          Things the story must never include, whatever the levels above say.
+                        </Text>
                         <View style={styles.limitInputRow}>
                           <TextInput
                             value={hardLimitDraft}
@@ -753,7 +924,7 @@ export function AdvancedBuilder({
           <View style={styles.navRow}>
             <TouchableOpacity
               style={styles.secondaryButton}
-              onPress={() => setStepIndex(STEPS.length - 1)}
+              onPress={() => setPageIndex(PAGES.length - 1)}
               disabled={loading}
               testID="advanced-review-back"
             >
@@ -869,6 +1040,29 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     fontSize: 14,
     lineHeight: 19,
+  },
+  optionConsequence: {
+    marginTop: 4,
+    fontFamily: FONTS.body,
+    color: COLORS.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  questionBlock: { marginBottom: 34 },
+  defaultText: {
+    alignSelf: "flex-start",
+    marginBottom: 12,
+    fontFamily: FONTS.monoBold,
+    color: COLORS.primary,
+    fontSize: 10,
+    letterSpacing: 1.2,
+  },
+  inputHelp: {
+    marginTop: 6,
+    fontFamily: FONTS.body,
+    color: COLORS.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
   },
   input: {
     minHeight: 50,
@@ -1020,6 +1214,21 @@ const styles = StyleSheet.create({
     letterSpacing: 1.2,
     marginBottom: 9,
   },
+  matureRowHelp: {
+    marginBottom: 9,
+    fontFamily: FONTS.body,
+    color: COLORS.textSecondary,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  matureLevelCopy: {
+    marginTop: 6,
+    fontFamily: FONTS.body,
+    color: COLORS.textMuted,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  matureLevelCopySelected: { color: COLORS.textPrimary },
   chipWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   chip: {
     minHeight: 40,

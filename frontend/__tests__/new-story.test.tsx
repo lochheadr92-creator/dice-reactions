@@ -18,6 +18,7 @@ import {
 } from "../src/newstory/GuidedStart";
 import type { GuidedStartSelections } from "../src/newstory/types";
 import type { TalentValue } from "../src/newstory/options";
+import { HARSHNESS_LABELS, STORY_DIFFICULTIES } from "../src/newstory/options";
 
 jest.setTimeout(25000);
 
@@ -393,7 +394,8 @@ describe("new story onboarding redesign", () => {
   it("Advanced defaults walk to review and create", async () => {
     await renderScreen();
     await openAdvanced();
-    for (let i = 0; i < 18; i += 1) {
+    // Four pages (World, Character, People and past, Experience), then the review.
+    for (let i = 0; i < 4; i += 1) {
       fireEvent.press(screen.getByTestId("advanced-next-button"));
     }
     await screen.findByTestId("advanced-review-step");
@@ -416,10 +418,110 @@ describe("new story onboarding redesign", () => {
     });
   });
 
+  it("groups Advanced into four pages and shows every World question together", async () => {
+    await renderScreen();
+    await openAdvanced();
+    expect(screen.getByTestId("advanced-progress-text").props.children).toBe("Page 1 of 4");
+    for (const key of ["worldGenre", "premise", "timePeriod", "startingLocation", "recentChange"]) {
+      expect(screen.getByTestId(`advanced-question-${key}`)).toBeTruthy();
+    }
+    expect(screen.queryByTestId("advanced-question-want")).toBeNull();
+    fireEvent.press(screen.getByTestId("advanced-next-button"));
+    expect(screen.getByTestId("advanced-question-want")).toBeTruthy();
+    expect(screen.getByTestId("advanced-progress-text").props.children).toBe("Page 2 of 4");
+  });
+
+  it("shows both description lines for Advanced options, including hook copy", async () => {
+    await renderScreen();
+    await openAdvanced();
+    expect(screen.getByText("The present day, kept realistic.")).toBeTruthy();
+    expect(screen.getByText("Expect: pressure to pick a side.")).toBeTruthy();
+    fireEvent.press(screen.getByTestId("advanced-next-button"));
+    expect(screen.getByText("To make up for something.")).toBeTruthy();
+    expect(screen.getByText("Expect: a past that demands atonement.")).toBeTruthy();
+  });
+
+  it("marks preset answers until the player chooses", async () => {
+    await renderScreen();
+    await openAdvanced();
+    expect(screen.getByTestId("advanced-default-startingLocation")).toBeTruthy();
+    fireEvent.press(screen.getByTestId("advanced-option-startingLocation-crowded_city"));
+    expect(screen.queryByTestId("advanced-default-startingLocation")).toBeNull();
+    expect(screen.getByTestId("advanced-default-worldCondition")).toBeTruthy();
+    for (let i = 0; i < 4; i += 1) {
+      fireEvent.press(screen.getByTestId("advanced-next-button"));
+    }
+    await screen.findByTestId("advanced-review-step");
+    expect(screen.queryByTestId("advanced-review-default-startingLocation")).toBeNull();
+    expect(screen.getByTestId("advanced-review-default-worldCondition")).toBeTruthy();
+  });
+
+  it("blocks the World page until a custom world type is typed", async () => {
+    await renderScreen();
+    await openAdvanced();
+    fireEvent.press(screen.getByTestId("advanced-option-worldGenre-custom"));
+    fireEvent.press(screen.getByTestId("advanced-next-button"));
+    expect(screen.queryByTestId("advanced-question-want")).toBeNull();
+    fireEvent.changeText(screen.getByTestId("advanced-custom-genre"), "haunted oil rig");
+    fireEvent.press(screen.getByTestId("advanced-next-button"));
+    expect(screen.getByTestId("advanced-question-want")).toBeTruthy();
+  });
+
+  it("sends the premise and time period, and omits the time period when the world decides", () => {
+    const chosen = buildAdvancedStartRequest({
+      ...createDefaultAdvancedSetup(),
+      worldGenre: "custom",
+      customGenre: "only mind reader alive",
+      premise: "I am the only mind reader and nobody knows.",
+      timePeriod: "present_day",
+    });
+    expect(chosen.genre).toBe("only mind reader alive");
+    expect(chosen.custom_world_setup.premise).toBe("I am the only mind reader and nobody knows.");
+    expect(chosen.custom_world_setup.timePeriod).toBe("present_day");
+
+    const preset = buildAdvancedStartRequest(createDefaultAdvancedSetup());
+    expect(preset.custom_world_setup.timePeriod).toBeUndefined();
+    expect(preset.custom_world_setup.premise).toBeUndefined();
+  });
+
+  it("uses one set of words for harshness", () => {
+    expect(HARSHNESS_LABELS).toEqual({
+      soft: "Forgiving",
+      standard: "Balanced",
+      hard: "Severe",
+      brutal: "Brutal",
+    });
+    expect(STORY_DIFFICULTIES.map((d) => d.label)).toEqual(["Forgiving", "Balanced", "Severe", "Brutal"]);
+    const severe = buildAdvancedStartRequest({
+      ...createDefaultAdvancedSetup(),
+      consequenceSeverity: "severe",
+    });
+    expect(severe.difficulty).toBe("hard");
+  });
+
+  it("shows role and consequences on Quick Start cards", async () => {
+    await renderScreen();
+    await openQuick();
+    const meta = screen.getByTestId("quick-start-meta-post-apocalyptic");
+    const text = [meta.props.children].flat().join("");
+    expect(text).toBe("You are: ordinary resident. Consequences: Severe.");
+  });
+
+  it("says in Guided that one choice sets mood and consequences", async () => {
+    await renderScreen();
+    await openGuided();
+    expect(
+      screen.getByText(
+        "An invented realm before machines, where magic exists. Expect: oaths, shortages and rival factions."
+      )
+    ).toBeTruthy();
+  });
+
   it("keeps mature age gate", async () => {
     await renderScreen();
     await openAdvanced();
-    for (let i = 0; i < 18; i += 1) {
+    // Four pages (World, Character, People and past, Experience), then the review.
+    for (let i = 0; i < 4; i += 1) {
       fireEvent.press(screen.getByTestId("advanced-next-button"));
     }
     await screen.findByTestId("advanced-review-step");
