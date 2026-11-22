@@ -82,6 +82,16 @@ CONDITION_STABILITY = {
 
 MAX_HOOK_LEN = 120
 MAX_ELEMENTS_LEN = 320
+# The player's own premise for the story ("What is this story about?").
+MAX_PREMISE_LEN = 600
+
+# "When is this set?" answers → world_frame era. Any other answer (or none)
+# leaves the era to the world type.
+TIME_PERIOD_ERAS = {
+    "present_day": "present_day",
+    "past": "historical_past",
+    "future": "future",
+}
 
 # Era / technology value for a world type the player typed (no catalog frame).
 PLAYER_AUTHORED_FRAME_VALUE = "as_the_world_type_implies"
@@ -235,7 +245,7 @@ def _player_authored_world_frame(world_type: str) -> Dict[str, Any]:
     """
     return {
         "era": PLAYER_AUTHORED_FRAME_VALUE,
-        "setting": _short(world_type, MAX_HOOK_LEN),
+        "setting": _short(world_type, MAX_ELEMENTS_LEN),
         "technology": PLAYER_AUTHORED_FRAME_VALUE,
         "player_authored": True,
     }
@@ -257,6 +267,9 @@ def derive_world_frame(
     if groundedness:
         base["groundedness"] = str(groundedness).strip().lower()[:40]
     if isinstance(setup, dict):
+        era = TIME_PERIOD_ERAS.get(str(setup.get("timePeriod") or "").strip().lower())
+        if era:
+            base["era"] = era
         req = _short(setup.get("worldElements"), MAX_ELEMENTS_LEN)
         exc = _short(setup.get("worldExclusions"), MAX_ELEMENTS_LEN)
         if req:
@@ -323,6 +336,8 @@ def normalize_custom_world_setup(
             limit = MAX_ELEMENTS_LEN if key in ("worldElements", "worldExclusions", "customLocation", "customRecentChange", "customRole") else MAX_HOOK_LEN
             if key in ("desire", "danger", "weakness", "origin", "formerLife", "strengths", "carried", "worldConcept", "worldTone"):
                 limit = 220
+            if key == "premise":
+                limit = MAX_PREMISE_LEN
             out[key] = text[:limit]
         elif isinstance(value, list):
             cleaned = []
@@ -424,6 +439,7 @@ def build_creation_contract(
         "scenario_id": sid or None,
         "role": r or resolve_starting_role(setup) or None,
         "world_frame": world_frame,
+        "premise": _short(setup.get("premise"), MAX_PREMISE_LEN) or None,
         "starting_location": location or None,
         "world_stability": stability,
         "recent_disruption": disruption or None,
@@ -452,6 +468,7 @@ def classify_field(name: str) -> str:
     hard = {"genre", "role", "scenario_id", "starting_location", "source_path"}
     sim = {
         "world_frame",
+        "premise",
         "world_stability",
         "recent_disruption",
         "groundedness",
@@ -732,6 +749,8 @@ def build_later_turn_creation_directive(contract: Mapping[str, Any]) -> str:
     role = contract.get("role")
     if genre or role:
         lines.append(f"Identity: genre={genre or '—'}; role={role or '—'}.")
+    if contract.get("premise"):
+        lines.append(f"Player's premise (stays true): {_short(contract['premise'], 240)}")
 
     frame = contract.get("world_frame") if isinstance(contract.get("world_frame"), dict) else {}
     if frame:
@@ -812,13 +831,18 @@ def build_opening_setup_lines(contract: Mapping[str, Any]) -> List[str]:
     lines: List[str] = []
     if not contract:
         return lines
+    if contract.get("premise"):
+        lines.append(
+            f"Player's premise — build the story around this and show it on the page: {contract['premise']}"
+        )
     if contract.get("starting_location"):
         lines.append(f"Starting place: {contract['starting_location']}")
     if contract.get("world_stability"):
         lines.append(f"World stability: {contract['world_stability']}")
     if contract.get("recent_disruption"):
         lines.append(
-            f"Recent disruption (established past, not a forced opening beat): {contract['recent_disruption']}"
+            f"Recent disruption (established past, not a forced opening beat): {contract['recent_disruption']}. "
+            "The opening situation must not contradict it."
         )
     if contract.get("knowledge_scope"):
         lines.append(f"Character knowledge scope: {contract['knowledge_scope']}")

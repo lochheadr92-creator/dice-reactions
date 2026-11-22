@@ -1158,6 +1158,33 @@ def _clean_setup(value: Any) -> Any:
     return _short_text(value, 700)
 
 
+STORY_TITLE_PART_MAX_CHARS = 48
+STORY_TITLE_TITLE_CASE_MAX_WORDS = 4
+
+
+def _title_part(text: Optional[str]) -> str:
+    """One half of a story title.
+
+    A short name ("low fantasy survival") is Title Cased as before. A sentence the
+    player typed keeps its own casing and is cut on a word boundary, so the title
+    stays a title and not the whole premise.
+    """
+    words = " ".join(str(text or "").split())
+    if len(words.split(" ")) <= STORY_TITLE_TITLE_CASE_MAX_WORDS and len(words) <= STORY_TITLE_PART_MAX_CHARS:
+        return words.title()
+    if len(words) > STORY_TITLE_PART_MAX_CHARS:
+        words = words[:STORY_TITLE_PART_MAX_CHARS].rsplit(" ", 1)[0].rstrip(" .,;:-") + "…"
+    return words[:1].upper() + words[1:]
+
+
+def _story_title(
+    scenario: Optional[Dict[str, Any]], genre: Optional[str], role: Optional[str]
+) -> str:
+    if scenario:
+        return scenario["title"]
+    return f"{_title_part(genre)} — {_title_part(role or 'Wanderer')}"
+
+
 def _build_opening_prompt(
     setup_text: str,
     *,
@@ -4329,11 +4356,7 @@ async def _create_new_story_inner(req: NewStoryRequest, attempt: Dict[str, Any])
     if effective_mode not in ("basic", "advanced"):
         effective_mode = DEFAULT_MODE
 
-    title = (
-        scenario["title"]
-        if scenario
-        else f"{effective_genre.title()} — {(effective_role or 'Wanderer').title()}"
-    )
+    title = _story_title(scenario, effective_genre, effective_role)
 
     replayability_state, frozen_rb_directives = replayability.init_new_story(
         genre=effective_genre,

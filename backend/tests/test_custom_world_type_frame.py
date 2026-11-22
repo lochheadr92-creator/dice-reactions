@@ -37,7 +37,7 @@ def test_custom_world_type_does_not_fall_back_to_modern_frame():
 
 def test_custom_world_type_is_bounded():
     frame = creation_contract.derive_world_frame("x" * 500)
-    assert len(frame["setting"]) <= creation_contract.MAX_HOOK_LEN
+    assert len(frame["setting"]) <= creation_contract.MAX_ELEMENTS_LEN
 
 
 def test_catalog_genres_keep_their_frames():

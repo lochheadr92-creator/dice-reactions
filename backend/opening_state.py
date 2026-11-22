@@ -8,7 +8,7 @@ The opening directive renders compact guidance from those facts only.
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from run_identity import select_from_namespace
 
@@ -345,6 +345,56 @@ def catalog_for_genre(genre: Optional[str]) -> List[str]:
     return list(GENRE_ARCHETYPE_CATALOG.get(normalize_genre(genre), GENRE_ARCHETYPE_CATALOG[DEFAULT_GENRE]))
 
 
+# The opening situation must not contradict what the player said in the builder.
+# Each answer names the opening archetypes that grow out of it. A custom (typed)
+# answer has no entry, so the genre pool is used unchanged.
+RECENT_CHANGE_ARCHETYPES: Dict[str, Tuple[str, ...]] = {
+    "someone_disappeared": ("witness_present", "message_arrives", "authority_demands", "betrayal_suspected"),
+    "resources_became_scarce": ("resource_runs_out", "debt_called", "last_chance_window"),
+    "conflict_intensified": ("injury_complicates", "authority_demands", "unexpected_visitor", "locked_in"),
+    "disaster_occurred": ("locked_in", "resource_runs_out", "storm_approaches", "interrupted_departure"),
+    "important_discovery": ("wrong_number", "message_arrives", "witness_present", "unexpected_visitor"),
+}
+
+PRESSURE_ARCHETYPES: Dict[str, Tuple[str, ...]] = {
+    "scarcity": ("resource_runs_out", "debt_called", "last_chance_window"),
+    "violence": ("injury_complicates", "unexpected_visitor", "authority_demands"),
+    "isolation": ("locked_in", "storm_approaches", "interrupted_departure"),
+    "betrayal": ("betrayal_suspected", "witness_present", "debt_called"),
+    "illness": ("injury_complicates", "resource_runs_out"),
+    "authority": ("authority_demands", "deadline_arrived", "witness_present"),
+    "unknown": ("wrong_number", "message_arrives", "unexpected_visitor"),
+}
+
+
+def archetypes_for_player_answers(setup: Mapping[str, Any]) -> List[str]:
+    """Opening archetypes that fit the builder answers, in catalog order. Empty = no preference."""
+    custom = setup.get("custom_world_setup")
+    if not isinstance(custom, Mapping):
+        return []
+    wanted: set = set()
+    wanted.update(RECENT_CHANGE_ARCHETYPES.get(str(custom.get("recentChange") or "").strip().lower(), ()))
+    pressures = custom.get("pressures")
+    if isinstance(pressures, (list, tuple)):
+        for pressure in pressures:
+            wanted.update(PRESSURE_ARCHETYPES.get(str(pressure).strip().lower(), ()))
+    return [a for a in OPENING_ARCHETYPES if a in wanted]
+
+
+def opening_archetype_pool(setup: Mapping[str, Any]) -> List[str]:
+    """Genre pool narrowed to the player's answers.
+
+    Where the genre pool and the answers share nothing, the answers win: what the
+    player said happened matters more than the genre's usual openings.
+    """
+    genre_pool = catalog_for_genre(setup.get("genre"))
+    fitting = archetypes_for_player_answers(setup)
+    if not fitting:
+        return genre_pool
+    shared = [a for a in genre_pool if a in fitting]
+    return shared or fitting
+
+
 def _pressure_origins(
     run_seed: str,
     identity: Mapping[str, Any],
@@ -391,7 +441,7 @@ def select_opening_archetype(
     if preserved and scenario_id in SCENARIO_ARCHETYPE_HINTS:
         archetype_id = SCENARIO_ARCHETYPE_HINTS[scenario_id]
     else:
-        pool = catalog_for_genre(genre)
+        pool = opening_archetype_pool(setup)
         archetype_id = select_from_namespace(run_seed, "opening_archetype", tuple(pool))
 
     if archetype_id not in OPENING_ARCHETYPES:
