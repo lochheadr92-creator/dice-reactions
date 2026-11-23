@@ -57,13 +57,8 @@ def _places(ctx: Context) -> List[str]:
 
 
 def _established(ctx: Context, place: str) -> bool:
-    if any(_same(place, p) for p in _places(ctx)):
-        return True
-    shown = " ".join(
-        t for row in ctx.rows for t in pf.paragraphs_of(row)
-        if pf.was_shown(ctx.session, int(row.get("turn_number") or 0), t)
-    )
-    return pf.has_phrase(shown, place)
+    """A place counts only when the engine lists it. A name that merely appears in prose is not a place yet."""
+    return any(_same(place, p) for p in _places(ctx))
 
 
 def _find(part: Dict[str, Any], route_id: Any) -> Dict[str, Any]:
@@ -120,7 +115,7 @@ def apply(state: Dict[str, Any], ctx: Context, args: Dict[str, Any], *, turn: in
         if not dest or _same(dest, origin):
             raise MoveError(422, "Say where it leads.")
         if not _established(ctx, dest):
-            raise MoveError(422, "You have not seen that place in your story yet.")
+            raise MoveError(422, "That is not a place the story has established yet.")
         gate = pf.clean(args.get("gate"), 60) or None
         if gate and not pf.has_phrase(paras[idx], gate):
             raise MoveError(422, f"Nothing you were shown says {gate} is part of it.")

@@ -14,7 +14,8 @@ Conditions
 
 Actions
   * ``cut_ferry_loose``: needs a cutting tool in the NPC's inventory and a moored ferry.
-  * ``deliver_parcel``: needs a parcel in the NPC's inventory and the target person present.
+  * ``deliver_item``: hand something the NPC carries to a named person. Any item, in any setting.
+    Needs that item in the NPC's inventory and the target person present.
 
 Decision: she refuses when she distrusts the player, is hostile, or is flagged
 ``refuses_orders``. A refusal and a missing tool are final outcomes, not retries. An order fires at
@@ -48,16 +49,17 @@ _NS = uuid.UUID("0c1d52a8-7b0e-4b7e-8a53-6e1f0d2b9c77")
 OrderError = ce.ClaimError
 
 _CUT_TOOL = re.compile(r"\b(knife|axe|hatchet|cleaver|machete|saw|blade|cutlass|shears|cutters|dagger)\b", re.I)
-_PARCEL = re.compile(r"\b(parcel|package)\b", re.I)
 _LEAD = r"(?:if|when|once|as soon as|the moment)"
 _REACH = re.compile(r"\b(reach(?:es)?|hit(?:s)?|gets? to|rises? to|pass(?:es)?|cross(?:es)?|touch(?:es)?|tops?)\b", re.I)
 _ARRIVE = re.compile(
     r"^(.+?)\s+(?:arrives?|shows? up|turns? up|gets? here|gets? in|docks?|comes? (?:in|here|back)|returns?)\b.*$", re.I
 )
 _CUT = re.compile(r"\b(?:cut|slip|cast)\b.*\bferry\b.*\b(?:loose|free|adrift|off)\b|\blet the ferry (?:go|drift)\b", re.I)
-_PARCEL_ACT = re.compile(
-    r"\b(?:deliver|hand|give|bring|pass|take)\b.*\b(?:parcel|package)\b(?:\s+(?:over\s+)?to\s+(.+))?$", re.I
-)
+_GIVE_ACT = re.compile(r"\b(?:deliver|hand|give|bring|pass|take)\b\s+(.+)$", re.I)
+_GIVE_TO = re.compile(r"\s+(?:over\s+)?to\s+(.+)$", re.I)
+_GIVE_LEAD = re.compile(r"^(?:(?:over|him|her|them|it|the|a|an|my|your|his|their|this|that)\s+)+", re.I)
+MAX_ITEM_TEXT = 60
+LEGACY_ITEM = "parcel"   # orders saved before delivery covered any item
 _EVEN_IF = re.compile(r",?\s*(?:even )?if i(?:'m| am| remain| stay|’m)?\b.*$", re.I)
 
 
@@ -70,6 +72,34 @@ _n = ce._norm
 
 def _inventory(row: Dict[str, Any]) -> List[str]:
     return [str(i) for i in (row.get("inventory") or []) if isinstance(i, str)]
+
+
+def _parse_delivery(act_text: str) -> Optional[Tuple[str, Optional[str]]]:
+    """("what to hand over", "to whom" or None) when the instruction is a handover, else None."""
+    m = _GIVE_ACT.search(act_text or "")
+    if not m:
+        return None
+    rest = m.group(1).strip()
+    target = None
+    to = _GIVE_TO.search(rest)
+    if to:
+        target, rest = to.group(1).strip(), rest[:to.start()].strip()
+    item = _GIVE_LEAD.sub("", rest + " ").strip()
+    item = re.sub(r"\s+over$", "", item, flags=re.I).strip()
+    return item[:MAX_ITEM_TEXT], target
+
+
+def _find_named_item(row: Dict[str, Any], phrase: str) -> Optional[str]:
+    """The item this person carries that the instruction named: the exact name, or the name as whole words."""
+    want = _n(phrase)
+    if not want:
+        return None
+    items = _inventory(row)
+    for item in items:
+        if _n(item) == want:
+            return item
+    whole = re.compile(r"\b" + re.escape(want) + r"\b")
+    return next((item for item in items if whole.search(_n(item))), None)
 
 
 def _find_item(row: Dict[str, Any], pattern: "re.Pattern[str]") -> Optional[str]:
@@ -180,24 +210,28 @@ def parse(text: str, rolling: Dict[str, Any], state: Optional[Dict[str, Any]], r
                 issues.append("She can only act on the water reaching a mark she can see, or on a named person arriving.")
 
     al = act_text.lower()
-    pm = _PARCEL_ACT.search(act_text)
+    handover = _parse_delivery(act_text)
     if _CUT.search(al):
         action = {"kind": "cut_ferry_loose", "summary": "cut the ferry loose"}
         if world.get("ferry") != "moored":
             issues.append("There is no tied-up ferry here for her to cut loose.")
-    elif pm:
+    elif handover:
+        item_text, to_whom = handover
         target = arriving
-        if pm.group(1):
-            target, why = _resolve_person(rolling, re.sub(r"^(?:the)\s+", "", pm.group(1).strip(), flags=re.I), exclude=recipient)
+        if not item_text:
+            issues.append("Say what should be handed over.")
+        elif to_whom:
+            target, why = _resolve_person(rolling, re.sub(r"^(?:the)\s+", "", to_whom, flags=re.I), exclude=recipient)
             if target is None:
-                issues.append(why or "I don't know who the parcel is for.")
+                issues.append(why or f"I don't know who the {item_text} is for.")
         elif target is None:
-            issues.append("Who should get the parcel?")
-        if target is not None:
-            action = {"kind": "deliver_parcel", "target": {"id": ce.npc_key(target), "name": ce.npc_name(target)},
-                      "summary": f"hand the parcel to {ce.npc_name(target)}"}
+            issues.append(f"Who should get the {item_text}?")
+        if item_text and target is not None:
+            action = {"kind": "deliver_item", "item": item_text,
+                      "target": {"id": ce.npc_key(target), "name": ce.npc_name(target)},
+                      "summary": f"hand the {item_text} to {ce.npc_name(target)}"}
     else:
-        issues.append("She can only cut the ferry loose or hand over a parcel.")
+        issues.append("She can only cut the ferry loose or hand something she carries to someone.")
 
     if condition and action:
         if action["kind"] == "cut_ferry_loose":
@@ -206,8 +240,8 @@ def parse(text: str, rolling: Dict[str, Any], state: Optional[Dict[str, Any]], r
             if not even_if:
                 notes.append(f"You did not say what to do if you are away. She will wait for you unless you add \"even if I'm away\".")
         else:
-            item = _find_item(recipient, _PARCEL)
-            notes.append(f"{name} has the parcel." if item else f"{name} is not carrying a parcel.")
+            # Never say here whether she has it: what someone carries is not the player's to learn from a preview.
+            notes.append(f"{name} can hand over the {action['item']} only if she is carrying it when the time comes.")
         if condition["kind"] == "gauge_reaches":
             g = world["gauges"][condition["gauge"]]
             where = ce._where(recipient)
@@ -285,10 +319,10 @@ def _decide(order: Dict[str, Any], rolling: Dict[str, Any], row: Dict[str, Any],
         if not tool:
             return {**out, "status": "no_means"}
         return {**out, "status": "done", "effect": {"kind": "ferry_adrift", "tool": tool}}
-    item = _find_item(row, _PARCEL)
+    item = _find_named_item(row, order["action"].get("item") or LEGACY_ITEM)
     if not item:
         return {**out, "status": "no_means"}
-    return {**out, "status": "done", "effect": {"kind": "parcel_given", "item": item, "from": ce.npc_key(row),
+    return {**out, "status": "done", "effect": {"kind": "item_given", "item": item, "from": ce.npc_key(row),
                                                   "to": order["action"]["target"]["id"]}}
 
 
@@ -349,7 +383,7 @@ def project(state: Optional[Dict[str, Any]], rolling: Dict[str, Any]) -> List[st
         notes.append(f"ferry {world['ferry']}")
     for order in state.get("orders") or []:
         eff = order.get("effect")
-        if order.get("status") != "done" or not eff or eff["kind"] != "parcel_given":
+        if order.get("status") != "done" or not eff or eff["kind"] not in ("item_given", "parcel_given"):
             continue
         giver, taker = ce.find_npc(rolling, eff["from"]), ce.find_npc(rolling, eff["to"])
         if giver is not None and eff["item"] in _inventory(giver):
@@ -377,6 +411,7 @@ def narrator_context(state: Optional[Dict[str, Any]], rolling: Dict[str, Any]) -
 
 _RESULT = {
     "done_ferry_adrift": "{n} cut the ferry loose with {tool}. The ferry is now adrift.",
+    "done_item_given": "{n} handed the {item} to {to}.",
     "done_parcel_given": "{n} handed the parcel to {to}.",
     "refused": "{n} saw it was time, but chose not to {act}. Show the hesitation or refusal in character. Nothing changed.",
     "no_means": "{n} wanted to {act}, but had nothing to do it with. Nothing changed.",
@@ -387,7 +422,8 @@ def _result_line(order: Dict[str, Any]) -> str:
     n, act = order["recipient"]["name"], order["action"]["summary"]
     eff = order.get("effect") or {}
     if order["status"] == "done":
-        return _RESULT["done_" + eff["kind"]].format(n=n, tool=eff.get("tool", ""), to=order["action"].get("target", {}).get("name", ""))
+        return _RESULT["done_" + eff["kind"]].format(n=n, tool=eff.get("tool", ""), item=order["action"].get("item") or LEGACY_ITEM,
+                                                     to=order["action"].get("target", {}).get("name", ""))
     return _RESULT[order["status"]].format(n=n, act=act)
 
 

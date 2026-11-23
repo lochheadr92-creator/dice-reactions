@@ -362,7 +362,7 @@ Known limits: the narrator schema does not record NPC inventory, condition or kn
 The engine owns what happened and who could observe it. The narrator describes the result.
 
 - `claim_engine.py`: a directed ledger of who was told what, and who overheard. Narrator context goes through the secret reveal directive. State lives in the session as `claim_state`, so branching copies it.
-- `order_engine.py`: `order_state` holds orders, a small world (gauges and the ferry) and `last_tick_turn`. It ticks before the narrator on the pre-narrator rolling state, and its effects are re-projected after the merge every turn because the narrator's `npcs` replaces the list wholesale. Vocabulary is small: water mark or person arrives, cut ferry or deliver parcel. A person refuses when trust is below 25.
+- `order_engine.py`: `order_state` holds orders, a small world (gauges and the ferry) and `last_tick_turn`. It ticks before the narrator on the pre-narrator rolling state, and its effects are re-projected after the merge every turn because the narrator's `npcs` replaces the list wholesale. Vocabulary is small: water mark or person arrives, cut ferry or deliver parcel. A person refuses when trust is below 25. A handover order can name any item the person carries and any named person, in any setting. The preview never says whether the person carries the item.
 - `duet.py` and `duet_api.py`: one built-in setting with two seats. The engine understands signal flashes and launching the one boat; other actions are narrated to the actor only. Observers are decided by line of sight. Concurrency uses an action lease, a revision check, a unique `(duet_id, turn_number)` index and a partial unique `(duet_id, request_id)` index. The identity of a seat is the device id.
 
 Known limits: claims need known places and `within_earshot` for witnesses; the duet comparison shows each seat's actions and narration, never notebooks or engine records.
@@ -384,6 +384,7 @@ Rules every engine follows:
 - Each engine keeps its own state under `play_state[kind]` and exposes `apply`, `options`, `narrator_context`, and optionally `tick` and `project`.
 - Idempotency: ids are derived from `(kind, request_id)` and kept in the record, so a retry cannot spend or award twice or leave half a transaction.
 - Knowledge: a route or a building is known only to the characters who learned it. After a chapter handover the new character has only what they know.
+- Places: a route leads only to a place the engine lists (`known_rooms`, `locations`, or where the player stands). A name that only appears in prose is not a place.
 - Private notes (for example on something built) are shown only to the builder.
 
 Known limits: two-player signals can only be settled before the first lamp is lit; narrator behaviour is verified against offline fixtures only.
