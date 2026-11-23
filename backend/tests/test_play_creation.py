@@ -82,7 +82,7 @@ def test_normally_created_saves_offer_moves_in_two_genres_and_a_custom_premise(e
             dev = device()
             sid = _play(tc, dev, genre, extra, place, people, lines)
             offered = moves(tc, sid, dev)
-            assert set(offered) >= {"challenge", "bargain", "route", "regard", "build", "signal", "teach"}, list(offered)
+            assert set(offered) >= {"challenge", "bargain", "route", "regard", "build"}, list(offered)
             quote = lines[1].split("that ")[1].split(",")[0]
             row = env.sync_db.turns.find_one({"session_id": sid, "paragraphs": {"$elemMatch": {"$regex": quote}}})
             assert row, [t["paragraphs"] for t in env.sync_db.turns.find({"session_id": sid})]

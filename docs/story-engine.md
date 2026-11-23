@@ -375,7 +375,7 @@ Known limits: claims need known places and `within_earshot` for witnesses; the d
 
 ## Player moves
 
-Code: `backend/play_moves.py` (registry and shared plumbing), `play_moves_api.py` (reads and preview), `play_facts.py` (what a scene contains: people present, shown passages, held items, trust), and one engine per move: `challenge_engine`, `bargain_engine`, `route_engine`, `regard_engine`, `build_engine`, `signal_engine`, `teach_engine`.
+Code: `backend/play_moves.py` (registry and shared plumbing), `play_moves_api.py` (reads and preview), `play_facts.py` (what a scene contains: people present, shown passages, held items, trust), and one engine per move: `challenge_engine`, `bargain_engine`, `route_engine`, `regard_engine`, `build_engine`.
 
 Rules every engine follows:
 
@@ -383,7 +383,7 @@ Rules every engine follows:
 - The engine decides ownership, knowledge, access, success and consequences. The narrator only receives directives for the turn and cannot decide them. Items an engine takes or hands over are enforced on the ledger after the narrator replies (`project_ledger`).
 - Each engine keeps its own state under `play_state[kind]` and exposes `apply`, `options`, `narrator_context`, and optionally `tick` and `project`.
 - Idempotency: ids are derived from `(kind, request_id)` and kept in the record, so a retry cannot spend or award twice or leave half a transaction.
-- Knowledge: a route, building, signal or skill is known only to the characters who learned it. After a chapter handover the new character has only what they know.
+- Knowledge: a route or a building is known only to the characters who learned it. After a chapter handover the new character has only what they know.
 - Private notes (for example on something built) are shown only to the builder.
 
-Known limits: teaching is judged by a shown passage whose words match the skill, so the engine cannot check meaning; two-player signals can only be settled before the first lamp is lit; narrator behaviour is verified against offline fixtures only.
+Known limits: two-player signals can only be settled before the first lamp is lit; narrator behaviour is verified against offline fixtures only.

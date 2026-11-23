@@ -33,8 +33,6 @@ import build_engine
 import challenge_engine
 import regard_engine
 import route_engine
-import signal_engine
-import teach_engine
 from play_facts import Context, MoveError
 
 STATE_VERSION = 1
@@ -47,11 +45,9 @@ ENGINES: Dict[str, Any] = {
     build_engine.KIND: build_engine,
     regard_engine.KIND: regard_engine,
     route_engine.KIND: route_engine,
-    signal_engine.KIND: signal_engine,
-    teach_engine.KIND: teach_engine,
 }
 
-MoveKind = Literal["challenge", "bargain", "route", "regard", "build", "signal", "teach"]
+MoveKind = Literal["challenge", "bargain", "route", "regard", "build"]
 
 
 class MoveRequest(BaseModel):
@@ -83,8 +79,6 @@ _VERBS = {
     "route": "You deal with a way through",
     "regard": "You work on how {who} sees someone",
     "build": "You set something up for others",
-    "signal": "You settle a signal with {who}",
-    "teach": "You teach {who}",
 }
 
 
@@ -275,10 +269,4 @@ def offers(options: Dict[str, Any]) -> List[Dict[str, Any]]:
         partner = next((x for x in o.get("partners") or [] if x.get("offers")), None)
         if partner:
             found.append({"kind": "bargain", "label": f"Make {partner['name']} an offer", "prefill": {"with": [partner["name"]]}})
-    o = have("signal")
-    if o and o.get("partners") and not o.get("signals"):
-        found.append({"kind": "signal", "label": f"Agree a signal with {o['partners'][0]['name']}", "prefill": {"with": [o["partners"][0]["name"]]}})
-    o = have("teach")
-    if o and o.get("learners") and o.get("passages"):
-        found.append({"kind": "teach", "label": f"Teach {o['learners'][0]['name']} something", "prefill": {"mode": ["teach"], "learner": [o["learners"][0]["name"]]}})
     return found[:MAX_OFFERS]

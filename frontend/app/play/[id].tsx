@@ -196,8 +196,6 @@ const MOVE_ICONS: Record<MoveKind, React.ComponentProps<typeof Ionicons>["name"]
   route: "trail-sign-outline",
   regard: "people-outline",
   build: "hammer-outline",
-  signal: "flashlight-outline",
-  teach: "school-outline",
 };
 
 export default function PlayScreen() {

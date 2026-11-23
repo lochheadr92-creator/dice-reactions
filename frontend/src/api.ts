@@ -393,9 +393,9 @@ export async function sendAction(payload: {
 }
 
 
-// ---- Player moves (challenge, bargain, route, regard, build, signal, teach) ----
+// ---- Player moves (challenge, bargain, route, regard, build) ----
 
-export type MoveKind = "challenge" | "bargain" | "route" | "regard" | "build" | "signal" | "teach";
+export type MoveKind = "challenge" | "bargain" | "route" | "regard" | "build";
 export type MoveRequest = { kind: MoveKind; op?: string; args: Record<string, unknown> };
 export type PassageRef = { turn: number; paragraph: number; quote: string; speaker?: string };
 export type MoveOptions = { kind: MoveKind; available: boolean; reason: string | null } & Record<string, any>;

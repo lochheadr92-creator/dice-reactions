@@ -455,13 +455,13 @@ A duet narrator is never sent stored narration. Its history is engine-written on
 
 Every response is built per seat from a whitelist. Narrator requests are built only from that seat's data plus engine-written observation sentences.
 
-## Player moves (challenge, bargain, route, regard, build, signal, teach)
+## Player moves (challenge, bargain, route, regard, build)
 
 Seven structured moves ride on the normal action. None is switched on by a genre, scenario name or example word; each is offered because the saved story supports it (who is here, what is carried, what was shown, trust, known places).
 
 ### `POST /story/session/{session_id}/action` with `move`
 
-`move` is `{ "kind": "challenge|bargain|route|regard|build|signal|teach", "op": "<optional>", "args": { ... } }`. At most one of `disclosure`, `order` or `move` per request. The server checks the move against the save, decides the outcome, replaces `action_text` with its own wording, and takes one normal turn. A refused move (4xx) takes no turn and changes nothing. The same `action_request_id` replays the committed result and never applies a move twice.
+`move` is `{ "kind": "challenge|bargain|route|regard|build", "op": "<optional>", "args": { ... } }`. At most one of `disclosure`, `order` or `move` per request. The server checks the move against the save, decides the outcome, replaces `action_text` with its own wording, and takes one normal turn. A refused move (4xx) takes no turn and changes nothing. The same `action_request_id` replays the committed result and never applies a move twice.
 
 State lives in `session.play_state[kind]`, is copied into a branch, and is absent in saves made before this feature (treated as empty).
 

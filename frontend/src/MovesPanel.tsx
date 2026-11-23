@@ -20,7 +20,7 @@ type Props = {
   prefill?: Record<string, string[]>;
 };
 
-const KINDS: MoveKind[] = ["challenge", "bargain", "route", "regard", "build", "signal", "teach"];
+const KINDS: MoveKind[] = ["challenge", "bargain", "route", "regard", "build"];
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
 type Passage = { turn: number; paragraph: number; text: string; speakers?: string[] };
@@ -98,16 +98,6 @@ function useForm(kind: MoveKind, o: MoveOptions, prefill?: Record<string, string
     const work = (o.works || []).find((w: any) => w.id === p("work")[0]);
     if (work && mode === "share" && p("with")[0]) move = { kind, op: "share", args: { work_id: work.id, with: p("with")[0] } };
     else if (!work && p("kind")[0] && p("items").length) move = { kind, op: "build", args: { kind: p("kind")[0], items: p("items"), note: t("note") } };
-  } else if (kind === "signal") {
-    const sig = (o.signals || []).find((s: any) => s.id === p("signal")[0]);
-    if (sig) move = { kind, op: "send", args: { signal_id: sig.id, clarity: p("clarity")[0] || "clear" } };
-    else if (p("with")[0] && p("channel")[0] && t("sign") && t("meaning"))
-      move = { kind, op: "agree", args: { with: p("with")[0], channel: p("channel")[0], sign: t("sign"), meaning: t("meaning") } };
-  } else if (kind === "teach") {
-    const demo = findP(o.passages, p("demo")[0]);
-    if (mode === "use" && p("effect")[0] && p("target")[0]) move = { kind, op: "use", args: { effect: p("effect")[0], target: { item: p("target")[0] } } };
-    else if (mode === "teach" && p("learner")[0] && t("skill") && p("effect")[0] && demo && p("on")[0])
-      move = { kind, args: { learner: p("learner")[0], skill: t("skill"), effect: p("effect")[0], demonstrated: ref(demo), practise_on: { item: p("on")[0] } } };
   }
   return { move, p, set, t, setT, reset: () => { setPick({}); setText({}); } };
 }
@@ -127,8 +117,6 @@ const MODES: Record<MoveKind, { id: string; text: string }[]> = {
   route: [{ id: "travel", text: "Take it" }, { id: "teach", text: "Tell someone" }, { id: "guide", text: "Guide someone" }, { id: "block", text: "Block it" }, { id: "reopen", text: "Reopen it" }],
   regard: [],
   build: [{ id: "share", text: "Let someone know about it" }],
-  signal: [],
-  teach: [{ id: "use", text: "Use what I know" }],
 };
 
 function Form({ kind, o, busy, sessionId, deviceId, onSend, prefill }: { kind: MoveKind; o: MoveOptions; busy: boolean; sessionId: string; deviceId: string; onSend: (m: MoveRequest) => void; prefill?: Record<string, string[]> }) {
@@ -224,42 +212,6 @@ function Form({ kind, o, busy, sessionId, deviceId, onSend, prefill }: { kind: M
               <Field label="A NOTE ONLY YOU CAN READ" value={f.t("note")} onChange={f.setT("note")} placeholder="So Tala can sleep dry" testID="mv-note" />
             </>
           )}
-        </>
-      ) : null}
-      {kind === "signal" ? (
-        <>
-          {(o.signals || []).length ? (
-            <Chips label="AGREED SIGNALS" options={(o.signals as any[]).map((s) => ({ id: s.id, text: `${s.sign} (${s.with}): ${s.meaning}${s.partner_here ? "" : ", not here"}` }))} value={p("signal")} onChange={set("signal")} testPrefix="mv-signal" />
-          ) : null}
-          {p("signal")[0] ? (
-            <Chips label="HOW CLEARLY" options={[{ id: "clear", text: "Clearly" }, { id: "faint", text: "Faintly, easy to miss" }]} value={p("clarity")} onChange={set("clarity")} testPrefix="mv-clarity" />
-          ) : (
-            <>
-              <Chips label="WITH" options={names(o.partners)} value={p("with")} onChange={set("with")} testPrefix="mv-with" />
-              <Chips label="THROUGH" options={Object.entries(o.channels || {}).map(([id, text]) => ({ id, text: String(text) }))} value={p("channel")} onChange={set("channel")} testPrefix="mv-channel" />
-              <Field label="THE SIGN" value={f.t("sign")} onChange={f.setT("sign")} placeholder="A napkin folded in a triangle" testID="mv-sign" />
-              <Field label="WHAT IT MEANS" value={f.t("meaning")} onChange={f.setT("meaning")} placeholder="Leave now" testID="mv-meaning" />
-            </>
-          )}
-        </>
-      ) : null}
-      {kind === "teach" ? (
-        <>
-          <Chips label="WHAT YOU DO" options={[{ id: "teach", text: "Teach someone" }, ...MODES.teach]} value={p("mode")} onChange={set("mode")} testPrefix="mv-mode" />
-          {p("mode")[0] === "use" ? (
-            <>
-              <Chips label="SKILL" options={Object.entries(o.effects || {}).map(([id, text]) => ({ id, text: `${id}: ${text}` }))} value={p("effect")} onChange={set("effect")} testPrefix="mv-effect" />
-              <Chips label="ON" options={strs(o.items)} value={p("target")} onChange={set("target")} testPrefix="mv-target" />
-            </>
-          ) : p("mode")[0] ? (
-            <>
-              <Chips label="WHO LEARNS" options={names(o.learners)} value={p("learner")} onChange={set("learner")} testPrefix="mv-learner" />
-              <Field label="THE SKILL" value={f.t("skill")} onChange={f.setT("skill")} placeholder="Spotting a forged seal" testID="mv-skill" />
-              <Chips label="WHAT IT LETS THEM DO" options={Object.entries(o.effects || {}).map(([id, text]) => ({ id, text: `${id}: ${text}` }))} value={p("effect")} onChange={set("effect")} testPrefix="mv-effect" />
-              <Chips label="WHERE YOU SHOWED IT" options={psg(o.passages)} value={p("demo")} onChange={set("demo")} testPrefix="mv-demo" />
-              <Chips label="PRACTISE ON" options={strs(o.items)} value={p("on")} onChange={set("on")} testPrefix="mv-on" />
-            </>
-          ) : null}
         </>
       ) : null}
 

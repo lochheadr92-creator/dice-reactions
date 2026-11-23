@@ -29,8 +29,6 @@ const MOVES = {
     },
     regard: unavailable("regard", "You need two other people here to work on."),
     build: unavailable("build", "You have nothing to spend."),
-    signal: unavailable("signal", "Nobody here trusts you enough to settle a signal with."),
-    teach: unavailable("teach", "Nobody here is willing to teach or learn from you."),
   },
 };
 
