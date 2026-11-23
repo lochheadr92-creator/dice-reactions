@@ -11,6 +11,7 @@ import uuid
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parent))
+import duet  # noqa: E402
 from test_duets import act, call, client, env, narrator, start  # noqa: F401,E402
 
 MEANING = "SIGNAL-MEANING-quartz bring the skiff round to the north slip"
@@ -97,3 +98,20 @@ def test_a_retried_proposal_is_one_proposal_and_a_third_device_sees_nothing(clie
     outsider = device()
     assert call(client, "POST", f"/duets/{did}/signals", outsider, {"request_id": "xx-12345678", "count": 2, "meaning": "x"}).status_code == 404
     assert call(client, "POST", f"/duets/{did}/signals/{a.json()['duet']['signals'][0]['id']}/respond", outsider, {"accept": True}).status_code == 404
+
+
+
+def test_a_signal_change_that_loses_a_race_is_refused_not_silently_dropped(client, env, narrator, monkeypatch):
+    a, b, did, _ = start(client)
+    real = duet.propose_signal
+
+    def raced(*args, **kwargs):
+        env.sync_db.duets.update_one({"id": did}, {"$inc": {"revision": 1}})  # another write lands first
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(duet, "propose_signal", raced)
+    r = _propose(client, did, a)
+    assert r.status_code == 409 and "Reload" in r.json()["detail"]
+    assert (env.sync_db.duets.find_one({"id": did})["world"].get("signals") or []) == []
+    monkeypatch.setattr(duet, "propose_signal", real)
+    assert _propose(client, did, a).status_code == 200

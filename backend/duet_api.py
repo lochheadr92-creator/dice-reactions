@@ -12,6 +12,7 @@ Every response is built from an explicit whitelist for ONE seat. A device that h
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import hmac
@@ -24,11 +25,16 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+import action_requests
+import ai_config
 import duet
 import turn_commit
 from security import require_device_id
 
-LEASE_SECONDS = 150
+# A lease must outlast the longest narration call (the provider timeout), and a heartbeat keeps it alive
+# for as long as the call runs, so a second request can never take over a turn still being written.
+SIGNAL_RACE = "The story changed while you were answering. Reload and try again."
+LEASE_SECONDS = int(ai_config.PROVIDER_TIMEOUT) + 60
 NOT_FOUND = "Story not found"
 
 Narrate = Callable[..., Awaitable[str]]
@@ -232,6 +238,8 @@ def register(api_router: APIRouter, *, get_db: Callable[[], Any], narrate: Narra
         if done:
             if done["seat"] != seat:
                 raise HTTPException(status_code=409, detail="That request id belongs to another action")
+            if done.get("action_text") != req.action_text.strip() or (done.get("clarity") or "clear") != req.clarity:
+                raise HTTPException(status_code=409, detail=action_requests.REQUEST_MISMATCH_DETAIL)
             return {"duet": _view(setting, doc, seat, await turns_of(db, duet_id)), "replayed": True}
 
         if doc["status"] == "waiting_for_friend":
@@ -268,13 +276,24 @@ def register(api_router: APIRouter, *, get_db: Callable[[], Any], narrate: Narra
                 for e in entries if e["kind"] in ("you", "observed")
             ]
             messages = duet.build_messages(setting, seat, known, history, pending_obs, req.action_text, result["note"])
-            raw = await narrate(messages, device_id=device_id, duet_id=duet_id, request_key=rid)
+            async def keep_lease() -> None:
+                # No revision bump: the commit below matches the revision read after the lease was taken.
+                while True:
+                    await asyncio.sleep(max(0.2, LEASE_SECONDS / 3))
+                    await db.duets.update_one({"id": duet_id, "lease.request_id": rid},
+                                              {"$set": {"lease.expires_at": time.time() + LEASE_SECONDS}})
+
+            beat = asyncio.create_task(keep_lease())
+            try:
+                raw = await narrate(messages, device_id=device_id, duet_id=duet_id, request_key=rid)
+            finally:
+                beat.cancel()
             narrative, paragraphs, choices = duet.parse_reply(raw, duet.opening_choices(setting, seat))
             if not narrative:
                 raise HTTPException(status_code=502, detail="The story engine returned nothing. Try again.")
             turn_doc = {
                 "id": str(uuid.uuid4()), "duet_id": duet_id, "turn_number": n + 1, "seat": seat, "request_id": rid,
-                "action_text": req.action_text.strip(), "narrative": narrative, "paragraphs": paragraphs, "choices": choices,
+                "action_text": req.action_text.strip(), "clarity": req.clarity, "narrative": narrative, "paragraphs": paragraphs, "choices": choices,
                 "observations": result["observations"], "engine_note": result["note"], "created_at": _now(),
             }
             update = {
@@ -314,8 +333,10 @@ def register(api_router: APIRouter, *, get_db: Callable[[], Any], narrate: Narra
             world = duet.propose_signal(doc["world"], seat, req.count, req.meaning, sid, doc["turn_count"], setting.get("signal_window_turns", 0))
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
-        await db.duets.update_one({"id": duet_id, "revision": doc["revision"]},
-                                  {"$set": {"world": world, "updated_at": _now()}, "$inc": {"revision": 1}})
+        res = await db.duets.update_one({"id": duet_id, "revision": doc["revision"]},
+                                        {"$set": {"world": world, "updated_at": _now()}, "$inc": {"revision": 1}})
+        if res.modified_count != 1:
+            raise HTTPException(status_code=409, detail=SIGNAL_RACE)
         fresh = await db.duets.find_one({"id": duet_id}, {"_id": 0})
         return {"duet": _view(setting, fresh, seat, await turns_of(db, duet_id))}
 
@@ -335,8 +356,10 @@ def register(api_router: APIRouter, *, get_db: Callable[[], Any], narrate: Narra
         known = copy.deepcopy(doc["known"])
         for s in duet.SEATS:
             known[s]["signals"] = [{"count": x["count"], "meaning": x["meaning"]} for x in duet.agreed_signals(world)]
-        await db.duets.update_one({"id": duet_id, "revision": doc["revision"]},
-                                  {"$set": {"world": world, "known": known, "updated_at": _now()}, "$inc": {"revision": 1}})
+        res = await db.duets.update_one({"id": duet_id, "revision": doc["revision"]},
+                                        {"$set": {"world": world, "known": known, "updated_at": _now()}, "$inc": {"revision": 1}})
+        if res.modified_count != 1:
+            raise HTTPException(status_code=409, detail=SIGNAL_RACE)
         fresh = await db.duets.find_one({"id": duet_id}, {"_id": 0})
         return {"duet": _view(setting, fresh, seat, await turns_of(db, duet_id))}
 

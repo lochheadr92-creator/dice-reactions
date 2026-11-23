@@ -308,3 +308,38 @@ def test_solo_saves_are_untouched_by_two_player_stories(client, env):
     assert r.status_code == 200 and r.json()["session"]["title"] == "Dock Mystery"
     assert "duet" not in dump(r.json())
     assert call(client, "GET", "/duets", dev).json() == {"duets": []}
+
+
+
+def test_reusing_a_request_id_for_a_different_action_is_refused_not_replayed(client, env, narrator):
+    a, b, did, _ = start(client)
+    rid = f"r-{uuid.uuid4()}"
+    assert act(client, did, a, "Check the tide table", rid=rid).status_code == 200
+    changed = act(client, did, a, "Cut the mooring line", rid=rid)
+    assert changed.status_code == 409 and "action_request_id" in changed.json()["detail"]
+    assert env.sync_db.duet_turns.count_documents({"duet_id": did}) == 1 and len(narrator.requests) == 1
+    assert act(client, did, a, "Check the tide table", rid=rid).json()["replayed"] is True
+
+
+def test_a_lease_outlasts_the_provider_timeout_and_is_kept_alive_while_narrating(client, env, narrator, monkeypatch):
+    import duet_api
+    import ai_config
+    assert duet_api.LEASE_SECONDS > ai_config.PROVIDER_TIMEOUT
+    monkeypatch.setattr(duet_api, "LEASE_SECONDS", 1)  # heartbeat every 0.33s
+    a, b, did, _ = start(client)
+    narrator.delay = 2.2
+    seen = []
+
+    def go():
+        seen.append(act(client, did, a, "Check the tide table").status_code)
+
+    t = threading.Thread(target=go)
+    t.start()
+    time.sleep(0.5)
+    first = env.sync_db.duets.find_one({"id": did})["lease"]["expires_at"]
+    time.sleep(1.2)  # past the original one second lease
+    doc = env.sync_db.duets.find_one({"id": did})
+    assert doc["lease"] is not None and doc["lease"]["expires_at"] > first
+    assert act(client, did, a, "Watch the lighthouse").status_code == 409  # still held, so nobody takes it over
+    t.join()
+    assert seen == [200] and view(client, did, a)["turn_count"] == 1
