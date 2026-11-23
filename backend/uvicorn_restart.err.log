@@ -1,0 +1,11 @@
+INFO:     Started server process [10680]
+INFO:     Waiting for application startup.
+2026-11-23 15:19:35,947 - server - INFO - transactional commit available: {'topology': 'replica_set', 'set_name': 'rs0', 'writable_primary': True}
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-11-23 21:01:54,290 - httpx - INFO - HTTP Request: POST https://api.x.ai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-11-23 21:01:54,339 - ai_service - INFO - LLM completion ok · provider=nvidia · model=openai-direct/grok-4.7 · attempt=1 · in_msgs=6 · out_chars=6580 · latency=163453ms · tokens=28560
+2026-11-23 21:06:39,340 - action_concurrency - INFO - action lease acquired for session e7497bbb-0823-4abf-9bf2-267128eb80d4
+2026-11-23 21:09:29,044 - httpx - INFO - HTTP Request: POST https://api.x.ai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-11-23 21:09:29,055 - ai_service - INFO - LLM completion ok · provider=nvidia · model=openai-direct/grok-4.7 · attempt=1 · in_msgs=7 · out_chars=6537 · latency=169671ms · tokens=27417
+2026-11-23 21:09:29,055 - server - INFO - Turn validation failed (format/mechanic terminology leaked into narrative) — retrying once

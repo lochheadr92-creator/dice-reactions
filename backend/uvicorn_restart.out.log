@@ -1,0 +1,29 @@
+INFO:     127.0.0.1:60344 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53935 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63788 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63794 - "POST /api/story/new HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:49628 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57797 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57799 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53870 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53944 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53952 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62572 - "OPTIONS /api/story/sessions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62572 - "GET /api/story/sessions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60309 - "OPTIONS /api/duets HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60309 - "GET /api/duets HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:60309 - "GET /api/story/sessions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59284 - "GET /api/story/sessions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59284 - "GET /api/setup/capabilities HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59856 - "OPTIONS /api/story/new HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59856 - "POST /api/story/new HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59856 - "OPTIONS /api/story/session/e7497bbb-0823-4abf-9bf2-267128eb80d4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63150 - "OPTIONS /api/story/session/e7497bbb-0823-4abf-9bf2-267128eb80d4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59856 - "GET /api/story/session/e7497bbb-0823-4abf-9bf2-267128eb80d4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59856 - "OPTIONS /api/story/session/e7497bbb-0823-4abf-9bf2-267128eb80d4/history HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63150 - "GET /api/story/session/e7497bbb-0823-4abf-9bf2-267128eb80d4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54727 - "GET /api/story/session/e7497bbb-0823-4abf-9bf2-267128eb80d4/history HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54727 - "OPTIONS /api/story/session/e7497bbb-0823-4abf-9bf2-267128eb80d4/play-settings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54727 - "POST /api/story/session/e7497bbb-0823-4abf-9bf2-267128eb80d4/play-settings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63150 - "GET /api/story/session/e7497bbb-0823-4abf-9bf2-267128eb80d4/history HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64646 - "OPTIONS /api/story/action HTTP/1.1" 200 OK

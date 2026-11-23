@@ -1,0 +1,104 @@
+Starting project at C:\dev\dice-reactions\frontend
+Metro is running in CI mode, reloads are disabled. Remove CI=true to enable watch mode.
+Starting Metro Bundler
+warning: Bundler cache is empty, rebuilding (this may take a minute)
+Waiting on http://localhost:8081
+Logs for your project will appear below.
+Web node_modules\expo-router\entry.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web node_modules\expo-router\entry.js ▓▓▓▓▓▓░░░░░░░░░░ 39.0% (281/507)
+λ node_modules\expo-router\node\render.js ▓▓▓▓▓▓░░░░░░░░░░ 39.8% (329/547)
+Web node_modules\expo-router\entry.js ▓▓▓▓▓▓▓▓▓▓▓░░░░░ 70.1% (767/916)
+λ node_modules\expo-router\node\render.js ▓▓▓▓▓▓▓▓▓▓▓░░░░░ 72.9% (748/876)
+λ Bundled 10275ms node_modules\expo-router\node\render.js (1237 modules)
+Web node_modules\expo-router\entry.js ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░ 97.9% (1209/1222)
+
+Metro error: React.default.createContext is not a function
+
+  TypeError: React.default.createContext is not a function
+    at factory (C:\dev\dice-reactions\frontend\node_modules\@expo\metro-runtime\src\error-overlay\Data\LogContext.tsx:7:33)
+    at loadModuleImplementation (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:248:36)
+    at guardedLoadModule (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:163:16)
+    at require (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:74:75)
+    at factory (C:\dev\dice-reactions\frontend\node_modules\@expo\metro-runtime\src\error-overlay\Data\LogBoxData.tsx:16:1)
+    at loadModuleImplementation (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:248:36)
+    at guardedLoadModule (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:163:16)
+    at require (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:74:75)
+    at factory (C:\dev\dice-reactions\frontend\node_modules\@expo\metro-runtime\src\error-overlay\LogBox.web.ts:9:1)
+    at loadModuleImplementation (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:248:36)
+Web node_modules\expo-router\entry.js ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░ 97.9% (1209/1222)
+Web Bundled 11234ms node_modules\expo-router\entry.js (1222 modules)
+Web node_modules\expo-router\entry.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+λ Bundled 27ms node_modules\expo-router\node\render.js (1 module)
+
+Metro error: React.default.createContext is not a function
+
+  TypeError: React.default.createContext is not a function
+    at factory (C:\dev\dice-reactions\frontend\node_modules\@expo\metro-runtime\src\error-overlay\Data\LogContext.tsx:7:33)
+    at loadModuleImplementation (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:248:36)
+    at guardedLoadModule (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:163:16)
+    at require (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:74:75)
+    at factory (C:\dev\dice-reactions\frontend\node_modules\@expo\metro-runtime\src\error-overlay\Data\LogBoxData.tsx:16:1)
+    at loadModuleImplementation (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:248:36)
+    at guardedLoadModule (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:163:16)
+    at require (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:74:75)
+    at factory (C:\dev\dice-reactions\frontend\node_modules\@expo\metro-runtime\src\error-overlay\LogBox.web.ts:9:1)
+    at loadModuleImplementation (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:248:36)
+Web node_modules\expo-router\entry.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web Bundled 336ms node_modules\expo-router\entry.js (1 module)
+Web node_modules\expo-router\entry.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+λ Bundled 25ms node_modules\expo-router\node\render.js (1 module)
+
+Metro error: React.default.createContext is not a function
+
+  TypeError: React.default.createContext is not a function
+    at factory (C:\dev\dice-reactions\frontend\node_modules\@expo\metro-runtime\src\error-overlay\Data\LogContext.tsx:7:33)
+    at loadModuleImplementation (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:248:36)
+    at guardedLoadModule (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:163:16)
+    at require (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:74:75)
+    at factory (C:\dev\dice-reactions\frontend\node_modules\@expo\metro-runtime\src\error-overlay\Data\LogBoxData.tsx:16:1)
+    at loadModuleImplementation (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:248:36)
+    at guardedLoadModule (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:163:16)
+    at require (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:74:75)
+    at factory (C:\dev\dice-reactions\frontend\node_modules\@expo\metro-runtime\src\error-overlay\LogBox.web.ts:9:1)
+    at loadModuleImplementation (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:248:36)
+Web node_modules\expo-router\entry.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web Bundled 323ms node_modules\expo-router\entry.js (1 module)
+Web node_modules\expo-router\entry.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+λ Bundled 26ms node_modules\expo-router\node\render.js (1 module)
+
+Metro error: React.default.createContext is not a function
+
+  TypeError: React.default.createContext is not a function
+    at factory (C:\dev\dice-reactions\frontend\node_modules\@expo\metro-runtime\src\error-overlay\Data\LogContext.tsx:7:33)
+    at loadModuleImplementation (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:248:36)
+    at guardedLoadModule (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:163:16)
+    at require (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:74:75)
+    at factory (C:\dev\dice-reactions\frontend\node_modules\@expo\metro-runtime\src\error-overlay\Data\LogBoxData.tsx:16:1)
+    at loadModuleImplementation (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:248:36)
+    at guardedLoadModule (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:163:16)
+    at require (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:74:75)
+    at factory (C:\dev\dice-reactions\frontend\node_modules\@expo\metro-runtime\src\error-overlay\LogBox.web.ts:9:1)
+    at loadModuleImplementation (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:248:36)
+Web node_modules\expo-router\entry.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web Bundled 341ms node_modules\expo-router\entry.js (1 module)
+Web node_modules\expo-router\entry.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web node_modules\expo-router\entry.js ▓▓▓▓▓▓▓▓▓▓▓░░░░░ 73.9% (816/949)
+Web Bundled 5027ms node_modules\expo-router\entry.js (1214 modules)
+Web node_modules\expo-router\entry.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+λ Bundled 34ms node_modules\expo-router\node\render.js (1 module)
+
+Metro error: React.default.createContext is not a function
+
+  TypeError: React.default.createContext is not a function
+    at factory (C:\dev\dice-reactions\frontend\node_modules\@expo\metro-runtime\src\error-overlay\Data\LogContext.tsx:7:33)
+    at loadModuleImplementation (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:248:36)
+    at guardedLoadModule (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:163:16)
+    at require (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:74:75)
+    at factory (C:\dev\dice-reactions\frontend\node_modules\@expo\metro-runtime\src\error-overlay\Data\LogBoxData.tsx:16:1)
+    at loadModuleImplementation (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:248:36)
+    at guardedLoadModule (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:163:16)
+    at require (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:74:75)
+    at factory (C:\dev\dice-reactions\frontend\node_modules\@expo\metro-runtime\src\error-overlay\LogBox.web.ts:9:1)
+    at loadModuleImplementation (C:\dev\dice-reactions\frontend\node_modules\@expo\cli\build\metro-require\require.js:248:36)
+Web node_modules\expo-router\entry.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web Bundled 370ms node_modules\expo-router\entry.js (1 module)
