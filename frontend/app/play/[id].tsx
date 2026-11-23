@@ -36,7 +36,10 @@ import {
   Disclosure,
   disclosureActionText,
   MoveRequest,
-  moveActionText,
+  getMoves,
+  MovesResponse,
+  MoveKind,
+  MoveOffer,
   orderActionText,
   Turn,
   SessionSummary,
@@ -47,6 +50,7 @@ import ChapterPanel from "../../src/ChapterPanel";
 import TellPanel from "../../src/TellPanel";
 import OrderPanel from "../../src/OrderPanel";
 import MovesPanel from "../../src/MovesPanel";
+import { MOVE_KINDS, MOVE_LABELS, moveActionText } from "../../src/moves";
 import { syncAfterActionConflict } from "../../src/action-conflict-sync";
 import { resolvePendingActionStatus } from "../../src/action-status-sync";
 import { mergeChronicleTurns, maxTurnNumber } from "../../src/chronicle-merge";
@@ -185,6 +189,16 @@ function compactConditionLine(state: Record<string, string>): string | null {
   return picked.join(" · ");
 }
 
+const MOVE_ICONS: Record<MoveKind, React.ComponentProps<typeof Ionicons>["name"]> = {
+  challenge: "megaphone-outline",
+  bargain: "cash-outline",
+  route: "trail-sign-outline",
+  regard: "people-outline",
+  build: "hammer-outline",
+  signal: "flashlight-outline",
+  teach: "school-outline",
+};
+
 export default function PlayScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -213,6 +227,14 @@ export default function PlayScreen() {
   const [showTell, setShowTell] = useState(false);
   const [showOrder, setShowOrder] = useState(false);
   const [showMoves, setShowMoves] = useState(false);
+  const [movesKind, setMovesKind] = useState<MoveKind | null>(null);
+  const [movesPrefill, setMovesPrefill] = useState<Record<string, string[]> | undefined>(undefined);
+  const [movesInfo, setMovesInfo] = useState<MovesResponse | null>(null);
+  const openMoves = (kind: MoveKind, prefill?: Record<string, string[]>) => {
+    setMovesKind(kind);
+    setMovesPrefill(prefill);
+    setShowMoves(true);
+  };
   const [branching, setBranching] = useState(false);
   const [pinNotice, setPinNotice] = useState<string | null>(null);
   // One request id per branch attempt: a double tap or retry returns the same branch.
@@ -432,6 +454,26 @@ export default function PlayScreen() {
       conflictSyncSignalRef.current.cancelled = true;
     };
   }, []);
+
+  // What the scene supports right now decides which feature icons and offers show.
+  const movesTurn = maxTurnNumber(turns);
+  useEffect(() => {
+    let dead = false;
+    const device = deviceIdRef.current;
+    if (!sessionId || !device || !movesTurn) return;
+    // Wrapped so that a failure to learn the options can never break the play screen.
+    Promise.resolve()
+      .then(() => getMoves(sessionId, device))
+      .then((r) => {
+        if (!dead) setMovesInfo(r);
+      })
+      .catch(() => {
+        if (!dead) setMovesInfo(null);
+      });
+    return () => {
+      dead = true;
+    };
+  }, [sessionId, movesTurn]);
 
   const isInitialSessionRef = useRef(true);
   useEffect(() => {
@@ -779,16 +821,19 @@ export default function PlayScreen() {
               >
                 <Ionicons name="briefcase-outline" size={18} color={COLORS.primary} />
               </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => setShowMoves(true)}
-                disabled={actionBusy}
-                hitSlop={10}
-                testID="open-moves-btn"
-                accessibilityLabel="Things you can do here"
-                accessibilityRole="button"
-              >
-                <Ionicons name="hand-left-outline" size={18} color={actionBusy ? COLORS.textMuted : COLORS.primary} />
-              </TouchableOpacity>
+              {MOVE_KINDS.filter((k) => movesInfo?.moves?.[k]?.available).map((k) => (
+                <TouchableOpacity
+                  key={k}
+                  onPress={() => openMoves(k)}
+                  disabled={actionBusy}
+                  hitSlop={8}
+                  testID={`open-move-${k}`}
+                  accessibilityLabel={MOVE_LABELS[k].title}
+                  accessibilityRole="button"
+                >
+                  <Ionicons name={MOVE_ICONS[k]} size={18} color={actionBusy ? COLORS.textMuted : COLORS.primary} />
+                </TouchableOpacity>
+              ))}
               <TouchableOpacity onPress={() => setShowMenu(true)} hitSlop={10} testID="open-menu-btn">
                 <Ionicons name="ellipsis-horizontal" size={20} color={COLORS.textSecondary} />
               </TouchableOpacity>
@@ -964,6 +1009,19 @@ export default function PlayScreen() {
                 >
                   <Text style={styles.choiceLabel}>[{c.label}]</Text>
                   <Text style={styles.choiceText}>{c.text}</Text>
+                </TouchableOpacity>
+              ))}
+              {(movesInfo?.offers || []).map((o: MoveOffer) => (
+                <TouchableOpacity
+                  key={`${o.kind}-${o.label}`}
+                  style={styles.choiceCard}
+                  onPress={() => openMoves(o.kind, o.prefill)}
+                  disabled={actionBusy}
+                  testID={`offer-${o.kind}`}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name={MOVE_ICONS[o.kind]} size={16} color={COLORS.primary} />
+                  <Text style={styles.choiceText}>{o.label}</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -1324,6 +1382,8 @@ export default function PlayScreen() {
         sessionId={sessionId}
         deviceId={deviceIdRef.current}
         busy={actionBusy}
+        initialKind={movesKind}
+        prefill={movesPrefill}
         onClose={() => setShowMoves(false)}
         onSend={(m) => {
           setShowMoves(false);

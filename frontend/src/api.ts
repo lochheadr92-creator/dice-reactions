@@ -399,18 +399,10 @@ export type MoveKind = "challenge" | "bargain" | "route" | "regard" | "build" | 
 export type MoveRequest = { kind: MoveKind; op?: string; args: Record<string, unknown> };
 export type PassageRef = { turn: number; paragraph: number; quote: string; speaker?: string };
 export type MoveOptions = { kind: MoveKind; available: boolean; reason: string | null } & Record<string, any>;
-export type MovesResponse = { turn_count: number; moves: Record<MoveKind, MoveOptions> };
-export type MovePreview = { kind: MoveKind; can_commit: boolean; issues: string[]; terms?: string; notes?: string[]; shown?: unknown };
+export type MoveOffer = { kind: MoveKind; label: string; prefill: Record<string, string[]> };
+export type MovesResponse = { turn_count: number; moves: Record<MoveKind, MoveOptions>; offers: MoveOffer[] };
 
-export const MOVE_LABELS: Record<MoveKind, { title: string; blurb: string }> = {
-  challenge: { title: "Challenge a claim", blurb: "Put what someone said against what you have seen or hold." },
-  bargain: { title: "Strike a bargain", blurb: "Offer something real for something real." },
-  route: { title: "Routes", blurb: "Mark a way through you have seen, and choose who learns it." },
-  regard: { title: "Between two others", blurb: "Introduce, vouch for, mediate or expose." },
-  build: { title: "Leave something behind", blurb: "Set up a shelter, hideout or cache others can use." },
-  signal: { title: "Agree a signal", blurb: "Settle a sign with someone you trust, or give one." },
-  teach: { title: "Teach a skill", blurb: "Show someone how, then let them use it." },
-};
+export type MovePreview = { kind: MoveKind; can_commit: boolean; issues: string[]; terms?: string; notes?: string[]; shown?: unknown };
 
 export async function getMoves(sessionId: string, deviceId: string): Promise<MovesResponse> {
   const res = await fetch(`${API}/story/session/${sessionId}/moves`, { headers: deviceHeaders(deviceId) });
@@ -424,24 +416,6 @@ export async function previewMove(sessionId: string, deviceId: string, move: Mov
     body: JSON.stringify(move),
   });
   return handle(res);
-}
-
-export function moveActionText(m: MoveRequest): string {
-  const who = String(m.args.audience ?? m.args.with ?? m.args.learner ?? m.args.a ?? "someone here");
-  const base: Record<MoveKind, string> = {
-    challenge: `You challenge ${who} with what you have`,
-    bargain: `You make ${who} an offer`,
-    route: "You deal with a way through",
-    regard: `You work on how ${who} sees someone`,
-    build: "You set something up for others",
-    signal: `You settle a signal with ${who}`,
-    teach: `You teach ${who}`,
-  };
-  // A short fingerprint of the exact move, so a retry of the same move reuses its request id and a different move never does.
-  const raw = JSON.stringify([m.kind, m.op ?? null, m.args]);
-  let h = 0;
-  for (let i = 0; i < raw.length; i++) h = (h * 31 + raw.charCodeAt(i)) | 0;
-  return `${base[m.kind]}${m.op ? ` (${m.op})` : ""} #${(h >>> 0).toString(36)}`;
 }
 
 export type ActionRequestStatus = {

@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONTS } from "./theme";
-import { getMoves, MOVE_LABELS, MoveKind, MoveOptions, MovePreview, MoveRequest, MovesResponse, previewMove } from "./api";
+import { getMoves, MoveKind, MoveOptions, MovePreview, MoveRequest, MovesResponse, previewMove } from "./api";
+import { MOVE_LABELS } from "./moves";
 import { friendlyError } from "./errors";
 
 type Props = {
@@ -13,6 +14,10 @@ type Props = {
   /** Sent as one normal story action; the server decides the outcome. */
   onSend: (m: MoveRequest) => void;
   onClose: () => void;
+  /** Open straight into one feature (and only that one). Without it the panel lists them all. */
+  initialKind?: MoveKind | null;
+  /** What to pre-select, for a move the scene offered. */
+  prefill?: Record<string, string[]>;
 };
 
 const KINDS: MoveKind[] = ["challenge", "bargain", "route", "regard", "build", "signal", "teach"];
@@ -56,8 +61,8 @@ const psg = (xs: Passage[] | undefined) => (xs || []).map((p) => ({ id: `${p.tur
 const findP = (xs: Passage[] | undefined, id: string | undefined) => (xs || []).find((p) => `${p.turn}:${p.paragraph}` === id);
 
 /** Builds the move for one kind from what the player picked. Null means not ready yet. */
-function useForm(kind: MoveKind, o: MoveOptions) {
-  const [pick, setPick] = useState<Record<string, string[]>>({});
+function useForm(kind: MoveKind, o: MoveOptions, prefill?: Record<string, string[]>) {
+  const [pick, setPick] = useState<Record<string, string[]>>(prefill || {});
   const [text, setText] = useState<Record<string, string>>({});
   const p = (k: string) => pick[k] || [];
   const set = (k: string) => (v: string[]) => setPick((s) => ({ ...s, [k]: v }));
@@ -126,8 +131,8 @@ const MODES: Record<MoveKind, { id: string; text: string }[]> = {
   teach: [{ id: "use", text: "Use what I know" }],
 };
 
-function Form({ kind, o, busy, sessionId, deviceId, onSend }: { kind: MoveKind; o: MoveOptions; busy: boolean; sessionId: string; deviceId: string; onSend: (m: MoveRequest) => void }) {
-  const f = useForm(kind, o);
+function Form({ kind, o, busy, sessionId, deviceId, onSend, prefill }: { kind: MoveKind; o: MoveOptions; busy: boolean; sessionId: string; deviceId: string; onSend: (m: MoveRequest) => void; prefill?: Record<string, string[]> }) {
+  const f = useForm(kind, o, prefill);
   const [preview, setPreview] = useState<MovePreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
@@ -284,7 +289,7 @@ function Form({ kind, o, busy, sessionId, deviceId, onSend }: { kind: MoveKind; 
   );
 }
 
-export default function MovesPanel({ visible, sessionId, deviceId, busy, onSend, onClose }: Props) {
+export default function MovesPanel({ visible, sessionId, deviceId, busy, onSend, onClose, initialKind = null, prefill }: Props) {
   const [data, setData] = useState<MovesResponse | null>(null);
   const [kind, setKind] = useState<MoveKind | null>(null);
   const [loading, setLoading] = useState(false);
@@ -305,10 +310,10 @@ export default function MovesPanel({ visible, sessionId, deviceId, busy, onSend,
 
   useEffect(() => {
     if (visible) {
-      setKind(null);
+      setKind(initialKind);
       void load();
     }
-  }, [visible, load]);
+  }, [visible, load, initialKind]);
 
   const current = useMemo(() => (kind && data ? data.moves[kind] : null), [kind, data]);
 
@@ -317,7 +322,7 @@ export default function MovesPanel({ visible, sessionId, deviceId, busy, onSend,
       <View style={styles.root}>
         <View style={styles.sheet} testID="moves-modal">
           <View style={styles.head}>
-            {kind ? (
+            {kind && !initialKind ? (
               <TouchableOpacity onPress={() => setKind(null)} hitSlop={12} testID="moves-back-btn">
                 <Ionicons name="chevron-back" size={22} color={COLORS.textSecondary} />
               </TouchableOpacity>
@@ -342,7 +347,7 @@ export default function MovesPanel({ visible, sessionId, deviceId, busy, onSend,
                   );
                 })
               : null}
-            {kind && current ? <Form key={kind} kind={kind} o={current} busy={busy} sessionId={sessionId} deviceId={deviceId} onSend={onSend} /> : null}
+            {kind && current ? <Form key={kind} kind={kind} o={current} busy={busy} sessionId={sessionId} deviceId={deviceId} onSend={onSend} prefill={prefill} /> : null}
             <View style={{ height: 32 }} />
           </ScrollView>
         </View>

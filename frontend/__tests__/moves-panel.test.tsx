@@ -2,6 +2,7 @@ import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react-native";
 import MovesPanel from "../src/MovesPanel";
 import * as api from "../src/api";
+import { moveActionText } from "../src/moves";
 
 jest.mock("../src/api", () => ({
   ...jest.requireActual("../src/api"),
@@ -88,7 +89,7 @@ describe("MovesPanel", () => {
 
   test("the same move gets the same action text and a different move does not", () => {
     const a = { kind: "route", op: "discover", args: { to: "x" } } as const;
-    expect(api.moveActionText(a as any)).toBe(api.moveActionText({ ...a } as any));
-    expect(api.moveActionText(a as any)).not.toBe(api.moveActionText({ ...a, args: { to: "y" } } as any));
+    expect(moveActionText(a as any)).toBe(moveActionText({ ...a } as any));
+    expect(moveActionText(a as any)).not.toBe(moveActionText({ ...a, args: { to: "y" } } as any));
   });
 });

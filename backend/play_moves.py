@@ -218,3 +218,51 @@ def player_view(state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 def all_options(ctx: Context) -> Dict[str, Any]:
     return {kind: engine.options(ctx) for kind, engine in ENGINES.items()}
+
+
+MAX_OFFERS = 3
+
+
+def offers(options: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Moves the scene itself suggests, shown next to the narrator's choices.
+
+    Built only from what the player was shown and holds (the same options a player can open
+    from the icons), so an offer never reveals more than the panel would. Each offer names a
+    move kind and what to pre-select; the player still completes and sends it.
+    """
+    found: List[Dict[str, Any]] = []
+
+    def have(kind: str) -> Dict[str, Any]:
+        o = options.get(kind) or {}
+        return o if o.get("available") else {}
+
+    o = have("challenge")
+    if o and o.get("statements") and (o.get("items") or len(o.get("passages") or []) >= 2):
+        audience = {a["name"] for a in o.get("audiences") or []}
+        for st in o["statements"]:
+            who = next((n for n in st.get("speakers") or [] if n in audience), None)
+            if who:
+                found.append({"kind": "challenge", "label": f"Challenge what {who} said",
+                              "prefill": {"audience": [who], "subject": [f"{st['turn']}:{st['paragraph']}"]}})
+                break
+    o = have("route")
+    if o and not o.get("routes"):
+        for passage in o.get("passages") or []:
+            text = str(passage.get("text") or "").lower()
+            place = next((pl for pl in o.get("places") or [] if pl.lower() in text), None)
+            if place:
+                found.append({"kind": "route", "label": f"Mark the way toward {place}",
+                              "prefill": {"via": [f"{passage['turn']}:{passage['paragraph']}"], "to": [place]}})
+                break
+    o = have("bargain")
+    if o and o.get("items"):
+        partner = next((x for x in o.get("partners") or [] if x.get("offers")), None)
+        if partner:
+            found.append({"kind": "bargain", "label": f"Make {partner['name']} an offer", "prefill": {"with": [partner["name"]]}})
+    o = have("signal")
+    if o and o.get("partners") and not o.get("signals"):
+        found.append({"kind": "signal", "label": f"Agree a signal with {o['partners'][0]['name']}", "prefill": {"with": [o["partners"][0]["name"]]}})
+    o = have("teach")
+    if o and o.get("learners") and o.get("passages"):
+        found.append({"kind": "teach", "label": f"Teach {o['learners'][0]['name']} something", "prefill": {"mode": ["teach"], "learner": [o["learners"][0]["name"]]}})
+    return found[:MAX_OFFERS]

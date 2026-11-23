@@ -56,7 +56,8 @@ def register(router: APIRouter, *, get_db: Callable[[], Any], fetch_owned_sessio
         db = get_db()
         session = await fetch_owned_session(db, session_id, device_id)
         ctx = await build_context(db, session, device_id)
-        return {"turn_count": int(session.get("turn_count") or 0), "moves": play_moves.all_options(ctx)}
+        opts = play_moves.all_options(ctx)
+        return {"turn_count": int(session.get("turn_count") or 0), "moves": opts, "offers": play_moves.offers(opts)}
 
     @router.post("/story/session/{session_id}/moves/preview")
     async def moves_preview(session_id: str, move: play_moves.MoveRequest, device_id: str = Depends(require_device_id)):

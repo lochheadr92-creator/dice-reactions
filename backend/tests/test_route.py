@@ -158,3 +158,22 @@ def test_connected_sequence_route_bargain_teach_then_handover(client, env, narra
     assert ho.status_code == 200, ho.text
     after = moves(client, sid, dev)
     assert after["route"]["routes"] == []  # Lena never learned it, so it is not hers to use
+
+
+def _offers(client, sid, dev):
+    return client.get(f"/api/story/session/{sid}/moves", headers=headers(dev)).json()["offers"]
+
+
+def test_scene_offers_a_route_only_while_it_is_unmarked_and_only_from_what_was_shown(client, env, narrator):
+    dev = device()
+    sid = seed(env.sync_db, dev, hotel(), HOTEL_TURNS, carried="torch")
+    got = [o for o in _offers(client, sid, dev) if o["kind"] == "route"]
+    assert got and got[0]["label"] == f"Mark the way toward {BOILER}" and got[0]["prefill"]["to"] == [BOILER]
+    _find(client, env, sid, dev)
+    assert [o for o in _offers(client, sid, dev) if o["kind"] == "route"] == []
+
+
+def test_no_offers_in_a_scene_that_supports_nothing(client, env, narrator):
+    dev = device()
+    sid = seed(env.sync_db, dev, {"scene": "a field", "npcs": [], "relationship_vectors": []}, [["Wind moves the grass."]])
+    assert _offers(client, sid, dev) == []
