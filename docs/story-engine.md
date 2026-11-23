@@ -326,7 +326,7 @@ Frontend `sanitize.ts` adds a presentation-only filter on paragraphs and choices
 |--------|--------|
 | Utility AI | Implemented; canonical selection defaults ON through `ENABLE_CANONICAL_UTILITY`; deterministic live routing verified; fail-closed heuristic fallback retained; provider-backed gameplay acceptance unverified |
 | Actor resolution | Canonical module present in shadow/default-off promotion mode; the existing `npc_world_moves` tier resolver remains the live local substitute |
-| Formal event sourcing | **DEFERRED** — full contract unavailable beyond PRD summary; turn log only on `emergent` HEAD |
+| Formal event sourcing | **DEFERRED** — full contract unavailable beyond PRD summary; turn log only on `emergent` HEAD. Accepted as the current design on 2026-11-24: state is kept as snapshots, and no `db.events` collection exists. The state added on 2026-11-23 follows the same rule: `claim_state`, `order_state`, `npc_ledger` and `play_state` are overwritten on the session document inside the turn commit, and `duets` holds its world as a snapshot with one `duet_turns` row per turn. None of it is rebuilt from a log. |
 | Living Cast | Merged and live on `emergent` as a local substitute for the unavailable full PRD contract |
 | Scoring / NaN ranking guards | N/A — never existed in this repo |
 

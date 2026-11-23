@@ -287,7 +287,10 @@ def build_messages(setting: Dict[str, Any], seat: str, known: Dict[str, Any], ow
                    where: Optional[str] = None) -> List[Dict[str, str]]:
     """One seat's narrator request. Everything a player typed travels in one JSON block, as data.
 
-    ``own_history`` rows are this seat's entries: {"turn", "kind": "you" | "observed", "text", "action"}.
+    ``own_history`` rows are engine-written only: {"turn", "kind": "you", "action", "result"} for the
+    seat's own turns (``result`` is the engine's sentence for that turn) and {"turn", "kind":
+    "observed", "text"} for what the engine let it witness. Stored narration is never sent back, so
+    nothing a narrator invented can become an established fact on a later turn.
     """
     me = setting["seats"][seat]
     c = me["character"]
@@ -295,6 +298,7 @@ def build_messages(setting: Dict[str, Any], seat: str, known: Dict[str, Any], ow
         "You narrate ONE player's private view of a two-player story on opposite sides of one event. "
         f"The player is {c['name']}, {c['role']}. You do not know what the other player thinks, plans or does. "
         "Never state or invent the other player's reasons, actions or whereabouts unless an OBSERVATION below says so. "
+        "Your earlier narration is not shown to you. Only the facts listed below are established. "
         "Write 2 short paragraphs in second person, then four choices.\n"
         "Reply exactly as <narrative>...</narrative><choices>\nA. ...\nB. ...\nC. ...\nD. ...\n</choices>"
     )
@@ -315,7 +319,7 @@ def build_messages(setting: Dict[str, Any], seat: str, known: Dict[str, Any], ow
     for h in (own_history or [])[-HISTORY_FOR_NARRATOR:]:
         if isinstance(h, dict) and h.get("kind") == "you":
             earlier[str(h.get("turn"))] = str(h.get("action") or "")[:MAX_ACTION_CHARS]
-            rows.append(f"- Turn {h.get('turn')}: you acted (player_text.earlier_actions.{h.get('turn')}). Then: {str(h.get('text') or '')[:240]}")
+            rows.append(f"- Turn {h.get('turn')}: you acted (player_text.earlier_actions.{h.get('turn')}). Engine result: {str(h.get('result') or 'nothing recorded')}")
         elif isinstance(h, dict):
             rows.append(f"- Turn {h.get('turn')}: you saw: {h.get('text')}")
         else:

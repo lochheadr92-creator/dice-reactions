@@ -440,6 +440,8 @@ Separate collections `duets` and `duet_turns`. Solo sessions are untouched.
 
 Two-player stories are off by default. Set `DUETS_ENABLED=1` in `backend/.env` and restart the backend to switch them on. Switched off, every `/duets` route answers 404 and the home screen hides the TWO PLAYERS button. Stored duets are kept and return when the switch is on again.
 
+A duet narrator is never sent stored narration. Its history is engine-written only: the seat's own actions, the engine's result sentence for each, and what the engine let that seat witness. Something a narrator invented on one turn is shown to that player and is not carried into any later request.
+
 | Route | Purpose |
 | --- | --- |
 | `POST /duets` | Host picks a seat (`ferryman` or `keeper`). Returns the view and a one-time `invite_code`. |

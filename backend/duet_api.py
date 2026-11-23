@@ -98,6 +98,22 @@ def _entries(setting: Dict[str, Any], seat: str, turns: List[Dict[str, Any]]) ->
     return out
 
 
+def _narrator_history(seat: str, turns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """What ONE seat's narrator is reminded of: engine-written rows only.
+
+    The seat's own actions, the engine's result for each, and what the engine let it witness.
+    Stored narration is shown to the player (``_entries``) and never sent back to a narrator.
+    """
+    out: List[Dict[str, Any]] = []
+    for t in turns:
+        if t["seat"] == seat:
+            out.append({"turn": t["turn_number"], "kind": "you", "action": t["action_text"],
+                        "result": t.get("engine_note") or ""})
+        for sentence in (t.get("observations") or {}).get(seat, []):
+            out.append({"turn": t["turn_number"], "kind": "observed", "text": sentence})
+    return out
+
+
 def _view(setting: Dict[str, Any], doc: Dict[str, Any], seat: str, turns: List[Dict[str, Any]]) -> Dict[str, Any]:
     me = setting["seats"][seat]
     status = doc["status"]
@@ -294,7 +310,7 @@ def register(api_router: APIRouter, *, get_db: Callable[[], Any], narrate: Narra
             entries = _entries(setting, seat, turns)
             last_own = max([t["turn_number"] for t in turns if t["seat"] == seat] or [0])
             pending_obs = [e["text"] for e in entries if e["kind"] == "observed" and e["turn"] > last_own]
-            history = [e for e in entries if e["kind"] in ("you", "observed")]
+            history = _narrator_history(seat, turns)
             messages = duet.build_messages(setting, seat, known, history, pending_obs, req.action_text, result["note"],
                                            duet.location_text(setting, world, seat))
             async def keep_lease() -> None:
