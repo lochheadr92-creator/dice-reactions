@@ -52,12 +52,16 @@ def test_missing_genre_still_uses_modern_frame():
 
 
 def test_opening_lines_require_the_custom_world_on_the_page():
-    lines = creation_contract.build_opening_setup_lines(_contract(CUSTOM_WORLD_TYPE))
+    data: dict = {}
+    lines = creation_contract.build_opening_setup_lines(_contract(CUSTOM_WORLD_TYPE), data)
     text = "\n".join(lines)
-    assert CUSTOM_WORLD_TYPE in text
+    # The typed world type is data; engine lines refer to it by key.
+    ref = creation_contract.player_data_ref("world_type")
+    assert data["world_type"] == CUSTOM_WORLD_TYPE
+    assert CUSTOM_WORLD_TYPE not in text
     assert "contemporary" not in text
     assert "grounded_present" not in text
-    assert any("must appear" in line and CUSTOM_WORLD_TYPE in line for line in lines)
+    assert any("must appear" in line and ref in line for line in lines)
 
 
 def test_opening_lines_for_catalog_genre_have_no_custom_world_line():

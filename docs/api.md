@@ -27,7 +27,7 @@ Minimal uptime probe. Does not expose model names, runtime configuration, or adm
 | Field | Type | Description |
 |-------|------|-------------|
 | `status` | string | `"ok"` when reachable |
-| `llm_configured` | boolean | Whether `OPENROUTER_API_KEY` is set |
+| `llm_configured` | boolean | Whether the configured story model route has what it needs (`ai_service.is_configured`). Covers OpenRouter, the direct OpenAI-compatible route and the NVIDIA route. It does not say which route is in use. |
 
 Full AI settings: `GET /api/admin/settings` (requires `X-Admin-Api-Key`).
 
@@ -62,10 +62,15 @@ Start a new chronicle.
 | `tone` | no | string | Narrative tone |
 | `difficulty` | no | string | `soft`, `standard`, `hard`, `brutal` (default `standard`) |
 | `debug_mode` | no | boolean | Request debug blocks from model |
-| `custom_premise` | no | string | Free-text premise |
+| `custom_premise` | no | string | Legacy free-text premise. Still accepted. The builders send the player's premise in `custom_world_setup.premise` |
 | `mode` | no | string | `basic` or `advanced` |
 | `scenario_id` | no | string | Curated scenario override |
-| `custom_world_setup` | no | object | Custom World 6-part setup (see frontend types) |
+| `custom_world_setup` | no | object | Builder answers (see `CustomWorldSetup` in `frontend/src/api.ts`). Includes `premise` (the player's own premise, at most 600 characters kept), `timePeriod`, `recentChange` and the other Guided and Advanced answers |
+| `prose_mode` | no | string | Turn length. `brief`, `standard`, `story`, `cinematic`, or the aliases `S`, `M`, `L`, `XL`. Paragraph ranges 1 to 2, 2 to 4, 4 to 6, 6 to 8 |
+| `prose_style` | no | string | Writing style. `plain`, `balanced` or `rich`. At most 32 characters |
+| `thinking_effort` | no | string | Speed. `low`, `medium` or `high`. At most 32 characters. Used only when the direct route is configured with a named effort |
+
+Text the player types (genre, role, tone, premise, custom answers) reaches the model as bounded story data in a `<player_story_data>` block in the final user message, never as part of an engine instruction. See `docs/story-engine.md`.
 
 **Response:** `{ session_id, turn, session }` — player allowlist serializers only (`player_api.py`). No `device_id`, `rolling_state`, `debug`, or engine metadata in responses.
 
@@ -218,6 +223,20 @@ Switch simulation mode mid-chronicle.
 **Request:** `{ mode: "basic" | "advanced" }`
 
 **Response:** `{ mode }`
+
+### `POST /story/session/{session_id}/play-settings`
+
+Change turn length, writing style or speed for a story you own. `mode` (above) and `prose_mode` are different settings.
+
+**Header:** `X-Device-Id` (required)
+
+**Request:** any of `{ prose_mode, prose_style, thinking_effort }`. Send only what changes. `prose_mode` takes `brief`, `standard`, `story`, `cinematic` or `S`, `M`, `L`, `XL`. `prose_style` takes `plain`, `balanced`, `rich`. `thinking_effort` takes `low`, `medium`, `high`.
+
+**Response:** the accepted values in canonical form, for example `{ "prose_mode": "story" }`.
+
+**Errors:** 400 for an unknown value or a body with no known setting. 422 for a wrong type or an over-long string. 404 when the story does not exist or belongs to another device.
+
+**Effect:** the next action uses the new values. Nothing already written changes. This is a preference, not play: it does not change `updated_at`, so the story keeps its place in the list. It does not touch the turn count, the revision or a held action lease. Values equal to the stored ones write nothing. A real change stamps `settings_updated_at`.
 
 ### `GET /story/session/{session_id}/export`
 

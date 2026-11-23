@@ -469,7 +469,7 @@ export default function SettingsScreen() {
           </Text>
           <Text style={styles.aboutBody}>
             A persistent causal simulation. Every action resolved through hidden D20 logic. Failure
-            redirects, success costs, and consequences carry. Powered by OpenRouter.
+            redirects, success costs, and consequences carry. Stories are written by an AI language model.
           </Text>
         </TouchableOpacity>
       </ScrollView>

@@ -19,7 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import scenario_coherence as sc  # noqa: E402
 import server  # noqa: E402
 
-NARRATIVE = "Rain streaks the lane. You clutch your satchel near the well."
+# Two paragraphs: the default turn length shows 2 to 4, and a one-paragraph reply is now re-broken at delivery.
+NARRATIVE = "Rain streaks the lane.\n\nYou clutch your satchel near the well."
 
 PRIOR = {
     "scene": "small settlement lane",
@@ -108,7 +109,7 @@ def test_repair_replaces_only_the_bad_choice_and_keeps_the_turn():
     assert repaired.choices[0]["text"] == GOOD["A"]
     assert repaired.choices[2]["text"] == GOOD["C"]
     assert repaired.choices[3]["text"] == GOOD["D"]
-    assert repaired.choices[1]["text"] == "Survey the immediate surroundings carefully"
+    assert repaired.choices[1]["text"] == "Look over the scene again for anything you missed"
     assert repaired.narrative == parsed.narrative
     assert repaired.rolling_state == parsed.rolling_state
     assert "Harwood" not in new_raw and "Harwood" not in repaired.raw
@@ -237,7 +238,7 @@ def test_unknown_person_choice_keeps_the_turn_without_a_retry():
     assert meta.get("validation_choice_repair") == "B:Harwood"
     assert not meta.get("validation_retried")
     assert not meta.get("validation_hard_fallback")
-    assert NARRATIVE in parsed.narrative
+    assert parsed.paragraphs == NARRATIVE.split("\n\n")
     assert "Harwood" not in " ".join(c["text"] for c in parsed.choices)
     assert "Harwood" not in raw
     assert server._meta_into_debug({}, meta)["validation_choice_repair"] == "B:Harwood"

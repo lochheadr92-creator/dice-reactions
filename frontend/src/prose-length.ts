@@ -58,7 +58,7 @@ export const SPEEDS: readonly {
 }[] = [
   { value: "fast", label: "Fast", thinkingEffort: "low", explanation: "Turns arrive soonest. The model thinks least, so rule slips are a little more likely." },
   { value: "balanced", label: "Balanced", thinkingEffort: "medium", explanation: "A middle setting. Slower than Fast." },
-  { value: "careful", label: "Careful", thinkingEffort: "high", explanation: "The model thinks longest before writing. Slowest turns. On Grok this was 3 to 4 minutes for an opening." },
+  { value: "careful", label: "Careful", thinkingEffort: "high", explanation: "The model thinks longest before writing. Slowest turns. In testing, an opening took 3 to 4 minutes." },
 ];
 
 export const DEFAULT_SPEED: Speed = "fast";

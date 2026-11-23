@@ -1667,6 +1667,28 @@ def project_active_pressures(graph: Mapping[str, Any], *, limit: int = 3) -> Lis
     return out
 
 
+FOREGROUND_PRESSURE_KEY = "foreground_pressure"
+FOREGROUND_PRESSURE_REF = f"player_story_data.{FOREGROUND_PRESSURE_KEY}"
+
+
+def _is_player_seeded(node: Mapping[str, Any]) -> bool:
+    return str(node.get("origin_type") or "") == "custom_setup"
+
+
+def foreground_player_label(graph: Optional[Mapping[str, Any]]) -> Optional[str]:
+    """The foreground pressure's wording, when the player typed it. Otherwise None."""
+    if not isinstance(graph, Mapping):
+        return None
+    fg_id = graph.get("foreground_node_id")
+    for node in graph.get("nodes") or []:
+        if isinstance(node, dict) and node.get("id") == fg_id:
+            if node.get("status") == "active" and _is_player_seeded(node):
+                label = str(node.get("label") or "").strip()
+                return label or None
+            return None
+    return None
+
+
 def build_pressure_directive(graph: Mapping[str, Any]) -> str:
     """Non-persisted guidance to surface the foreground pressure."""
     fg_id = graph.get("foreground_node_id")
@@ -1684,10 +1706,17 @@ def build_pressure_directive(graph: Mapping[str, Any]) -> str:
     label = str(fg_node.get("label") or fg_node.get("kind") or "rising pressure").strip()
     trend = _coerce_trend(fg_node.get("trend"))
     trend_word = "rising" if trend > 0 else "steady" if trend == 0 else "easing"
+    # A pressure seeded from the builder carries the player's own words. Those
+    # are story data: this engine line refers to them by key and the caller puts
+    # the wording in the player story data block (see foreground_player_label).
+    if _is_player_seeded(fg_node):
+        subject = f"the player's seeded pressure ({FOREGROUND_PRESSURE_REF})"
+    else:
+        subject = f"'{label}'"
     lines = [
         PRESSURE_DIRECTIVE_MARKER,
         "INTERNAL — foreground pressure (engine guidance; do not expose graph labels):",
-        f"- Surface '{label}' through sensory detail this turn ({trend_word} pressure).",
+        f"- Surface {subject} through sensory detail this turn ({trend_word} pressure).",
         "- Do not invent a wholly new crisis unrelated to established state.",
     ]
     recent = (graph.get("threshold_crossings") or [])[-1:]

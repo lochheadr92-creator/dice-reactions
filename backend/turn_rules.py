@@ -26,5 +26,6 @@ TURN_CLARITY_RULES = (
     "still open. A scene that has run three turns must be resolved or left.\n"
     "4. Choices. Each choice is an action that could change the situation. Never offer "
     "a choice that repeats what the player just did. Watching or waiting is a choice "
-    "only when the choice says what it is for."
+    "only when the choice says what it is for. A choice never states a number, a name "
+    "or an agreement between people that the story has not already shown."
 )

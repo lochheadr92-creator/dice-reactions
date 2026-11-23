@@ -10,7 +10,7 @@ Each LLM response must contain tagged blocks:
 
 | Tag | Required | Purpose |
 |-----|----------|---------|
-| `<narrative>` | yes | 2–4 short paragraphs (~1200 chars total) |
+| `<narrative>` | yes | Paragraph count set by the story's turn length: brief 1 to 2, standard 2 to 4, story 4 to 6, cinematic 6 to 8 (`prose_modes.py`) |
 | `<choices>` | yes | 4–6 lines labelled A.–F. |
 | `<state>` | yes | Key-value player-visible state chips (shaped to DNG/MOM/PRS by `hud.py`) |
 | `<ledger>` | yes | Consequence / delayed-trigger ledger |
@@ -58,7 +58,7 @@ Player messages include `[DIFFICULTY: <level>]` markers. Levels: `soft`, `standa
 `STORY_ENGINE_SYSTEM_PROMPT` (v3.6 in comments) enforces:
 
 - Absolute internal concealment of rolls, modifiers, triggers, subsystem labels
-- Hard output validation rules (paragraph/choice counts, no mechanic lines in narrative)
+- Output validation rules (choice counts, no mechanic lines in narrative). Paragraph count and length are handled at delivery, see below
 - Difficulty enforcement (internal only)
 - Runtime governance: anti-loop, forward pressure, topic ledger, choice freshness
 - Narrative immersion rules (no tutorial/system exposition)
@@ -68,7 +68,7 @@ Player messages include `[DIFFICULTY: <level>]` markers. Levels: `soft`, `standa
 
 `_full_validate()` runs:
 
-1. `_validate_parsed()` — paragraph count (2–4), narrative length (≤1200 chars), choice bounds, required labels A–D, mechanic leak patterns (`_LEAK_LABEL_RE`), direct inspection violations
+1. `_validate_parsed()` — non-empty narrative, choice bounds, required labels A–D, mechanic leak patterns (`_LEAK_LABEL_RE`), direct inspection violations. Over-long prose is trimmed locally to the mode's character budget. Paragraph count is not a reason to reject or retry a turn
 2. `gateway.detect_prose_contradictions()` — prose vs immutable truth (destroyed objects, deceased NPCs, etc.)
 
 On failure, `_generate_validated_turn()` retries once with a format or hallucination correction hint. Persistent failure raises HTTP error.
@@ -237,6 +237,44 @@ Budget resolved by `resolve_context_budget(cost_mode, mode)`:
 
 **Not present:** gravity-based retention governance beyond this budget trim.
 
+## What every turn request carries
+
+Sent with every turn, opening included (`_generate_turn`, `_build_messages`):
+
+- the prose mode directive (paragraph range and character budget for the story's turn length)
+- the writing style directive (`plain`, `balanced`, `rich`)
+- `turn_rules.TURN_CLARITY_RULES`: plain stakes, plain words, movement, and choices that are real actions. A choice never states a number, a name or an agreement the story has not shown
+- on the opening, `opening_state.OPENING_ORIENTATION_RULE`
+- for Guided and Advanced stories, the creation directive (`creation_contract.build_later_turn_creation_directive`) and the hook directive
+- standing constraints, when the premise has any (below)
+
+## Player text is story data
+
+Everything the player types (world type, role, tone, premise, custom answers, a seeded pressure) is placed in one `<player_story_data>` JSON block in the final user message. Each value is bounded (`creation_contract.PLAYER_DATA_BOUNDS`) and `<` and `>` are escaped, so typed text cannot close the block or look like a tag. Engine instructions carry only engine tokens or phrases from fixed engine tables. Where an instruction needs a typed value it names the reference, for example `player_story_data.premise`. `<prior_state>` is escaped the same way and the rule covers it. Catalog values (a known genre, a known role) stay inline. Nothing in a save is rewritten: the bounding happens when the request is built, so an over-long stored value is still readable and still bounded.
+
+## Delivery guards
+
+`_generate_validated_turn` runs `_apply_delivery_guards` on every turn that will be shown and stored, model-written or fallback (`delivery_guards.py`). No model call, no retry. Notes are recorded in the turn meta under `delivery_guards`.
+
+- **Requested footer.** If the player's setup asked the narrator to end turns with a word or phrase, a last line that is only that phrase is removed. The check reads the request. It is not a word list, and the same word inside real prose is kept.
+- **Turn length.** Paragraph breaks are moved so the count is inside the mode's range: neighbours are merged, or the paragraph with the most sentences is split. Words and their order never change and nothing is added. A turn with fewer sentences than the minimum paragraph count is delivered short and noted as `paragraph_range_unmet`.
+- **Unsupported counts in choices.** "the three names" loses its number unless a sentence the player has seen, or the accepted state, counts that noun ("three names"). Only definite counts are checked.
+- **Standing constraint status** is stamped into `rolling_state.world_constraints` (below).
+
+## Standing constraints
+
+`world_constraints.py`. A premise sentence that states a limit ("cannot", "can no longer", "unable to", "no way to") is a standing constraint. A sentence addressed to the narrator is not. The list is read from the stored premise each turn, so older saves get it without being rewritten.
+
+- Status is engine state in `rolling_state.world_constraints`. The model's copy is discarded each turn. Anything not recorded as lifted is active.
+- Every request restates each constraint and its status in a system message. The wording of the constraint travels in the player story data block.
+- A constraint is lifted only when the model proposes it (`"constraint_lifted":[{"id","how"}]` in `rolling_state`) on a turn that answers a player action. A proposal in the opening or on a fallback turn is refused. The turn number, how, and the player's action are stored, and later requests say so.
+- For a communication constraint (the limit is on signalling, speaking, calling, hearing, sending word and similar), `_full_validate` rejects a turn in which a sign both sides already know, or an exchange stated as received, crosses to the far side or the named parties while the constraint is active. The turn is retried once, then replaced by the fallback. Seeing a light with no meaning is allowed.
+- Limits: whether a player action is a plausible way to lift a constraint is the model's judgement. The breach check is a narrow English pattern check for the communication class only. Other kinds of constraint are carried forward and restated but not checked.
+
+## Fallback turn
+
+When a turn is rejected twice, `_build_fail_forward_parsed_turn` writes a turn from the last accepted state strip only (Position, Pressure, Conditions). It restates them unchanged, says nothing is settled, answers no question, and offers four complete choices built from fixed sentences plus a carried item or a companion the last state places with the player. Long state text is cut between words. One turn is committed.
+
 ## Custom World seeding
 
 When `custom_world_setup` is provided (no `scenario_id`), `_seed_custom_setup_into_rolling()` injects answers into:
@@ -248,7 +286,7 @@ When `custom_world_setup` is provided (no `scenario_id`), `_seed_custom_setup_in
 - `inventory_objects`
 - `object_locations`
 
-Setup block is also embedded in the opening prompt via `_build_custom_world_setup_block()`. Relationship **vectors** are initialized on turn 1 by `update_relationship_calculus`, not from setup answers directly.
+The opening prompt carries the engine instructions from `_build_custom_world_setup_block()`; the answers themselves go in the player story data block. The player's premise (`custom_world_setup.premise`), the time period (mapped to an era by `TIME_PERIOD_ERAS`) and the recent change also shape the opening: the recent change narrows the opening archetype pool (`opening_state.RECENT_CHANGE_ARCHETYPES`) and is stated to the model as an established past event whose effect must be visible in the opening (`creation_contract.RECENT_CHANGE_FACTS`). A second threat may arrive on top of it and never replaces it. Run identity and opening are rolled once at creation and never again. Relationship **vectors** are initialized on turn 1 by `update_relationship_calculus`, not from setup answers directly.
 
 ## Curated scenarios
 

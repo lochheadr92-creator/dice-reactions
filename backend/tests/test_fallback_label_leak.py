@@ -91,13 +91,15 @@ def test_fallback_text_never_contains_internal_pressure_labels(active_pressures,
 
 def test_fallback_uses_the_last_shown_pressure_line():
     parsed = _fallback(_session({"Pressure": "[Firewood dwindling]"}, ["trust duty"]))
-    assert "Firewood dwindling still presses on the scene" in parsed.narrative
+    assert "What presses on you has not changed either: Firewood dwindling." in parsed.narrative
     assert "[" not in parsed.narrative
-    assert any(c["text"] == "Respond carefully to Firewood dwindling" for c in parsed.choices)
+    # Fallback choices no longer carry pressure text (review 2, finding 2).
+    assert not any("Firewood" in c["text"] or "[" in c["text"] for c in parsed.choices)
 
 
 def test_fallback_without_a_pressure_line_uses_generic_wording():
     parsed = _fallback(_session({}, ["trust duty"]))
-    assert "Time edges forward under the same constraints" in parsed.narrative
-    assert any(c["text"] == "Hold position and wait a moment" for c in parsed.choices)
+    assert "Nothing is settled yet." in parsed.narrative
+    assert "What presses on you" not in parsed.narrative
+    assert any(c["text"] == "Listen to the people around you before you move" for c in parsed.choices)
     assert "Pressure" not in (parsed.state or {})

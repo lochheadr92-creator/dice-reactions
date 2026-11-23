@@ -57,12 +57,12 @@ Optional overrides (see `ai_config.py` / `ai_service.py`):
 | `LOW_COST_CONTEXT_BUDGET_TOKENS` | `7000` | Low-cost budget |
 | `ADVANCED_CONTEXT_BUDGET_TOKENS` | `16000` | Advanced mode budget |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | API base |
-| `OPENAI_DIRECT_REASONING_EFFORT` | unset | Sent as `reasoning_effort` only for `openai-direct/*` models. Set `none` for local Ollama thinking models, which otherwise spend `max_tokens` on thinking and return empty content. Set `low` for Grok 4.7 on xAI direct, which reasons at `high` when this is unset and cannot turn reasoning off (measured 2026-11-23: openings 89 s at `low` against 198 to 262 s unset). On this route the engine also joins its leading system messages into one, because some local chat templates (Qwen in Ollama) reject more than one |
+| `OPENAI_DIRECT_REASONING_EFFORT` | unset | Sent as `reasoning_effort` only for `openai-direct/*` models. Set `none` for local Ollama thinking models, which otherwise spend `max_tokens` on thinking and return empty content. When this is `low`, `medium` or `high`, a story's own Speed setting (`thinking_effort`) replaces it for that story's requests only. When it is unset or `none`, the per-story setting is ignored. Set `low` for Grok 4.7 on xAI direct, which reasons at `high` when this is unset and cannot turn reasoning off (measured 2026-11-23: openings 89 s at `low` against 198 to 262 s unset). On this route the engine also joins its leading system messages into one, because some local chat templates (Qwen in Ollama) reject more than one |
 | `OPENAI_DIRECT_ASSISTANT_PREFILL` | off | When `true`, story turns on `openai-direct/*` models send `<rolling_state>\n{` as the start of the model's reply, and the engine puts it back on the returned text. The model can no longer skip the required state block. Needs a server that continues a trailing assistant message (Ollama does; real OpenAI does not). Never applied to OpenRouter |
 | `SSL_USE_SYSTEM_TRUST_STORE` | off | `true` verifies provider HTTPS against the operating system's trust store (truststore) instead of certifi. Needed when antivirus HTTPS scanning (e.g. Norton Web Shield) re-signs traffic, which otherwise fails with `CERTIFICATE_VERIFY_FAILED`. If truststore is not installed, the engine refuses to start |
 | `MATURE_RENDERER_ENABLED` | off | `true` turns on the second-pass mature prose renderer (also needs `MATURE_MODEL_ID`, `DISTRIBUTION_CHANNEL=development` or `adult_web`, `ENABLE_MATURE_CONTENT=true`, and a story created with adult mode on). Known risk: the rewrite can change events (docs/failure-modes.md FM-30). Tests pin it off |
 | `MATURE_MODEL_ID` | unset | Pinned model id for the renderer, e.g. `openai-direct/dice-qwen36` (`:latest` ids are refused) |
-| `DEFAULT_PROSE_MODE` | `standard` | Narration length for new stories when the app sends no `prose_mode`: `brief` (300-600 chars), `standard` (700-1200), `story` (1800-2400), `cinematic` (3000-4000). Only these four names are accepted; any other value stops the engine at startup. Existing stories keep the mode they were created with. Tests pin it to `standard` |
+| `DEFAULT_PROSE_MODE` | `standard` | Narration length for new stories when the app sends no `prose_mode`: `brief` (300-600 chars), `standard` (700-1200), `story` (1800-2400), `cinematic` (3000-4000). Only these four names are accepted; any other value stops the engine at startup. An existing story keeps its mode until the player changes turn length in Settings (the play screen sends it on focus) or `POST /api/story/session/{id}/play-settings` is called. Paragraph ranges: brief 1 to 2, standard 2 to 4, story 4 to 6, cinematic 6 to 8. Tests pin it to `standard` |
 | `VALIDATION_RETRY_STYLE` | `show_rejected` | How a rejected turn is retried. `show_rejected` appends the rejected reply and a rewrite instruction. `fresh` asks for the turn again with one short correction line on the player's message and does not show the rejected reply. Use `fresh` for local Ollama models: shown its own rejected reply, Qwen writes only the state block and stops (docs/eval, 2026-11-21). Any other value stops the engine at startup. Tests pin `show_rejected` |
 | `APP_PUBLIC_URL` | example URL | OpenRouter referer header |
 | `APP_TITLE` | `Dice Reaction Story Engine` | OpenRouter title header |
@@ -153,9 +153,9 @@ Integration tests read `EXPO_PUBLIC_BACKEND_URL` from `frontend/.env` via `conft
 
 1. Open Settings.
 2. Tap the version row 7 times within 2 seconds.
-3. Client sets `developerUnlocked: true` in AsyncStorage.
-4. Client calls `POST /admin/settings` with `developer_mode: true`.
-5. Play screen exposes diagnostics panel; API returns `rolling_state`, `debug`, `raw`.
+3. Client sets `developerUnlocked: true` in AsyncStorage. This shows the ADMIN section and the local diagnostics panel. It changes nothing on the server.
+4. Server settings, including `developer_mode`, are read and saved only with the operator key (`X-Admin-Api-Key`) entered in the ADMIN section.
+5. With server developer mode on, the API returns `rolling_state`, `debug`, `raw` for stories created with debug on.
 
 Lock developer access reverses both local and server flags.
 

@@ -44,10 +44,21 @@ def test_premise_is_bounded():
 
 
 def test_premise_reaches_the_opening_request_and_later_turns():
+    # The premise travels as data: the engine line refers to it by key and the
+    # text itself sits in the player story data block (review 2, finding 1).
     contract = _contract({"premise": PREMISE})
     assert contract["premise"] == PREMISE
-    assert any(PREMISE in line for line in creation_contract.build_opening_setup_lines(contract))
-    assert PREMISE in creation_contract.build_later_turn_creation_directive(contract)
+    ref = creation_contract.player_data_ref("premise")
+    opening_data: dict = {}
+    opening = creation_contract.build_opening_setup_lines(contract, opening_data)
+    assert any(ref in line for line in opening)
+    assert not any(PREMISE in line for line in opening)
+    assert opening_data["premise"] == PREMISE
+    later_data: dict = {}
+    later = creation_contract.build_later_turn_creation_directive(contract, later_data)
+    assert ref in later and PREMISE not in later
+    assert later_data["premise"] == PREMISE
+    assert PREMISE in creation_contract.render_player_story_data(later_data)
 
 
 def test_no_premise_adds_no_premise_lines():
@@ -155,5 +166,8 @@ def test_every_mapped_archetype_exists():
 
 def test_recent_change_line_tells_the_opening_not_to_contradict_it():
     contract = _contract({"recentChange": "custom_event", "customRecentChange": "opportunities arising"})
-    lines = creation_contract.build_opening_setup_lines(contract)
-    assert any("opportunities arising" in line and "must not contradict" in line for line in lines)
+    data: dict = {}
+    lines = creation_contract.build_opening_setup_lines(contract, data)
+    ref = creation_contract.player_data_ref("recent_change")
+    assert any(ref in line and "already happened" in line and "never replaces it" in line for line in lines)
+    assert data["recent_change"] == "opportunities arising"

@@ -27,6 +27,8 @@ from reliability_support import (  # noqa: E402
     relax_rate_limits,
 )
 
+# One paragraph, so these stories use the short turn length (1 to 2 paragraphs). At the default
+# length a one-paragraph reply is re-broken at delivery (review 2, finding 3).
 CANONICAL_OPENING = "Mara waits outside the locked gate. The key remains in your pocket."
 CANONICAL_ACTION = "Mara still waits outside the locked gate. The key stays in your pocket."
 RENDERED = {
@@ -91,6 +93,7 @@ def test_enabled_renderer_runs_inside_budget_and_serves_rewrite(env, renderer):
                 json={
                     "device_id": device,
                     "genre": "fantasy",
+                    "prose_mode": "brief",
                     "mature_content": {
                         **mature_content.default_mature_content(),
                         "adult_mode_enabled": True,

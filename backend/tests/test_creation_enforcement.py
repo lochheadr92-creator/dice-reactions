@@ -917,8 +917,14 @@ def test_fail_forward_builder_preserves_prior_state_and_grounds_choices():
     assert labels == {"A", "B", "C", "D"}
     blob = " ".join(c["text"] for c in parsed.choices).lower()
     assert "satchel" in blob or "well" in blob
-    assert "mira" in blob
-    assert "scarcity" in blob
+    # Review 2 finding 2: a fallback choice names a person only when the last shown
+    # state places them with the player, and never carries pressure text (a long
+    # pressure line was cut mid-word inside a choice). The pressure is restated in
+    # the narrative from the last shown state instead.
+    assert "mira" not in blob
+    assert "scarcity" not in blob
+    assert "What presses on you has not changed either: scarcity." in parsed.narrative
+    assert all(c["text"][-1].isalpha() for c in parsed.choices)
     assert "Harwood" not in blob
     assert "pistol" not in blob
     # Merge must not drop prior when fallback rolling is prior copy

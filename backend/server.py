@@ -68,6 +68,8 @@ import repetition_guard  # noqa: E402
 import prose_modes  # noqa: E402  — Prose Length System v2 (presentation-only)
 import ai_service  # noqa: E402  — per-story thinking effort
 import turn_rules  # noqa: E402  — always-on clarity and movement rules
+import delivery_guards  # noqa: E402  — deterministic checks on every delivered turn
+import world_constraints  # noqa: E402  — limits the player wrote into the premise
 import story_secrets as secrets  # deterministic story secret engine
 import replayability  # noqa: E402  — Replayability Engine v1 (deterministic)
 import stress  # noqa: E402  — Ch 14 Stress substrate v1 (deterministic)
@@ -1245,7 +1247,12 @@ def _build_opening_prompt(
     )
 
 
-def _build_custom_world_setup_block(setup: Optional[Dict[str, Any]]) -> str:
+def _build_custom_world_setup_block(
+    setup: Optional[Dict[str, Any]], player_data: Optional[Dict[str, Any]] = None
+) -> str:
+    """Engine instructions for the custom setup. The answers themselves are typed
+    by the player, so they go into ``player_data['setup_answers']`` and are
+    rendered inside the player story data block, never beside these lines."""
     if not setup:
         return ""
     # Never expose engine-only hidden keys (e.g. the player's Secret) to the model.
@@ -1267,8 +1274,7 @@ def _build_custom_world_setup_block(setup: Optional[Dict[str, Any]]) -> str:
         "stress, trust, leverage, jealousy, dependency, attachment, suspicion, delayed consequences, and material behavior. "
         "They are never isolated flavor toggles. Romantic or adult-adjacent dynamics must involve consenting adults, remain non-explicit, and stay grounded in character logic and consequence propagation.\n"
         "Do not exposition-dump this setup. Reveal it through consequences, scarcity, NPC behavior, rumors, environment, and conflict.\n"
-        + _json.dumps(clean, ensure_ascii=False, indent=2)
-        + "\n"
+        f"The answers are in {creation_contract.place_setup_answers(player_data, clean)}.\n"
     )
 
 
@@ -2457,6 +2463,10 @@ async def _build_messages(
     messages: List[Dict[str, str]] = [
         {"role": "system", "content": STORY_ENGINE_SYSTEM_PROMPT},
     ]
+    # Bounded copies of everything the player typed that this request refers to.
+    # Rendered once, as JSON, inside the final user message (finding 1).
+    player_data: Dict[str, Any] = {}
+    creation_frame_contract: Optional[Dict[str, Any]] = None
 
     pacing_directive = pacing.build_early_game_directive(
         early_game_stage, session.get("rolling_state")
@@ -2478,11 +2488,32 @@ async def _build_messages(
         rb_directives, include_opening=False
     ):
         messages.append({"role": "system", "content": rb_body})
+    # A pressure the player seeded keeps its wording in the data block.
+    replay_state = session.get("replayability_state")
+    seeded_label = pressure_graph.foreground_player_label(
+        replay_state.get("pressure_graph") if isinstance(replay_state, dict) else None
+    )
+    if seeded_label:
+        creation_contract.place_player_value(
+            player_data, pressure_graph.FOREGROUND_PRESSURE_KEY, seeded_label
+        )
 
     # Runtime authority order (Stage 2B):
     #   session + rolling → creation/scenario contract → pressure/consequences
     #   → player-safe knowledge → memory/narration → response
     # Recent narration must not become authority by repetition.
+
+    # Limits the player wrote into the premise stay true until the player ends them.
+    standing = _story_constraints(session)
+    if standing:
+        constraint_ctx = world_constraints.build_directive(
+            standing,
+            world_constraints.status_rows(standing, session.get("rolling_state")),
+            player_data,
+            has_player_action=not include_opening,
+        )
+        if constraint_ctx:
+            messages.append({"role": "system", "content": constraint_ctx})
 
     # Compact scenario reassertion on every turn when a curated scenario is selected.
     # Prevents narrative recency from replacing scenario authority after Turn 1.
@@ -2495,15 +2526,16 @@ async def _build_messages(
     # Session fields are authoritative; do not resend the full onboarding bag.
     if session.get("custom_world_setup") and not session.get("scenario_id"):
         contract = creation_contract.build_creation_contract(session)
+        creation_frame_contract = contract
         # Re-assert unresolved seeded pressures into the bounded projection.
         seeded = creation_contract.active_seeded_pressure_labels(session)
         if seeded and not contract.get("active_pressures"):
             contract = dict(contract)
             contract["active_pressures"] = seeded
-        creation_ctx = creation_contract.build_later_turn_creation_directive(contract)
+        creation_ctx = creation_contract.build_later_turn_creation_directive(contract, player_data)
         if creation_ctx:
             messages.append({"role": "system", "content": creation_ctx})
-        hook_inf = creation_contract.build_hook_influence_directive(contract)
+        hook_inf = creation_contract.build_hook_influence_directive(contract, player_data)
         if hook_inf:
             messages.append({"role": "system", "content": hook_inf})
         # Difficulty is consequence policy (severity multiplier), not tone.
@@ -2549,9 +2581,17 @@ async def _build_messages(
         # model the engine-authoritative facts it may not contradict.
         truth_block = gateway.build_immutable_truth_block(rolling)
         rel_block = relationships.build_relationship_block(rolling)
+        # State values are data too. Typed creation values are referred to by key
+        # (one bounded copy lives in the player story data block), and < > are
+        # escaped so no state string can look like a tag or close this block.
+        prompt_rolling = creation_contract.project_state_refs(
+            _prompt_safe_rolling(rolling), creation_frame_contract, player_data
+        )
         prior_state_block = (
             "<prior_state>\n"
-            + _json.dumps(_prompt_safe_rolling(rolling), indent=2, ensure_ascii=False)
+            + creation_contract.escape_angle_brackets(
+                _json.dumps(prompt_rolling, indent=2, ensure_ascii=False)
+            )
             + "\n</prior_state>\n\n"
         )
         prefix = ""
@@ -2560,6 +2600,14 @@ async def _build_messages(
         if rel_block:
             prefix += rel_block + "\n\n"
         user_text = prefix + prior_state_block + user_text
+
+    if player_data:
+        # The opening request is engine-built and may already hold the block;
+        # merge into it. A later request holds the player's own action text, so
+        # the block is only ever prepended there, never searched for.
+        user_text = creation_contract.attach_player_story_data(
+            user_text, player_data, merge_existing=include_opening
+        )
 
     messages.append({"role": "user", "content": user_text})
     return messages
@@ -3023,6 +3071,24 @@ def _full_validate(
     )
     if contradictions:
         return False, "; ".join(contradictions[:3]), "hallucination"
+
+    # A limit from the premise that is still active may not end in passing.
+    standing = _story_constraints(session)
+    if standing:
+        proposed = parsed.rolling_state.get(world_constraints.LIFT_REQUEST_KEY) if isinstance(parsed.rolling_state, dict) else None
+        lifting_now = (
+            [str(item.get("id")) for item in proposed if isinstance(item, dict)]
+            if isinstance(proposed, list) and str(player_action or "").strip()
+            else []
+        )
+        breach = world_constraints.breach_reason(
+            parsed.paragraphs or [],
+            standing,
+            world_constraints.status_rows(standing, session.get("rolling_state")),
+            lifting_now,
+        )
+        if breach:
+            return False, breach, "coherence"
     return True, "", "ok"
 
 
@@ -3063,25 +3129,40 @@ def _fallback_scene_label(session: Dict[str, Any], rolling: Dict[str, Any]) -> s
     return "the immediate area"
 
 
-def _fallback_pressure_phrase(rolling: Dict[str, Any], session: Dict[str, Any]) -> str:
-    """Player-facing pressure phrase for fallback text.
+def _cut_on_word(text: Any, limit: int) -> str:
+    """Bound text without ever ending inside a word. Empty when nothing whole fits."""
+    cleaned = " ".join(str(text or "").split()).strip().strip("[]").strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    head = cleaned[:limit]
+    if " " not in head:
+        return ""
+    return head.rsplit(" ", 1)[0].rstrip(" ,;:-")
 
-    Only the Pressure line of the last validated turn is used: the player has
-    already been shown it. ``rolling_state.active_pressures`` and the seeded
-    pressure labels are engine projections of the pressure graph (ADR-023),
-    internal names such as "trust duty" or "information debt", and must never
-    reach the player (hidden-mechanics rule). With no Pressure line the
-    fallback text uses its generic wording.
-    """
+
+def _fallback_last_state(session: Dict[str, Any]) -> Dict[str, str]:
+    """The state strip of the last accepted turn: what the player was last shown."""
     last_state = session.get("last_state") if isinstance(session.get("last_state"), dict) else {}
-    pressure = str(last_state.get("Pressure") or "").strip().strip("[]").strip()
-    return pressure[:80]
+    return {str(k): str(v).strip() for k, v in last_state.items() if v is not None and str(v).strip()}
+
+
+FALLBACK_FACT_MAX_CHARS = 240
+FALLBACK_CHOICE_DETAIL_MAX_CHARS = 60
 
 
 def _grounded_fail_forward_choices(
-    rolling: Dict[str, Any], session: Dict[str, Any]
+    rolling: Dict[str, Any],
+    session: Dict[str, Any],
+    player_action: Optional[str] = None,
 ) -> List[Dict[str, str]]:
-    """Bounded choices from location, visible objects, known entities, pressures."""
+    """Four complete actions the player can take from what they already know.
+
+    Every choice is a whole sentence fragment: nothing is cut inside a word. A
+    detail that does not fit whole is left out. Each one says what it is for,
+    and at least one gives a concrete way forward.
+    """
+    last_state = _fallback_last_state(session)
+
     objects: List[str] = []
     for key in ("inventory_objects", "object_locations"):
         for row in rolling.get(key) or []:
@@ -3090,33 +3171,38 @@ def _grounded_fail_forward_choices(
             name = str(row.get("object") or row.get("item") or "").strip()
             if name and name not in objects:
                 objects.append(name)
-    npcs: List[str] = []
+    carried = next(
+        (o for o in objects if _cut_on_word(o, FALLBACK_CHOICE_DETAIL_MAX_CHARS) == " ".join(o.split())),
+        "",
+    )
+
+    # Only someone the last accepted state places with the player may be asked.
+    companion = ""
+    conditions = last_state.get("Conditions", "")
     for row in rolling.get("npcs") or []:
-        if not isinstance(row, dict):
-            continue
-        if row.get("alive") is False:
+        if not isinstance(row, dict) or row.get("alive") is False:
             continue
         name = str(row.get("name") or "").strip()
-        if name and name not in npcs:
-            npcs.append(name)
-    pressure = _fallback_pressure_phrase(rolling, session)
+        if name and re.search(r"\b" + re.escape(name) + r"\b", conditions):
+            companion = name
+            break
 
     texts = [
-        "Survey the immediate surroundings carefully",
+        "Look over the scene again for anything you missed",
         (
-            f"Check the {objects[0][:48]}"
-            if objects
-            else "Examine what is within arm's reach"
+            f"Check your {carried} for something you can use"
+            if carried
+            else "Check what you are carrying for something you can use"
         ),
         (
-            f"Watch {npcs[0][:48]} closely"
-            if npcs
-            else "Listen for movement nearby"
+            f"Ask {companion} what they make of this"
+            if companion
+            else "Listen to the people around you before you move"
         ),
         (
-            f"Respond carefully to {pressure[:48]}"
-            if pressure
-            else "Hold position and wait a moment"
+            "Try what you just did again, a different way"
+            if player_action and str(player_action).strip()
+            else "Wait a moment and watch what changes"
         ),
     ]
     return [{"label": label, "text": text} for label, text in zip("ABCD", texts)]
@@ -3138,39 +3224,45 @@ def _build_fail_forward_parsed_turn(
     last valid rolling snapshot so merge/commit cannot adopt hard-invalid
     model mutations. Engine-owned pre-generation transitions already applied
     to ``session['rolling_state']`` are kept.
+
+    Every fact in the prose comes from one snapshot: the state strip of the last
+    accepted turn, which the player has already been shown and which is stored
+    again unchanged with this turn. The model's private ``character`` note is
+    not used: on 2026-11-23 it said "Pell not yet on the bank" while the shown
+    state said "Pell is on the bank", and the fallback printed both.
     """
     prior = session.get("rolling_state")
     rolling = copy.deepcopy(prior) if isinstance(prior, dict) else {}
+    last_state = _fallback_last_state(session)
     scene = _fallback_scene_label(session, rolling)
-    pressure = _fallback_pressure_phrase(rolling, session)
-    role = str(
-        rolling.get("character")
-        or session.get("role")
-        or "yourself"
-    ).strip()[:120]
+    position = _cut_on_word(last_state.get("Position") or scene, FALLBACK_FACT_MAX_CHARS)
+    pressure = _cut_on_word(last_state.get("Pressure"), FALLBACK_FACT_MAX_CHARS)
+    conditions = _cut_on_word(last_state.get("Conditions"), FALLBACK_FACT_MAX_CHARS)
 
     # Do not echo freeform player_action into prose — it may name unknown
     # people, forbidden tech, or other hard-invalid content that validation
     # already rejected. Keep the receipt of failure in structured meta only.
-    action_bit = (
-        " Your last move does not settle cleanly."
-        if player_action and str(player_action).strip()
-        else ""
-    )
+    acted = bool(player_action and str(player_action).strip())
 
-    paragraphs = [
-        (
-            f"The moment holds without a clean resolution.{action_bit} "
-            f"You remain as {role} in {scene}."
-        ).strip(),
-        (
-            f"{pressure} still presses on the scene; nothing new is invented to escape it."
-            if pressure
-            else "Time edges forward under the same constraints you already face."
-        ),
-    ]
+    # One fact per sentence, each from the snapshot above. What the player did
+    # not learn stays unknown: nothing here answers the action.
+    sentences: List[str] = ["Nothing is settled yet."]
+    if acted:
+        sentences.append("What you just tried has no clear result so far.")
+    if position:
+        sentences.append(f"Your position has not changed: {position}.")
+    if pressure:
+        sentences.append(f"What presses on you has not changed either: {pressure}.")
+    if conditions:
+        sentences.append(f"You are still dealing with: {conditions}.")
+    sentences.append("You can act again now.")
+
+    # Two paragraphs by default; the delivery guard re-divides the same
+    # sentences to fit the story's turn length.
+    split_at = max(1, len(sentences) // 2)
+    paragraphs = [" ".join(sentences[:split_at]), " ".join(sentences[split_at:])]
     narrative = "\n\n".join(paragraphs)
-    choices = _grounded_fail_forward_choices(rolling, session)
+    choices = _grounded_fail_forward_choices(rolling, session, player_action)
 
     last_state = session.get("last_state") if isinstance(session.get("last_state"), dict) else {}
     state: Dict[str, str] = {
@@ -3179,7 +3271,7 @@ def _build_fail_forward_parsed_turn(
     if "Pressure" not in state and pressure:
         state["Pressure"] = pressure
     if "Position" not in state:
-        state["Position"] = scene[:80]
+        state["Position"] = _cut_on_word(scene, 80) or "the immediate area"
     if "Health" not in state:
         state["Health"] = "stable"
 
@@ -3366,7 +3458,120 @@ def _select_soft_best_available(
     return None
 
 
+def _story_constraints(session: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Standing constraints read from the stored premise. Nothing is written to the save."""
+    setup = session.get("custom_world_setup")
+    texts = [setup.get("premise") if isinstance(setup, dict) else None, session.get("custom_premise")]
+    return world_constraints.extract([t for t in texts if isinstance(t, str)])
+
+
+def _delivery_grounding_texts(
+    session: Dict[str, Any], parsed: ParsedTurn, player_action: Optional[str]
+) -> List[str]:
+    """Text the player has seen or the engine has accepted, for grounding checks."""
+    texts: List[str] = list(parsed.paragraphs or [])
+    if player_action:
+        texts.append(str(player_action))
+    snippet = session.get("last_narrative_snippet")
+    if snippet:
+        texts.append(str(snippet))
+    for rolling in (session.get("rolling_state"), parsed.rolling_state):
+        if isinstance(rolling, dict):
+            for key in ("recent_beats", "unresolved", "objectives", "topic_ledger", "scene"):
+                value = rolling.get(key)
+                if isinstance(value, list):
+                    texts.extend(str(item) for item in value if item)
+                elif value:
+                    texts.append(str(value))
+    return texts
+
+
+def _apply_delivery_guards(
+    session: Dict[str, Any],
+    parsed: ParsedTurn,
+    meta: Dict[str, Any],
+    player_action: Optional[str],
+) -> Tuple[ParsedTurn, Dict[str, Any]]:
+    """Deterministic checks on the turn that will be shown and stored.
+
+    Runs on every accepted turn, model-written or fallback. It only removes or
+    rearranges existing text (see delivery_guards). No model call, no retry.
+    """
+    notes: List[str] = []
+    paragraphs = list(parsed.paragraphs or [])
+
+    paragraphs, removed = delivery_guards.strip_requested_footer(
+        paragraphs, creation_contract.player_authored_texts(session)
+    )
+    if removed:
+        notes.append("requested_footer_removed")
+
+    mode = prose_modes.resolve_prose_mode(meta.get("prose_mode") or session.get("prose_mode"))
+    paragraphs, reflowed, in_range = delivery_guards.fit_paragraph_range(
+        paragraphs, mode.min_paragraphs, mode.max_paragraphs
+    )
+    if reflowed:
+        notes.append(f"paragraphs_refit:{len(parsed.paragraphs or [])}->{len(paragraphs)}")
+    if not in_range:
+        notes.append(f"paragraph_range_unmet:{len(paragraphs)}_of_{mode.min_paragraphs}-{mode.max_paragraphs}")
+
+    choices, repaired = delivery_guards.repair_unsupported_counts(
+        parsed.choices or [], _delivery_grounding_texts(session, parsed, player_action)
+    )
+    if repaired:
+        notes.append(f"unsupported_count_removed:{len(repaired)}")
+
+    update: Dict[str, Any] = {}
+    standing = _story_constraints(session)
+    if standing and isinstance(parsed.rolling_state, dict):
+        rolling = dict(parsed.rolling_state)
+        request = rolling.pop(world_constraints.LIFT_REQUEST_KEY, None)
+        rows, lifted, refused = world_constraints.apply_lift_request(
+            world_constraints.status_rows(standing, session.get("rolling_state")),
+            request,
+            player_action=player_action,
+            turn_number=int(session.get("turn_count") or 0) + 1,
+            allowed=not meta.get("validation_hard_fallback"),
+        )
+        rolling[world_constraints.ROLLING_KEY] = rows
+        update["rolling_state"] = rolling
+        if lifted:
+            notes.append("constraint_lifted:" + ",".join(lifted))
+        if refused:
+            notes.append("constraint_lift_refused:" + ",".join(refused))
+
+    if not notes and not update:
+        return parsed, meta
+    if repaired:
+        update["choices"] = choices
+    if removed or reflowed:
+        update["paragraphs"] = paragraphs
+        update["narrative"] = "\n\n".join(paragraphs)
+    out_meta = dict(meta)
+    if notes:
+        out_meta["delivery_guards"] = "; ".join(notes)
+    return parsed.model_copy(update=update), out_meta
+
+
 async def _generate_validated_turn(
+    session: Dict[str, Any], user_text: str,
+    player_action: Optional[str] = None,
+    secret_reveal_directive: str = "",
+    replayability_directives: Optional[Dict[str, str]] = None,
+) -> Tuple[ParsedTurn, str, Dict[str, Any]]:
+    """Generate, validate and guard one turn. See ``_generate_unguarded_turn``."""
+    parsed, raw, meta = await _generate_unguarded_turn(
+        session,
+        user_text,
+        player_action=player_action,
+        secret_reveal_directive=secret_reveal_directive,
+        replayability_directives=replayability_directives,
+    )
+    parsed, meta = _apply_delivery_guards(session, parsed, meta, player_action)
+    return parsed, raw, meta
+
+
+async def _generate_unguarded_turn(
     session: Dict[str, Any], user_text: str,
     player_action: Optional[str] = None,
     secret_reveal_directive: str = "",
@@ -4439,13 +4644,28 @@ async def _create_new_story_inner(req: NewStoryRequest, attempt: Dict[str, Any])
         cost_mode=(settings.get("cost_mode") or DEFAULT_COST_MODE).lower(),
     )
 
+    # Typed values never enter an engine line. They are collected here, bounded,
+    # and rendered once as a JSON data block at the end of the setup (finding 1).
+    player_data: Dict[str, Any] = {}
+    pd = creation_contract
     setup_lines = [
-        f"Genre: {effective_genre}",
-        f"Character role: {effective_role or 'unspecified — choose a fitting archetype for the genre'}",
-        f"Tone: {effective_tone or 'cinematic and grounded'}",
-        f"Difficulty: {effective_difficulty}",
+        f"Genre: {pd.inline_or_ref(player_data, 'world_type', effective_genre)}",
+        "Character role: "
+        + (
+            pd.inline_or_ref(player_data, "role", effective_role)
+            if effective_role
+            else "unspecified — choose a fitting archetype for the genre"
+        ),
+        "Tone: "
+        + (pd.inline_or_ref(player_data, "tone", effective_tone) if effective_tone else "cinematic and grounded"),
+        f"Difficulty: {pd.inline_or_ref(player_data, 'difficulty', effective_difficulty)}",
     ]
-    if effective_premise:
+    if req.custom_premise:
+        setup_lines.append(
+            f"Premise hook: {pd.place_player_value(player_data, 'legacy_premise', req.custom_premise)}"
+        )
+    elif effective_premise:
+        # A curated scenario's own pitch is engine text.
         setup_lines.append(f"Premise hook: {effective_premise}")
 
     # Stage 2A: structured opening lines from creation contract (not prompt-only).
@@ -4459,9 +4679,11 @@ async def _create_new_story_inner(req: NewStoryRequest, attempt: Dict[str, Any])
             custom_world_setup=custom_setup,
             mature_content=mature_content,
         )
-        setup_lines.extend(creation_contract.build_opening_setup_lines(opening_contract))
+        setup_lines.extend(
+            creation_contract.build_opening_setup_lines(opening_contract, player_data)
+        )
 
-    custom_setup_block = _build_custom_world_setup_block(custom_setup)
+    custom_setup_block = _build_custom_world_setup_block(custom_setup, player_data)
     if custom_setup_block:
         setup_lines.append(custom_setup_block)
 
@@ -4492,6 +4714,10 @@ async def _create_new_story_inner(req: NewStoryRequest, attempt: Dict[str, Any])
                     + ", ".join(str(x) for x in frame["forbidden_opening_frames"][:8])
                 )
 
+    data_block = creation_contract.render_player_story_data(player_data)
+    if data_block:
+        setup_lines.append("")
+        setup_lines.append(data_block)
     setup_text = "\n".join(setup_lines)
     settings = await get_ai_settings()
     dev_mode = bool(settings.get("developer_mode")) and bool(req.debug_mode)
@@ -5134,8 +5360,12 @@ async def set_session_play_settings(
 
     The next turn uses the new values; nothing already written changes. An
     unknown value is refused, so a typo never silently becomes the default.
+
+    This is a preference, not play: it never touches ``updated_at`` (the story
+    list is ordered by it), the turn count, the revision or an action lease.
+    Values that already match are not written at all.
     """
-    await fetch_owned_session(db, session_id, device_id)
+    session = await fetch_owned_session(db, session_id, device_id)
     changes: Dict[str, Any] = {}
     if req.prose_mode is not None:
         if not prose_modes.is_known_mode(req.prose_mode):
@@ -5162,12 +5392,14 @@ async def set_session_play_settings(
         changes["thinking_effort"] = effort
     if not changes:
         raise HTTPException(status_code=400, detail="no play setting was sent")
-    result = await db.sessions.update_one(
-        {"id": session_id},
-        {"$set": {**changes, "updated_at": datetime.now(timezone.utc)}},
-    )
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Session not found")
+    differing = {key: value for key, value in changes.items() if session.get(key) != value}
+    if differing:
+        result = await db.sessions.update_one(
+            {"id": session_id},
+            {"$set": {**differing, "settings_updated_at": datetime.now(timezone.utc)}},
+        )
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Session not found")
     return changes
 
 

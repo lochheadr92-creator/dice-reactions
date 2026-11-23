@@ -28,6 +28,8 @@ from reliability_support import (  # noqa: E402
     relax_rate_limits,
 )
 
+# One paragraph, so these stories use the short turn length (1 to 2 paragraphs). At the default
+# length a one-paragraph reply is re-broken at delivery (review 2, finding 3).
 CANONICAL_OPENING = "Mara waits outside the locked gate. The key remains in your pocket."
 CANONICAL_ACTION = "Mara still waits outside the locked gate. The key stays in your pocket."
 ADVERSARIAL = "Mara opens the gate with your key and escapes into the forest."
@@ -109,6 +111,7 @@ def test_full_path_serves_canonical_narrative_and_never_calls_second_provider(en
                 json={
                     "device_id": device,
                     "genre": "fantasy",
+                    "prose_mode": "brief",
                     "mature_content": _adult_preferences(),
                     "creation_request_id": f"create-{uuid.uuid4()}",
                 },
@@ -152,6 +155,7 @@ def test_existing_mature_pinned_session_is_served_canonical_prose(env, adversari
         env.sync_db,
         device,
         extra={
+            "prose_mode": "brief",
             "mature_content": _adult_preferences(),
             "rendering_policy": {
                 "route": "mature_pinned",

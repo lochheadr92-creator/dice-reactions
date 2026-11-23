@@ -159,8 +159,18 @@ def test_explicit_relationships_preserved_when_no_who_matters():
     assert all(t.get("name") != "who_matters_floor" for t in threads if isinstance(t, dict))
 
 
+def _setup_block_as_sent(setup):
+    """Engine header plus the player story data block the answers now travel in
+    (review 2 finding 1: typed answers are data, not part of an engine line)."""
+    import creation_contract
+
+    data: dict = {}
+    header = server._build_custom_world_setup_block(setup, data)
+    return header + "\n" + creation_contract.render_player_story_data(data)
+
+
 def test_custom_setup_block_surfaces_raised_floor():
-    block = server._build_custom_world_setup_block(_setup())
+    block = _setup_block_as_sent(_setup())
     assert '"relationships": "low"' in block
 
 
@@ -192,7 +202,7 @@ def test_secret_absent_from_prompt_safe_rolling():
 
 
 def test_secret_absent_from_custom_setup_prompt_block():
-    block = server._build_custom_world_setup_block(_setup())
+    block = _setup_block_as_sent(_setup())
     assert SECRET_TEXT not in block
     assert '"secret"' not in block  # the key itself is not dumped
     # Non-secret setup still flows through.
