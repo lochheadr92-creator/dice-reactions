@@ -253,12 +253,12 @@ def trust_of(rolling: Mapping[str, Any], row: Mapping[str, Any]) -> int:
     number, the narrator's stance decides: an ally is trusting, a hostile person is not, anyone
     else is wary but not closed.
     """
-    if isinstance(row.get("trust"), (int, float)):
-        return int(row["trust"])
     name = norm(ce.npc_name(dict(row)))
     for vec in rolling.get("relationship_vectors") or []:
         if isinstance(vec, dict) and norm(vec.get("name")) == name and isinstance(vec.get("trust"), (int, float)):
             return int(vec["trust"])
+    if isinstance(row.get("trust"), (int, float)):
+        return int(row["trust"])
     stance = norm(row.get("stance"))
     if stance in _FRIENDLY:
         return 60
@@ -281,10 +281,23 @@ def clean(text: Any, limit: int) -> str:
 def ledger_remove(ledger: Mapping[str, Any], item: str) -> Dict[str, Any]:
     """The player's ledger without ``item``, in every on-person section."""
     out: Dict[str, Any] = dict(ledger)
+    sections = {s.lower() for s in ON_PERSON_SECTIONS}
+
+    def bare(text: Any) -> str:
+        return re.sub(r"^\d+\s*x?\s*", "", norm(text))
+
+    # The exact item goes when the ledger has it, so losing "knife" leaves "knife sheath" alone.
+    # Only when nothing matches exactly does the looser phrase match decide.
+    want = bare(item)
+    exact = any(
+        bare(i) == want
+        for key, value in out.items() if str(key).strip().lower() in sections
+        for i in split_items(value)
+    )
     for key, value in list(out.items()):
-        if str(key).strip().lower() not in {s.lower() for s in ON_PERSON_SECTIONS}:
+        if str(key).strip().lower() not in sections:
             continue
-        kept = [i for i in split_items(value) if not item_matches(i, item)]
+        kept = [i for i in split_items(value) if not ((bare(i) == want) if exact else item_matches(i, item))]
         out[key] = "; ".join(kept) if kept else "-"
     return out
 

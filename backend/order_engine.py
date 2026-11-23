@@ -80,11 +80,12 @@ def _find_item(row: Dict[str, Any], pattern: "re.Pattern[str]") -> Optional[str]
 
 
 def _trust(rolling: Dict[str, Any], row: Dict[str, Any]) -> Optional[int]:
-    if isinstance(row.get("trust"), (int, float)):
-        return int(row["trust"])
+    # The engine's own relationship vector wins over a number on the narrator's cast row.
     for vec in rolling.get("relationship_vectors") or []:
         if isinstance(vec, dict) and _n(vec.get("name")) == _n(ce.npc_name(row)) and isinstance(vec.get("trust"), (int, float)):
             return int(vec["trust"])
+    if isinstance(row.get("trust"), (int, float)):
+        return int(row["trust"])
     return None
 
 

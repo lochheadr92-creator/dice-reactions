@@ -41,6 +41,7 @@ def main() -> None:
     for name in ("duets", "duet_turns", "rate_limits", "provider_usage"):
         sync[name].delete_many({})
     LOG.write_text("")
+    os.environ["DUETS_ENABLED"] = "1"
     narrator = Narrator()
     counter = {"n": 0}
 

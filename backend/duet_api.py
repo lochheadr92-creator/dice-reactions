@@ -16,6 +16,7 @@ import asyncio
 import copy
 import hashlib
 import hmac
+import os
 import secrets
 import time
 import uuid
@@ -36,6 +37,28 @@ from security import require_device_id
 SIGNAL_RACE = "The story changed while you were answering. Reload and try again."
 LEASE_SECONDS = int(ai_config.PROVIDER_TIMEOUT) + 60
 NOT_FOUND = "Story not found"
+BUSY = "An action is being resolved. Try again in a moment."
+DUETS_ENV_VAR = "DUETS_ENABLED"
+
+
+def duets_enabled() -> bool:
+    """Two-player stories are off unless the operator switches them on. Read on every request."""
+    return str(os.environ.get(DUETS_ENV_VAR, "")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def require_duets() -> None:
+    """Every duet route depends on this. Switched off, the routes answer 404 as if they did not exist."""
+    if not duets_enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
+def _lease_live(doc: Dict[str, Any]) -> bool:
+    lease = doc.get("lease")
+    return bool(lease) and float(lease.get("expires_at") or 0) >= time.time()
+
+
+def _no_live_lease() -> Dict[str, Any]:
+    return {"$or": [{"lease": None}, {"lease.expires_at": {"$lt": time.time()}}]}
 
 Narrate = Callable[..., Awaitable[str]]
 
@@ -150,7 +173,7 @@ def register(api_router: APIRouter, *, get_db: Callable[[], Any], narrate: Narra
     def new_code() -> str:
         return "DUET-" + secrets.token_urlsafe(18)
 
-    @api_router.post("/duets")
+    @api_router.post("/duets", dependencies=[Depends(require_duets)])
     async def create_duet(req: CreateDuet, device_id: str = Depends(require_device_id)):
         require_tx()
         if req.seat not in duet.SEATS:
@@ -171,7 +194,7 @@ def register(api_router: APIRouter, *, get_db: Callable[[], Any], narrate: Narra
         await db.duets.insert_one(copy.deepcopy(doc))
         return {"duet": _view(setting, doc, req.seat, []), "invite_code": code}
 
-    @api_router.post("/duets/join")
+    @api_router.post("/duets/join", dependencies=[Depends(require_duets)])
     async def join_duet(req: JoinDuet, device_id: str = Depends(require_device_id)):
         require_tx()
         db = get_db()
@@ -193,7 +216,7 @@ def register(api_router: APIRouter, *, get_db: Callable[[], Any], narrate: Narra
         fresh = await db.duets.find_one({"id": doc["id"]}, {"_id": 0})
         return {"duet": _view(duet.SETTING, fresh, guest, [])}
 
-    @api_router.post("/duets/{duet_id}/invite")
+    @api_router.post("/duets/{duet_id}/invite", dependencies=[Depends(require_duets)])
     async def new_invite(duet_id: str, device_id: str = Depends(require_device_id)):
         db, doc, seat = await load(duet_id, device_id)
         if seat != doc["host_seat"] or doc["status"] != "waiting_for_friend":
@@ -203,7 +226,7 @@ def register(api_router: APIRouter, *, get_db: Callable[[], Any], narrate: Narra
                                   {"$set": {"invite_hash": _hash(code), "updated_at": _now()}})
         return {"invite_code": code}
 
-    @api_router.get("/duets")
+    @api_router.get("/duets", dependencies=[Depends(require_duets)])
     async def list_duets(device_id: str = Depends(require_device_id)):
         db = get_db()
         rows = await db.duets.find(
@@ -222,12 +245,12 @@ def register(api_router: APIRouter, *, get_db: Callable[[], Any], narrate: Narra
             })
         return {"duets": out}
 
-    @api_router.get("/duets/{duet_id}")
+    @api_router.get("/duets/{duet_id}", dependencies=[Depends(require_duets)])
     async def get_duet(duet_id: str, device_id: str = Depends(require_device_id)):
         db, doc, seat = await load(duet_id, device_id)
         return {"duet": _view(duet.SETTING, doc, seat, await turns_of(db, duet_id))}
 
-    @api_router.post("/duets/{duet_id}/action")
+    @api_router.post("/duets/{duet_id}/action", dependencies=[Depends(require_duets)])
     async def duet_action(duet_id: str, req: DuetAction, device_id: str = Depends(require_device_id)):
         require_tx()
         db, doc, seat = await load(duet_id, device_id)
@@ -271,11 +294,9 @@ def register(api_router: APIRouter, *, get_db: Callable[[], Any], narrate: Narra
             entries = _entries(setting, seat, turns)
             last_own = max([t["turn_number"] for t in turns if t["seat"] == seat] or [0])
             pending_obs = [e["text"] for e in entries if e["kind"] == "observed" and e["turn"] > last_own]
-            history = [
-                (f"You did: {e['action']} Then: {e['text'][:240]}" if e["kind"] == "you" else f"You saw: {e['text']}")
-                for e in entries if e["kind"] in ("you", "observed")
-            ]
-            messages = duet.build_messages(setting, seat, known, history, pending_obs, req.action_text, result["note"])
+            history = [e for e in entries if e["kind"] in ("you", "observed")]
+            messages = duet.build_messages(setting, seat, known, history, pending_obs, req.action_text, result["note"],
+                                           duet.location_text(setting, world, seat))
             async def keep_lease() -> None:
                 # No revision bump: the commit below matches the revision read after the lease was taken.
                 while True:
@@ -320,7 +341,7 @@ def register(api_router: APIRouter, *, get_db: Callable[[], Any], narrate: Narra
         fresh = await db.duets.find_one({"id": duet_id}, {"_id": 0})
         return {"duet": _view(setting, fresh, seat, await turns_of(db, duet_id)), "replayed": False}
 
-    @api_router.post("/duets/{duet_id}/signals")
+    @api_router.post("/duets/{duet_id}/signals", dependencies=[Depends(require_duets)])
     async def propose_signal(duet_id: str, req: ProposeSignal, device_id: str = Depends(require_device_id)):
         """Offer a meaning for a number of lamp flashes. Not a turn; the other seat must agree."""
         require_tx()
@@ -333,14 +354,20 @@ def register(api_router: APIRouter, *, get_db: Callable[[], Any], narrate: Narra
             world = duet.propose_signal(doc["world"], seat, req.count, req.meaning, sid, doc["turn_count"], setting.get("signal_window_turns", 0))
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
-        res = await db.duets.update_one({"id": duet_id, "revision": doc["revision"]},
+        if world == doc["world"]:
+            # A repeated proposal changes nothing, so nothing is written and the revision stands.
+            return {"duet": _view(setting, doc, seat, await turns_of(db, duet_id))}
+        if _lease_live(doc):
+            # A turn is being written against this revision. A change now would throw that turn away.
+            raise HTTPException(status_code=409, detail=BUSY)
+        res = await db.duets.update_one({"id": duet_id, "revision": doc["revision"], **_no_live_lease()},
                                         {"$set": {"world": world, "updated_at": _now()}, "$inc": {"revision": 1}})
         if res.modified_count != 1:
             raise HTTPException(status_code=409, detail=SIGNAL_RACE)
         fresh = await db.duets.find_one({"id": duet_id}, {"_id": 0})
         return {"duet": _view(setting, fresh, seat, await turns_of(db, duet_id))}
 
-    @api_router.post("/duets/{duet_id}/signals/{signal_id}/respond")
+    @api_router.post("/duets/{duet_id}/signals/{signal_id}/respond", dependencies=[Depends(require_duets)])
     async def respond_signal(duet_id: str, signal_id: str, req: RespondSignal, device_id: str = Depends(require_device_id)):
         require_tx()
         db, doc, seat = await load(duet_id, device_id)
@@ -348,22 +375,28 @@ def register(api_router: APIRouter, *, get_db: Callable[[], Any], narrate: Narra
         if doc["status"] != "active":
             raise HTTPException(status_code=409, detail="This chapter has ended")
         try:
-            world = duet.respond_signal(doc["world"], seat, signal_id, req.accept)
+            world = duet.respond_signal(doc["world"], seat, signal_id, req.accept,
+                                        doc["turn_count"], setting.get("signal_window_turns", 0))
         except LookupError:
             raise HTTPException(status_code=404, detail="No such signal")
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
+        if world == doc["world"]:
+            # Already answered: nothing is written and the revision stands.
+            return {"duet": _view(setting, doc, seat, await turns_of(db, duet_id))}
+        if _lease_live(doc):
+            raise HTTPException(status_code=409, detail=BUSY)
         known = copy.deepcopy(doc["known"])
         for s in duet.SEATS:
             known[s]["signals"] = [{"count": x["count"], "meaning": x["meaning"]} for x in duet.agreed_signals(world)]
-        res = await db.duets.update_one({"id": duet_id, "revision": doc["revision"]},
+        res = await db.duets.update_one({"id": duet_id, "revision": doc["revision"], **_no_live_lease()},
                                         {"$set": {"world": world, "known": known, "updated_at": _now()}, "$inc": {"revision": 1}})
         if res.modified_count != 1:
             raise HTTPException(status_code=409, detail=SIGNAL_RACE)
         fresh = await db.duets.find_one({"id": duet_id}, {"_id": 0})
         return {"duet": _view(setting, fresh, seat, await turns_of(db, duet_id))}
 
-    @api_router.post("/duets/{duet_id}/end-chapter")
+    @api_router.post("/duets/{duet_id}/end-chapter", dependencies=[Depends(require_duets)])
     async def end_chapter(duet_id: str, device_id: str = Depends(require_device_id)):
         db, doc, seat = await load(duet_id, device_id)
         if doc["status"] == "waiting_for_friend":
@@ -394,7 +427,7 @@ def register(api_router: APIRouter, *, get_db: Callable[[], Any], narrate: Narra
             "accounts": accounts if doc["status"] == "chapter_ended" else [],
         }
 
-    @api_router.post("/duets/{duet_id}/comparison")
+    @api_router.post("/duets/{duet_id}/comparison", dependencies=[Depends(require_duets)])
     async def share_comparison(duet_id: str, req: Share, device_id: str = Depends(require_device_id)):
         db, doc, seat = await load(duet_id, device_id)
         if doc["status"] != "chapter_ended":
@@ -403,12 +436,12 @@ def register(api_router: APIRouter, *, get_db: Callable[[], Any], narrate: Narra
         doc = await db.duets.find_one({"id": duet_id}, {"_id": 0})
         return comparison_state(duet.SETTING, doc, seat, await turns_of(db, duet_id))
 
-    @api_router.get("/duets/{duet_id}/comparison")
+    @api_router.get("/duets/{duet_id}/comparison", dependencies=[Depends(require_duets)])
     async def get_comparison(duet_id: str, device_id: str = Depends(require_device_id)):
         db, doc, seat = await load(duet_id, device_id)
         return comparison_state(duet.SETTING, doc, seat, await turns_of(db, duet_id))
 
-    @api_router.get("/duets/{duet_id}/export")
+    @api_router.get("/duets/{duet_id}/export", dependencies=[Depends(require_duets)])
     async def export_duet(duet_id: str, device_id: str = Depends(require_device_id)):
         db, doc, seat = await load(duet_id, device_id)
         v = _view(duet.SETTING, doc, seat, await turns_of(db, duet_id))

@@ -438,6 +438,8 @@ All routes need the `X-Device-ID` header.
 ### Two-player stories ("Two Lights")
 Separate collections `duets` and `duet_turns`. Solo sessions are untouched.
 
+Two-player stories are off by default. Set `DUETS_ENABLED=1` in `backend/.env` and restart the backend to switch them on. Switched off, every `/duets` route answers 404 and the home screen hides the TWO PLAYERS button. Stored duets are kept and return when the switch is on again.
+
 | Route | Purpose |
 | --- | --- |
 | `POST /duets` | Host picks a seat (`ferryman` or `keeper`). Returns the view and a one-time `invite_code`. |

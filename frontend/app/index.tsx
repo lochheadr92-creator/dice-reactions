@@ -17,7 +17,7 @@ import Animated, { useSharedValue, useAnimatedStyle, withRepeat, withTiming, can
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONTS } from "../src/theme";
 import { getDeviceId } from "../src/storage";
-import { listSessions, deleteSession, SessionSummary } from "../src/api";
+import { listSessions, deleteSession, listDuets, SessionSummary } from "../src/api";
 
 const D20_IMAGE =
   "https://static.prod-images.emergentagent.com/jobs/1f4993bf-965b-40a7-8797-1d8bc205019e/images/6ca182ece19601a7e83f15da0ac1edc27e4505443b98a52f245a92f57c3f48bb.png";
@@ -27,6 +27,8 @@ export default function HomeScreen() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // Two-player stories are switched on by the server. Switched off, its duet routes answer 404.
+  const [duetsOn, setDuetsOn] = useState(false);
 
   const float = useSharedValue(0);
   const glow = useSharedValue(0);
@@ -56,6 +58,7 @@ export default function HomeScreen() {
       const id = await getDeviceId();
       const res = await listSessions(id);
       setSessions(res.sessions || []);
+      listDuets(id).then(() => setDuetsOn(true)).catch(() => setDuetsOn(false));
     } catch (e) {
       console.log("load sessions", e);
     } finally {
@@ -134,14 +137,16 @@ export default function HomeScreen() {
           <Text style={styles.primaryBtnText}>[ ENTER · WORLD ]</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.primaryBtn, { marginTop: 12 }]}
-          onPress={() => router.push("/duets")}
-          testID="two-players-btn"
-          activeOpacity={0.75}
-        >
-          <Text style={styles.primaryBtnText}>[ TWO · PLAYERS ]</Text>
-        </TouchableOpacity>
+        {duetsOn && (
+          <TouchableOpacity
+            style={[styles.primaryBtn, { marginTop: 12 }]}
+            onPress={() => router.push("/duets")}
+            testID="two-players-btn"
+            activeOpacity={0.75}
+          >
+            <Text style={styles.primaryBtnText}>[ TWO · PLAYERS ]</Text>
+          </TouchableOpacity>
+        )}
 
         <View style={styles.sectionHead}>
           <Text style={styles.sectionLabel} testID="continue-header">CONTINUE · CHRONICLES</Text>

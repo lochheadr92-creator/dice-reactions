@@ -48,7 +48,8 @@ class Narrator:
         text = "\n".join(str(m.get("content") or "") for m in kwargs["messages"])
         seat = "ferryman" if "The player is Corin Hale" in text else "keeper"
         self.requests.append({"seat": seat, "text": text})
-        action = re.search(r"Player action: (.*)", text).group(1)
+        block = re.search(r"<player_text>\n(.*?)\n</player_text>", text, re.S)
+        action = json.loads(block.group(1))["action"]
         note = re.search(r"\[ENGINE_RESULT\] (.*)", text)
         seen = re.search(r"OBSERVATIONS[^\n]*\n((?:- .*\n?)+)", text)
         parts = [f"You act: {action}"]
@@ -71,6 +72,7 @@ def env(monkeypatch):
     for name in ("duets", "duet_turns"):
         mongo.sync_db[name].delete_many({})
     relax_rate_limits(monkeypatch)
+    monkeypatch.setenv("DUETS_ENABLED", "1")
     monkeypatch.setattr(duet, "SETTING", copy.deepcopy(duet.SETTING))
     yield mongo
     for name in ("duets", "duet_turns"):
