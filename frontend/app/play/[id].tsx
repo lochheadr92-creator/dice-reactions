@@ -779,6 +779,16 @@ export default function PlayScreen() {
               >
                 <Ionicons name="briefcase-outline" size={18} color={COLORS.primary} />
               </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setShowMoves(true)}
+                disabled={actionBusy}
+                hitSlop={10}
+                testID="open-moves-btn"
+                accessibilityLabel="Things you can do here"
+                accessibilityRole="button"
+              >
+                <Ionicons name="hand-left-outline" size={18} color={actionBusy ? COLORS.textMuted : COLORS.primary} />
+              </TouchableOpacity>
               <TouchableOpacity onPress={() => setShowMenu(true)} hitSlop={10} testID="open-menu-btn">
                 <Ionicons name="ellipsis-horizontal" size={20} color={COLORS.textSecondary} />
               </TouchableOpacity>
@@ -1115,19 +1125,6 @@ export default function PlayScreen() {
             >
               <Ionicons name="clipboard-outline" size={18} color={COLORS.textSecondary} />
               <Text style={styles.menuText}>Leave instructions</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.menuRow}
-              onPress={() => {
-                setShowMenu(false);
-                setShowMoves(true);
-              }}
-              disabled={actionBusy}
-              testID="open-moves-btn"
-            >
-              <Ionicons name="options-outline" size={18} color={COLORS.textSecondary} />
-              <Text style={styles.menuText}>More things to do</Text>
             </TouchableOpacity>
 
             {!session.handover_done ? (
