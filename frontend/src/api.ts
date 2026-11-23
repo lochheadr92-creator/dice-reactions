@@ -585,7 +585,7 @@ export async function getNotebook(sessionId: string, deviceId: string): Promise<
 export async function pinPassage(
   sessionId: string,
   deviceId: string,
-  body: { turn_number: number; paragraph_index: number; quote?: string; note?: string }
+  body: { turn_number: number; paragraph_index: number; quote?: string; occurrence?: number; note?: string }
 ): Promise<{ pin: NotebookPin; created: boolean }> {
   const res = await fetch(`${API}/story/session/${sessionId}/notebook/pins`, {
     method: "POST",

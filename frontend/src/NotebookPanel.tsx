@@ -129,9 +129,9 @@ export default function NotebookPanel({ visible, sessionId, deviceId, refreshKey
             >
               {pinned ? (
                 <>
-                  {para.slice(0, pin.start)}
-                  <Text style={styles.passageMark}>{para.slice(pin.start, pin.end)}</Text>
-                  {para.slice(pin.end)}
+                  {Array.from(para).slice(0, pin.start).join("")}
+                  <Text style={styles.passageMark}>{Array.from(para).slice(pin.start, pin.end).join("")}</Text>
+                  {Array.from(para).slice(pin.end).join("")}
                 </>
               ) : (
                 para

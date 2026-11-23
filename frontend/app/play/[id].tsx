@@ -14,6 +14,7 @@ import {
   Share,
 } from "react-native";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
+import QuotePicker from "../../src/QuotePicker";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
@@ -236,6 +237,7 @@ export default function PlayScreen() {
     setShowMoves(true);
   };
   const [branching, setBranching] = useState(false);
+  const [pinTarget, setPinTarget] = useState<{ turn: Turn; index: number; paragraph: string } | null>(null);
   const [pinNotice, setPinNotice] = useState<string | null>(null);
   // One request id per branch attempt: a double tap or retry returns the same branch.
   const branchRequestRef = useRef<string | null>(null);
@@ -687,12 +689,12 @@ export default function PlayScreen() {
     }
   };
 
-  const handlePin = async (turn: Turn, paragraphIndex: number) => {
+  const handlePin = async (turn: Turn, paragraphIndex: number, quote?: string, occurrence?: number) => {
     try {
       const deviceId = deviceIdRef.current || (await getDeviceId());
       const res = await pinPassage(sessionId, deviceId, {
         turn_number: turn.turn_number,
-        paragraph_index: paragraphIndex,
+        paragraph_index: paragraphIndex, quote, occurrence,
       });
       setNotebookKey((k) => k + 1);
       setPinNotice(res.created ? "Pinned to your notebook." : "Already in your notebook.");
@@ -963,7 +965,7 @@ export default function PlayScreen() {
                     </Animated.Text>
                     {pinnable ? (
                       <TouchableOpacity
-                        onPress={() => handlePin(turn, idx)}
+                        onPress={() => setPinTarget({ turn, index: idx, paragraph: p })}
                         hitSlop={8}
                         style={styles.pinBtn}
                         testID={`pin-btn-${turn.turn_number}-${idx}`}
@@ -1081,6 +1083,13 @@ export default function PlayScreen() {
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
+      {pinTarget && <QuotePicker paragraph={pinTarget.paragraph}
+        onClose={() => setPinTarget(null)}
+        onSave={(quote, occurrence) => {
+          void handlePin(pinTarget.turn, pinTarget.index, quote, occurrence);
+          setPinTarget(null);
+        }} />}
 
       {/* Ledger Modal */}
       <Modal visible={showLedger} animationType="slide" transparent onRequestClose={() => setShowLedger(false)}>

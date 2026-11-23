@@ -23,7 +23,9 @@ export default function OrderPanel({ visible, sessionId, deviceId, busy, given, 
   const [people, setPeople] = useState<string[] | null>(null);
   const [who, setWho] = useState<string | null>(null);
   const [text, setText] = useState("");
-  const [preview, setPreview] = useState<OrderPreview | null>(null);
+  const [checked, setPreview] = useState<{ key: string; result: OrderPreview } | null>(null);
+  const key = JSON.stringify([sessionId, who, text]);
+  const preview = checked?.key === key ? checked.result : null;
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,7 +57,7 @@ export default function OrderPanel({ visible, sessionId, deviceId, busy, given, 
     setChecking(true);
     setError(null);
     try {
-      setPreview(await previewOrder(sessionId, deviceId, { recipient: who, text: text.trim() }));
+      setPreview({ key, result: await previewOrder(sessionId, deviceId, { recipient: who, text: text.trim() }) });
     } catch (e) {
       setError(friendlyError(e).message);
     } finally {
@@ -113,7 +115,7 @@ export default function OrderPanel({ visible, sessionId, deviceId, busy, given, 
                   style={styles.input}
                   value={text}
                   onChangeText={edit}
-                  placeholder="If the water reaches the red mark, cut the ferry loose, even if I'm still across the river."
+                  placeholder="When should they act, and what should they do?"
                   placeholderTextColor={COLORS.textMuted}
                   multiline
                   testID="order-text-input"
@@ -124,7 +126,7 @@ export default function OrderPanel({ visible, sessionId, deviceId, busy, given, 
                   onPress={check}
                   testID="order-check-btn"
                 >
-                  <Text style={styles.ghostBtnText}>{checking ? "CHECKING…" : "SEE WHAT SHE UNDERSTANDS"}</Text>
+                  <Text style={styles.ghostBtnText}>{checking ? "CHECKING…" : "CHECK THE INSTRUCTIONS"}</Text>
                 </TouchableOpacity>
 
                 {preview ? (
@@ -156,7 +158,7 @@ export default function OrderPanel({ visible, sessionId, deviceId, busy, given, 
                 >
                   <Text style={styles.primaryBtnText}>{busy ? "SENDING…" : "LEAVE THESE INSTRUCTIONS"}</Text>
                 </TouchableOpacity>
-                <Text style={styles.note}>This costs one action. She acts only on what she understood above.</Text>
+                <Text style={styles.note}>This costs one action. The recipient will follow the instructions shown above.</Text>
               </View>
             ) : null}
 

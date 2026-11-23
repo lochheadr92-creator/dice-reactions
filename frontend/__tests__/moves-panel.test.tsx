@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react-native";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react-native";
 import MovesPanel from "../src/MovesPanel";
 import * as api from "../src/api";
 import { moveActionText } from "../src/moves";
@@ -85,6 +85,19 @@ describe("MovesPanel", () => {
     // The server said no, so the panel refuses to send it.
     fireEvent.press(screen.getByTestId("move-send-btn"));
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  test("a late preview cannot describe a move after its evidence changes", async () => {
+    let finish!: (value: unknown) => void;
+    (api.previewMove as jest.Mock).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    open();
+    fireEvent.press(await screen.findByTestId("move-challenge"));
+    for (const id of ["mv-audience-mrs-vance", "mv-subject-2-0", "mv-evidence-1-0", "move-check-btn"]) {
+      fireEvent.press(screen.getByTestId(id));
+    }
+    fireEvent.press(screen.getByTestId("mv-item-folded-ticket-stub"));
+    await act(async () => finish({ terms: "Old evidence", can_commit: true, issues: [] }));
+    expect(screen.queryByText("Old evidence")).toBeNull();
   });
 
   test("the same move gets the same action text and a different move does not", () => {

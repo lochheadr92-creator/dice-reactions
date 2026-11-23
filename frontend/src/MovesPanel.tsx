@@ -133,19 +133,21 @@ const MODES: Record<MoveKind, { id: string; text: string }[]> = {
 
 function Form({ kind, o, busy, sessionId, deviceId, onSend, prefill }: { kind: MoveKind; o: MoveOptions; busy: boolean; sessionId: string; deviceId: string; onSend: (m: MoveRequest) => void; prefill?: Record<string, string[]> }) {
   const f = useForm(kind, o, prefill);
-  const [preview, setPreview] = useState<MovePreview | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [checked, setChecked] = useState<{ key: string; value?: MovePreview; error?: string } | null>(null);
+
   const [checking, setChecking] = useState(false);
   const key = JSON.stringify(f.move);
-  useEffect(() => setPreview(null), [key]);
+  const preview = checked?.key === key ? checked.value : undefined;
+  const error = checked?.key === key ? checked.error : undefined;
+  useEffect(() => setChecked(null), [key]);
   const check = async () => {
     if (!f.move) return;
     setChecking(true);
-    setError(null);
+    setChecked(null);
     try {
-      setPreview(await previewMove(sessionId, deviceId, f.move));
+      setChecked({ key, value: await previewMove(sessionId, deviceId, f.move) });
     } catch (e) {
-      setError(friendlyError(e).message);
+      setChecked({ key, error: friendlyError(e).message });
     } finally {
       setChecking(false);
     }
