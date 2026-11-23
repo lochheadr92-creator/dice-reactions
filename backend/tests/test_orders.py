@@ -2,7 +2,7 @@
 
 Real action handler, real persistence, real player responses. The narrator is a deterministic
 fixture: it writes whatever the engine's result directive tells it, and moves the scene when the
-test says so. It never decides that the ferry comes loose; the tests never insert that result.
+test says so. It never decides that something changes hands; the tests never insert that result.
 """
 
 from __future__ import annotations
@@ -23,8 +23,7 @@ import order_engine as oe  # noqa: E402
 from reliability_support import FakeGateway, MongoEnv, insert_session, make_client, relax_rate_limits  # noqa: E402
 from player_features_support import FIXED_NOW, device, dump, headers, session_doc, turn_docs  # noqa: E402
 
-FERRY_ORDER = "If the water reaches the red mark, cut the ferry loose, even if I'm still across the river."
-FERRY_ORDER_NO_AWAY = "If the water reaches the red mark, cut the ferry loose."
+MARK_ORDER = "If the water reaches the red mark, hand the parcel to Dov Marsh."
 PARCEL_ORDER = "When Dov Marsh arrives, hand him the parcel."
 DOCK, FAR, OFFICE = "the ferry dock", "the far bank", "the harbour office"
 
@@ -33,7 +32,6 @@ def world(*, rise=1, level=1, visible=(DOCK,), mara_inv=("fishing knife", "seale
     return {
         "scene": DOCK, "location": DOCK, "character": "steady",
         "known_rooms": [DOCK, FAR, OFFICE], "locations": [DOCK, FAR, OFFICE],
-        "ferry_state": "moored",
         "gauges": {"river_water": {"label": "water", "mark_name": "red mark", "level": level, "mark": 3,
                                     "rise_per_turn": rise, "visible_from": list(visible)}},
         "npcs": [
@@ -139,70 +137,77 @@ def _shown(client, sid, dev):
 
 def test_preview_shows_what_she_understood_and_costs_nothing(client, env, narrator):
     dev = device()
-    sid = seed(env.sync_db, dev, world())
+    sid = seed(env.sync_db, dev, world(dov_at=DOCK))
     before = _doc(env, sid)
-    r = _preview(client, sid, dev, "Mara Voss", FERRY_ORDER)
+    r = _preview(client, sid, dev, "Mara Voss", MARK_ORDER)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["can_commit"] is True and body["issues"] == []
-    assert body["understood"] == {"condition": "the water reaches the red mark", "action": "cut the ferry loose", "even_if_away": True}
+    assert body["understood"] == {"condition": "the water reaches the red mark", "action": "hand the parcel to Dov Marsh"}
     joined = " ".join(body["notes"])
-    assert "fishing knife" in joined and "can see the red mark" in joined and "willing" in joined
+    assert "can see the red mark" in joined and "willing" in joined
+    assert "sealed parcel" not in joined and "fishing knife" not in joined      # a preview shows nothing she carries
     assert _doc(env, sid) == before and narrator.seen == [] and len(turn_docs(env.sync_db, sid)) == 1
 
 
 def test_preview_flags_what_she_cannot_do_and_lets_the_player_revise(client, env):
     dev = device()
     sid = seed(env.sync_db, dev, world())
-    vague = _preview(client, sid, dev, "Mara Voss", "If the water gets high, cut the ferry loose.").json()
+    vague = _preview(client, sid, dev, "Mara Voss", "If the water gets high, hand the parcel to Dov Marsh.").json()
     assert vague["can_commit"] is False and "red mark" in " ".join(vague["issues"])
     odd = _preview(client, sid, dev, "Mara Voss", "If it rains, burn the dock.").json()
     assert odd["can_commit"] is False and odd["understood"] is None and odd["issues"]
+    gone = _preview(client, sid, dev, "Mara Voss", "If the water reaches the red mark, cut the ferry loose.").json()
+    assert gone["can_commit"] is False and gone["understood"] is None          # that action no longer exists
     nobody = _preview(client, sid, dev, "Mara Voss", "When Zed arrives, hand him the parcel.").json()
     assert nobody["can_commit"] is False and "Zed" in " ".join(nobody["issues"])
-    no_away = _preview(client, sid, dev, "Mara Voss", FERRY_ORDER_NO_AWAY).json()
-    assert no_away["can_commit"] is True and "even if I'm away" in " ".join(no_away["notes"])
     weak = world(mara_inv=(), trust=10)
     sid2 = seed(env.sync_db, dev, weak)
-    notes = " ".join(_preview(client, sid2, dev, "Mara Voss", FERRY_ORDER).json()["notes"])
-    assert "not carrying anything she could cut with" in notes and "reluctant" in notes
+    notes = " ".join(_preview(client, sid2, dev, "Mara Voss", MARK_ORDER).json()["notes"])
+    assert "reluctant" in notes and "not carrying" not in notes
     absent = _preview(client, sid, dev, "Dov Marsh", PARCEL_ORDER)
     assert absent.status_code == 422
 
 
-def test_ferry_comes_loose_once_and_returning_shows_the_changed_world(client, env, narrator):
+def _inventories(doc):
+    return {n["name"]: n.get("inventory") or [] for n in doc["rolling_state"]["npcs"]}
+
+
+def test_an_order_fires_once_while_the_player_is_away_and_returning_shows_the_changed_world(client, env, narrator):
     dev = device()
-    sid = seed(env.sync_db, dev, world())
+    sid = seed(env.sync_db, dev, world(dov_at=DOCK))
     narrator.rolling_for_call = {1: {"scene": FAR, "location": FAR}}       # the player crosses the river
-    r = _act(client, sid, dev, 1, order=("Mara Voss", FERRY_ORDER))
+    r = _act(client, sid, dev, 1, order=("Mara Voss", MARK_ORDER))
     assert r.status_code == 200, r.text
-    assert _doc(env, sid)["rolling_state"]["ferry_state"] == "moored"
-    assert _shown(client, sid, dev)["orders_given"][0]["understood"] == "When the water reaches the red mark, cut the ferry loose."
+    assert "sealed parcel" in _inventories(_doc(env, sid))["Mara Voss"]
+    assert _shown(client, sid, dev)["orders_given"][0]["understood"] == "When the water reaches the red mark, hand the parcel to Dov Marsh."
     _play(client, sid, dev, 2, 5)                                          # the water keeps rising while they are away
     doc = _doc(env, sid)
     order = doc["order_state"]["orders"][0]
-    assert order["status"] == "done" and doc["rolling_state"]["ferry_state"] == "adrift"
+    assert order["status"] == "done"
+    assert "sealed parcel" in _inventories(doc)["Dov Marsh"] and "sealed parcel" not in _inventories(doc)["Mara Voss"]
+    assert "fishing knife" in _inventories(doc)["Mara Voss"]                # only the named item moved
     fired = order["fired_turn"]
-    assert not any("cut the ferry loose with" in s and "What the player sees" in s for s in narrator.seen[:3])
+    assert not any("handed the parcel to" in s and "What the player sees" in s for s in narrator.seen[:3])
     shown = _shown(client, sid, dev)["orders_given"][0]
     assert "result" not in shown                                           # nobody has seen it yet
     assert "pending" not in dump(shown) and "done" not in dump(shown)
     narrator.rolling_for_call = {5: {"scene": DOCK, "location": DOCK}}     # they come back on turn 6
     _play(client, sid, dev, 5, 8)
     final = _shown(client, sid, dev)["orders_given"][0]
-    assert final["result"] == "Mara Voss cut the ferry loose with fishing knife. The ferry is now adrift."
+    assert final["result"] == "Mara Voss handed the parcel to Dov Marsh."
     prose = " ".join(t["narrative"] for t in turn_docs(env.sync_db, sid))
-    assert "cut the ferry loose with fishing knife" in prose and prose.count("cut the ferry loose with fishing knife") == 1
+    assert prose.count("handed the parcel to Dov Marsh") == 1
     _play(client, sid, dev, 8, 11)                                         # nothing fires twice
     after = _doc(env, sid)
     assert [o["status"] for o in after["order_state"]["orders"]] == ["done"] and after["order_state"]["orders"][0]["fired_turn"] == fired
-    assert after["rolling_state"]["ferry_state"] == "adrift"
+    assert _inventories(after)["Dov Marsh"].count("sealed parcel") == 1
 
 
 def test_replaying_the_firing_turn_does_not_run_it_again(client, env, narrator):
     dev = device()
-    sid = seed(env.sync_db, dev, world(level=2))
-    assert _act(client, sid, dev, 1, order=("Mara Voss", FERRY_ORDER)).status_code == 200   # level 3 this turn: fires
+    sid = seed(env.sync_db, dev, world(level=2, dov_at=DOCK))
+    assert _act(client, sid, dev, 1, order=("Mara Voss", MARK_ORDER)).status_code == 200   # level 3 this turn: fires
     assert _doc(env, sid)["order_state"]["orders"][0]["status"] == "done"
     calls = len(narrator.seen)
     rid = f"fire-{uuid.uuid4()}"
@@ -213,22 +218,25 @@ def test_replaying_the_firing_turn_does_not_run_it_again(client, env, narrator):
     assert _doc(env, sid)["order_state"]["orders"][0]["status"] == "done" and _doc(env, sid)["turn_count"] == 3
 
 
-@pytest.mark.parametrize("label, kwargs, status, ferry", [
-    ("never reaches the mark", dict(rise=0), "pending", "moored"),
-    ("she cannot see it", dict(visible=(FAR,)), "pending", "moored"),
-    ("she refuses", dict(trust=10), "refused", "moored"),
-    ("she has no tool", dict(mara_inv=("sealed parcel",)), "no_means", "moored"),
+@pytest.mark.parametrize("label, kwargs, status", [
+    ("never reaches the mark", dict(rise=0, dov_at=DOCK), "pending"),
+    ("she cannot see it", dict(visible=(FAR,), dov_at=DOCK), "pending"),
+    ("he is somewhere else", dict(dov_at=OFFICE), "pending"),
+    ("she refuses", dict(trust=10, dov_at=DOCK), "refused"),
+    ("she does not have it", dict(mara_inv=("fishing knife",), dov_at=DOCK), "no_means"),
 ])
-def test_alternatives_leave_the_ferry_alone(client, env, narrator, label, kwargs, status, ferry):
+def test_alternatives_leave_everything_where_it_was(client, env, narrator, label, kwargs, status):
     dev = device()
-    sid = seed(env.sync_db, dev, world(**kwargs))
-    assert _act(client, sid, dev, 1, order=("Mara Voss", FERRY_ORDER)).status_code == 200
+    start = world(**kwargs)
+    sid = seed(env.sync_db, dev, start)
+    assert _act(client, sid, dev, 1, order=("Mara Voss", MARK_ORDER)).status_code == 200
     _play(client, sid, dev, 2, 7)
     doc = _doc(env, sid)
     assert doc["order_state"]["orders"][0]["status"] == status, label
-    assert doc["rolling_state"]["ferry_state"] == ferry, label
+    assert _inventories(doc)["Dov Marsh"] == [], label
+    assert _inventories(doc)["Mara Voss"] == start["npcs"][0]["inventory"], label
     prose = " ".join(t["narrative"] for t in turn_docs(env.sync_db, sid))
-    assert "cut the ferry loose with" not in prose
+    assert "handed the parcel to" not in prose
     if status in ("refused", "no_means"):                                    # the player was there: they see her choice
         assert "What the player sees" in prose and ("chose not to" in prose or "had nothing to do it with" in prose)
         assert "result" in _shown(client, sid, dev)["orders_given"][0]
@@ -236,16 +244,35 @@ def test_alternatives_leave_the_ferry_alone(client, env, narrator, label, kwargs
         assert "result" not in _shown(client, sid, dev)["orders_given"][0]
 
 
-def test_without_even_if_she_waits_for_the_player(client, env, narrator):
+def test_a_handover_waits_until_the_two_are_in_the_same_place(client, env, narrator):
     dev = device()
-    sid = seed(env.sync_db, dev, world(level=1))
-    narrator.rolling_for_call = {1: {"scene": FAR, "location": FAR}, 5: {"scene": DOCK, "location": DOCK}}
-    assert _act(client, sid, dev, 1, order=("Mara Voss", FERRY_ORDER_NO_AWAY)).status_code == 200
+    rolling = world(level=2)                                                # the mark is reached at once, Dov is at the office
+    sid = seed(env.sync_db, dev, rolling)
+    assert _act(client, sid, dev, 1, order=("Mara Voss", MARK_ORDER)).status_code == 200
+    _play(client, sid, dev, 2, 4)
+    waiting = _doc(env, sid)
+    assert waiting["order_state"]["orders"][0]["status"] == "pending" and _inventories(waiting)["Dov Marsh"] == []
+    arrived = copy.deepcopy(rolling["npcs"])
+    arrived[1]["last_seen"] = DOCK
+    narrator.rolling_for_call = {4: {"npcs": arrived}}                     # he walks down to the dock
+    _play(client, sid, dev, 4, 7)
+    done = _doc(env, sid)
+    assert done["order_state"]["orders"][0]["status"] == "done" and "sealed parcel" in _inventories(done)["Dov Marsh"]
+
+
+def test_an_order_saved_for_the_removed_ferry_action_ends_quietly(client, env, narrator):
+    dev = device()
+    sid = seed(env.sync_db, dev, world(level=2))
+    assert _act(client, sid, dev, 1, order=("Mara Voss", PARCEL_ORDER)).status_code == 200
+    env.sync_db.sessions.update_one({"id": sid}, {"$set": {
+        "order_state.orders.0.action": {"kind": "cut_ferry_loose", "summary": "cut the ferry loose"},
+        "order_state.orders.0.condition": {"kind": "gauge_reaches", "gauge": "river_water", "summary": "the water reaches the red mark"},
+        "order_state.orders.0.status": "pending"}})
     _play(client, sid, dev, 2, 5)
-    assert _doc(env, sid)["order_state"]["orders"][0]["status"] == "pending"      # water is high, player is away
-    assert _doc(env, sid)["rolling_state"]["ferry_state"] == "moored"
-    _play(client, sid, dev, 5, 8)
-    assert _doc(env, sid)["order_state"]["orders"][0]["status"] == "done"          # back at the dock: she acts
+    doc = _doc(env, sid)
+    assert doc["order_state"]["orders"][0]["status"] == "void"
+    assert _inventories(doc)["Mara Voss"] == ["fishing knife", "sealed parcel"]
+    assert "result" not in _shown(client, sid, dev)["orders_given"][0]
 
 
 def test_same_mechanism_delivers_a_parcel_when_a_person_arrives(client, env, narrator):
@@ -270,8 +297,8 @@ def test_retry_and_unsupported_orders_cost_nothing(client, env, narrator):
     dev = device()
     sid = seed(env.sync_db, dev, world())
     rid = f"o-{uuid.uuid4()}"
-    r1 = _act(client, sid, dev, 1, order=("Mara Voss", FERRY_ORDER), rid=rid)
-    r2 = _act(client, sid, dev, 1, order=("Mara Voss", FERRY_ORDER), rid=rid)
+    r1 = _act(client, sid, dev, 1, order=("Mara Voss", MARK_ORDER), rid=rid)
+    r2 = _act(client, sid, dev, 1, order=("Mara Voss", MARK_ORDER), rid=rid)
     assert r1.status_code == 200 and r2.status_code == 200 and r2.json().get("replayed") is True
     doc = _doc(env, sid)
     assert len(doc["order_state"]["orders"]) == 1 and doc["turn_count"] == 2 and len(narrator.seen) == 1
@@ -285,7 +312,7 @@ def test_narrator_hears_a_waiting_order_only_for_someone_in_the_scene(client, en
     dev = device()
     sid = seed(env.sync_db, dev, world(rise=0))
     narrator.rolling_for_call = {1: {"scene": FAR, "location": FAR}}
-    assert _act(client, sid, dev, 1, order=("Mara Voss", FERRY_ORDER)).status_code == 200
+    assert _act(client, sid, dev, 1, order=("Mara Voss", MARK_ORDER)).status_code == 200
     _play(client, sid, dev, 2, 4)
     assert oe.CONTEXT_MARKER not in narrator.seen[1] and oe.CONTEXT_MARKER not in narrator.seen[2]   # player is away
     narrator.rolling_for_call = {4: {"scene": DOCK, "location": DOCK}}

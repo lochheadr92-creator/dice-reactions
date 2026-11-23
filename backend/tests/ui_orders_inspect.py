@@ -11,7 +11,7 @@ assert os.environ["DB_NAME"].endswith("_test")
 for s in db.sessions.find({}):
     r = s.get("rolling_state") or {}
     st = s.get("order_state") or {}
-    print("turn_count:", s.get("turn_count"), "| scene:", r.get("scene"), "| ferry_state:", r.get("ferry_state"),
+    print("turn_count:", s.get("turn_count"), "| scene:", r.get("scene"),
           "| water:", (r.get("gauges") or {}).get("river_water", {}).get("level"))
     for o in st.get("orders", []):
         print(" order:", o["status"], "| fired_turn:", o.get("fired_turn"), "| shown:", o.get("shown"), "|", o["text"][:60])

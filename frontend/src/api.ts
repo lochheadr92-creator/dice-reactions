@@ -335,7 +335,7 @@ export async function getTellTargets(sessionId: string, deviceId: string): Promi
 
 export type OrderPreview = {
   recipient: string;
-  understood: { condition: string; action: string; even_if_away: boolean } | null;
+  understood: { condition: string; action: string } | null;
   issues: string[];
   notes: string[];
   can_commit: boolean;

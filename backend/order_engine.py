@@ -1,31 +1,32 @@
-"""Standing instructions: "if the water reaches the red mark, cut the ferry loose".
+"""Standing instructions: "when Orin arrives, give him the data chip".
 
 The engine owns what was asked, what the NPC understood, what she could observe, what she
 decided and whether she had the means. The narrator only describes the result. State lives on
 the save (``session["order_state"]``), never in narrator-written rolling state.
 
-A deliberately small vocabulary, one implementation for every scenario:
+A deliberately small vocabulary, one implementation for every story. Nothing here names a
+scenario's objects.
 
 Conditions
-  * ``gauge_reaches``: a gauge in ``rolling_state["gauges"]`` (level, mark, visible_from) reaches
-    its named mark. The NPC must be standing somewhere the gauge is visible from.
+  * ``gauge_reaches``: a gauge in ``rolling_state["gauges"]`` (label, mark, level, visible_from)
+    reaches its named mark. The NPC must be standing somewhere the gauge is visible from.
   * ``person_arrives``: a named person is standing where the NPC is, having not been there when
     the instruction was given.
 
-Actions
-  * ``cut_ferry_loose``: needs a cutting tool in the NPC's inventory and a moored ferry.
+Action
   * ``deliver_item``: hand something the NPC carries to a named person. Any item, in any setting.
-    Needs that item in the NPC's inventory and the target person present.
+    It happens when the NPC carries that item and the two are in the same place. Until they
+    are, she keeps waiting.
 
 Decision: she refuses when she distrusts the player, is hostile, or is flagged
-``refuses_orders``. A refusal and a missing tool are final outcomes, not retries. An order fires at
-most once: status moves off ``pending`` exactly once, inside the same transactional commit as
-the turn, and a tick for a turn already processed is a no-op.
+``refuses_orders``. A refusal and a missing item are final outcomes, not retries. An order fires
+at most once: status moves off ``pending`` exactly once, inside the same transactional commit
+as the turn, and a tick for a turn already processed is a no-op.
 
-The engine owns the gauges once an order exists (the narrator cannot make the water stop). The
-world a scenario starts with comes from ``rolling_state``; the engine copies it on first sight and
-projects its own values back after every merge. Gauges and the ferry are scenario data: nothing
-here invents them for a story that has none.
+The engine owns the gauges once an order exists (the narrator cannot stop one rising). The
+gauges a story starts with come from ``rolling_state``; the engine copies them on first sight
+and projects its own values back after every merge. Gauges are story data: nothing here invents
+one for a story that has none.
 """
 
 from __future__ import annotations
@@ -48,19 +49,18 @@ _NS = uuid.UUID("0c1d52a8-7b0e-4b7e-8a53-6e1f0d2b9c77")
 
 OrderError = ce.ClaimError
 
-_CUT_TOOL = re.compile(r"\b(knife|axe|hatchet|cleaver|machete|saw|blade|cutlass|shears|cutters|dagger)\b", re.I)
 _LEAD = r"(?:if|when|once|as soon as|the moment)"
 _REACH = re.compile(r"\b(reach(?:es)?|hit(?:s)?|gets? to|rises? to|pass(?:es)?|cross(?:es)?|touch(?:es)?|tops?)\b", re.I)
 _ARRIVE = re.compile(
     r"^(.+?)\s+(?:arrives?|shows? up|turns? up|gets? here|gets? in|docks?|comes? (?:in|here|back)|returns?)\b.*$", re.I
 )
-_CUT = re.compile(r"\b(?:cut|slip|cast)\b.*\bferry\b.*\b(?:loose|free|adrift|off)\b|\blet the ferry (?:go|drift)\b", re.I)
 _GIVE_ACT = re.compile(r"\b(?:deliver|hand|give|bring|pass|take)\b\s+(.+)$", re.I)
 _GIVE_TO = re.compile(r"\s+(?:over\s+)?to\s+(.+)$", re.I)
 _GIVE_LEAD = re.compile(r"^(?:(?:over|him|her|them|it|the|a|an|my|your|his|their|this|that)\s+)+", re.I)
 MAX_ITEM_TEXT = 60
 LEGACY_ITEM = "parcel"   # orders saved before delivery covered any item
-_EVEN_IF = re.compile(r",?\s*(?:even )?if i(?:'m| am| remain| stay|’m)?\b.*$", re.I)
+# Orders and results from the removed "cut the ferry loose" action can still sit in a save.
+LEGACY_ACTIONS = frozenset({"cut_ferry_loose"})
 
 
 def new_state() -> Dict[str, Any]:
@@ -102,13 +102,6 @@ def _find_named_item(row: Dict[str, Any], phrase: str) -> Optional[str]:
     return next((item for item in items if whole.search(_n(item))), None)
 
 
-def _find_item(row: Dict[str, Any], pattern: "re.Pattern[str]") -> Optional[str]:
-    for item in _inventory(row):
-        if pattern.search(item):
-            return item
-    return None
-
-
 def _willing(rolling: Dict[str, Any], row: Dict[str, Any]) -> bool:
     if rel.refuses_player(row):
         return False
@@ -131,8 +124,6 @@ def _ensure_world(state: Dict[str, Any], rolling: Dict[str, Any]) -> None:
                     "visible_from": [str(v) for v in g.get("visible_from") or []],
                 }
         world["gauges"] = gauges
-    if "ferry" not in world and isinstance(rolling.get("ferry_state"), str):
-        world["ferry"] = rolling["ferry_state"]
 
 
 def _resolve_person(rolling: Dict[str, Any], phrase: str, exclude: Optional[Dict[str, Any]] = None) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -171,14 +162,12 @@ def parse(text: str, rolling: Dict[str, Any], state: Optional[Dict[str, Any]], r
     notes: List[str] = []
     name = ce.npc_name(recipient)
     cond_text, act_text = _split(text)
-    even_if = bool(_EVEN_IF.search(act_text))
-    act_text = _EVEN_IF.sub("", act_text).strip()
     condition: Optional[Dict[str, Any]] = None
     action: Optional[Dict[str, Any]] = None
     arriving: Optional[Dict[str, Any]] = None
 
     if cond_text is None:
-        issues.append("Say when she should act, for example: if the water reaches the red mark, ...")
+        issues.append("Say when she should act, for example: when someone arrives, ...")
     else:
         cl = cond_text.lower()
         matched = [(k, g) for k, g in world.get("gauges", {}).items() if g["mark_name"].lower() in cl and g["label"].lower() in cl]
@@ -187,13 +176,9 @@ def parse(text: str, rolling: Dict[str, Any], state: Optional[Dict[str, Any]], r
             condition = {"kind": "gauge_reaches", "gauge": key, "summary": f"the {g['label']} reaches the {g['mark_name']}"}
             if g["level"] >= g["mark"]:
                 issues.append(f"The {g['label']} is already at the {g['mark_name']}; there is nothing to wait for.")
-        elif any(g["label"].lower() in cl for g in world.get("gauges", {}).values()) or re.search(r"\b(water|river|tide)\b", cl):
+        elif any(g["label"].lower() in cl for g in world.get("gauges", {}).values()):
             marks = ", ".join(f"the {g['mark_name']}" for g in world.get("gauges", {}).values())
-            issues.append(
-                "I can only watch for the water reaching a mark I can see"
-                + (f" ({marks})." if marks else ", and there isn't one here.")
-                + " Which mark do you mean?"
-            )
+            issues.append(f"I can only watch for it reaching a mark I can see ({marks}). Which mark do you mean?")
         else:
             m = _ARRIVE.match(cond_text.strip())
             if m:
@@ -207,15 +192,10 @@ def parse(text: str, rolling: Dict[str, Any], state: Optional[Dict[str, Any]], r
                     if ce._where(person) == ce._where(recipient):
                         issues.append(f"{ce.npc_name(person)} is already here; there is nothing to wait for.")
             else:
-                issues.append("She can only act on the water reaching a mark she can see, or on a named person arriving.")
+                issues.append("She can only act on something reaching a mark she can see, or on a named person arriving.")
 
-    al = act_text.lower()
     handover = _parse_delivery(act_text)
-    if _CUT.search(al):
-        action = {"kind": "cut_ferry_loose", "summary": "cut the ferry loose"}
-        if world.get("ferry") != "moored":
-            issues.append("There is no tied-up ferry here for her to cut loose.")
-    elif handover:
+    if handover:
         item_text, to_whom = handover
         target = arriving
         if not item_text:
@@ -231,17 +211,11 @@ def parse(text: str, rolling: Dict[str, Any], state: Optional[Dict[str, Any]], r
                       "target": {"id": ce.npc_key(target), "name": ce.npc_name(target)},
                       "summary": f"hand the {item_text} to {ce.npc_name(target)}"}
     else:
-        issues.append("She can only cut the ferry loose or hand something she carries to someone.")
+        issues.append("She can only hand something she carries to someone.")
 
     if condition and action:
-        if action["kind"] == "cut_ferry_loose":
-            tool = _find_item(recipient, _CUT_TOOL)
-            notes.append(f"{name} has {tool} to cut it with." if tool else f"{name} is not carrying anything she could cut with.")
-            if not even_if:
-                notes.append(f"You did not say what to do if you are away. She will wait for you unless you add \"even if I'm away\".")
-        else:
-            # Never say here whether she has it: what someone carries is not the player's to learn from a preview.
-            notes.append(f"{name} can hand over the {action['item']} only if she is carrying it when the time comes.")
+        # Never say here whether she has it: what someone carries is not the player's to learn from a preview.
+        notes.append(f"{name} can hand over the {action['item']} only if she is carrying it when the time comes.")
         if condition["kind"] == "gauge_reaches":
             g = world["gauges"][condition["gauge"]]
             where = ce._where(recipient)
@@ -254,12 +228,12 @@ def parse(text: str, rolling: Dict[str, Any], state: Optional[Dict[str, Any]], r
     return {
         "recipient": name,
         "understood": None if issues or not (condition and action) else {
-            "condition": condition["summary"], "action": action["summary"], "even_if_away": even_if,
+            "condition": condition["summary"], "action": action["summary"],
         },
         "issues": issues,
         "notes": notes,
         "can_commit": not issues and bool(condition and action),
-        "_condition": condition, "_action": action, "_even_if": even_if,
+        "_condition": condition, "_action": action,
     }
 
 
@@ -297,28 +271,24 @@ def record_order(state: Optional[Dict[str, Any]], rolling: Dict[str, Any], *, tu
     order = {
         "id": oid, "turn": turn, "recipient": {"id": ce.npc_key(row), "name": ce.npc_name(row)},
         "text": text.strip()[:MAX_TEXT], "condition": parsed["_condition"], "action": parsed["_action"],
-        "even_if_away": parsed["_even_if"], "status": "pending", "shown": False,
+        "status": "pending", "shown": False,
     }
     st["orders"].append(order)
     return st, order
 
 
-def _decide(order: Dict[str, Any], rolling: Dict[str, Any], row: Dict[str, Any], world: Dict[str, Any], turn: int,
-            player_here: bool) -> Optional[Dict[str, Any]]:
+def _decide(order: Dict[str, Any], rolling: Dict[str, Any], row: Dict[str, Any], turn: int) -> Optional[Dict[str, Any]]:
     """Resolve one triggered order. None means she holds off for now."""
-    kind = order["action"]["kind"]
-    if kind == "cut_ferry_loose" and not order.get("even_if_away") and not player_here:
-        return None
     out = {"fired_turn": turn, "at": ce._where(row)}
+    if order["action"]["kind"] in LEGACY_ACTIONS:
+        return {**out, "status": "void"}
+    target = ce.find_npc(rolling, order["action"]["target"]["id"])
+    if target is None or not ce._alive(rolling, target):
+        return {**out, "status": "void"}
+    if ce._where(target) != ce._where(row):
+        return None                          # nothing changes hands until the two are in the same place
     if not _willing(rolling, row):
         return {**out, "status": "refused"}
-    if kind == "cut_ferry_loose":
-        if world.get("ferry") != "moored":
-            return {**out, "status": "void"}
-        tool = _find_item(row, _CUT_TOOL)
-        if not tool:
-            return {**out, "status": "no_means"}
-        return {**out, "status": "done", "effect": {"kind": "ferry_adrift", "tool": tool}}
     item = _find_named_item(row, order["action"].get("item") or LEGACY_ITEM)
     if not item:
         return {**out, "status": "no_means"}
@@ -339,7 +309,6 @@ def tick(state: Optional[Dict[str, Any]], rolling: Dict[str, Any], turn: int) ->
     for g in world.get("gauges", {}).values():
         g["level"] = g["level"] + g.get("rise_per_turn", 0) * steps
     notes: List[str] = []
-    scene = ce._scene(rolling)
     for order in st["orders"]:
         if order["status"] != "pending":
             continue
@@ -358,13 +327,10 @@ def tick(state: Optional[Dict[str, Any]], rolling: Dict[str, Any], turn: int) ->
             person = ce.find_npc(rolling, cond["person"]["id"])
             if person is None or not ce._alive(rolling, person) or ce._where(person) != ce._where(row):
                 continue
-        result = _decide(order, rolling, row, world, turn, player_here=ce._where(row) == scene)
+        result = _decide(order, rolling, row, turn)
         if result is None:
             continue
         order.update(result)
-        eff = order.get("effect")
-        if eff and eff["kind"] == "ferry_adrift":
-            world["ferry"] = "adrift"
         notes.append(f"order {order['id'][:8]} {order['status']}")
     st["last_tick_turn"] = turn
     return st, notes
@@ -378,9 +344,6 @@ def project(state: Optional[Dict[str, Any]], rolling: Dict[str, Any]) -> List[st
     notes: List[str] = []
     if world.get("gauges"):
         rolling["gauges"] = copy.deepcopy(world["gauges"])
-    if world.get("ferry") and rolling.get("ferry_state") != world["ferry"]:
-        rolling["ferry_state"] = world["ferry"]
-        notes.append(f"ferry {world['ferry']}")
     for order in state.get("orders") or []:
         eff = order.get("effect")
         if order.get("status") != "done" or not eff or eff["kind"] not in ("item_given", "parcel_given"):
@@ -410,7 +373,7 @@ def narrator_context(state: Optional[Dict[str, Any]], rolling: Dict[str, Any]) -
 
 
 _RESULT = {
-    "done_ferry_adrift": "{n} cut the ferry loose with {tool}. The ferry is now adrift.",
+    "done_ferry_adrift": "{n} cut the ferry loose with {tool}. The ferry is now adrift.",   # a result saved before that action was removed
     "done_item_given": "{n} handed the {item} to {to}.",
     "done_parcel_given": "{n} handed the parcel to {to}.",
     "refused": "{n} saw it was time, but chose not to {act}. Show the hesitation or refusal in character. Nothing changed.",

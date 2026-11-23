@@ -5414,7 +5414,7 @@ async def _execute_story_action(
         guard_adjustments.extend(
             gateway.preserve_active_scene_cast(prior_rolling, merged_rolling)
         )
-        # Standing orders: the engine's world (water level, ferry, handed-over items)
+        # Standing orders: the engine's world (gauge levels, handed-over items)
         # is written back over whatever the narrator left.
         guard_adjustments.extend(order_engine.project(working_orders, merged_rolling))
         # What each NPC carries and their condition survive the narrator rewriting the cast.
