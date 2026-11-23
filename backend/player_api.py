@@ -11,6 +11,8 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
+import claim_engine
+import order_engine
 from mature_content import default_mature_content
 
 # Session fields exposed to players (device_id and engine metadata excluded).
@@ -30,6 +32,9 @@ PLAYER_SESSION_FIELDS = frozenset({
     "mature_content",
     "distribution_capabilities",
     "rendering_policy",
+    "branch_label",
+    "branch_root_title",
+    "branched_from",
     "created_at",
     "updated_at",
 })
@@ -330,6 +335,16 @@ def build_player_turn(
     return out
 
 
+def _attach_protagonist(out: Dict[str, Any], session: Dict[str, Any]) -> None:
+    """Expose who the player controls now (name and role only) and how many handovers happened."""
+    controlled = session.get("controlled_character")
+    if isinstance(controlled, dict) and controlled.get("name"):
+        out["protagonist"] = {"name": controlled.get("name"), "role": controlled.get("role")}
+    handover = session.get("handover")
+    if isinstance(handover, dict) and int(handover.get("count") or 0) > 0:
+        out["handover_done"] = True
+
+
 def build_player_session(session: Dict[str, Any]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for field in PLAYER_SESSION_FIELDS:
@@ -342,6 +357,21 @@ def build_player_session(session: Dict[str, Any]) -> Dict[str, Any]:
             out[field] = _iso(value)
         else:
             out[field] = value
+    _attach_protagonist(out, session)
+    # Only what the player said. Beliefs, overhearers, relays and reactions stay engine-side.
+    told = claim_engine.player_view(session.get("claim_state"))
+    if told:
+        out["claims_told"] = told
+    # Standing instructions: the player's words, what she understood, a result only once seen.
+    given = order_engine.player_view(session.get("order_state"))
+    if given:
+        out["orders_given"] = given
+    # What the player did with moves and was told back. Imported late: the move engines read this module.
+    import play_moves
+
+    moves_seen = play_moves.player_view(session.get("play_state"))
+    if moves_seen:
+        out["play_view"] = moves_seen
     out.setdefault("mature_content", default_mature_content())
     out.setdefault("distribution_capabilities", {})
     out.setdefault(

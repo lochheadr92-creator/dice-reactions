@@ -30,9 +30,23 @@ import {
   setSessionMode,
   setSessionPlaySettings,
   getActionRequestStatus,
+  branchSession,
+  pinPassage,
+  HandoverResponse,
+  Disclosure,
+  disclosureActionText,
+  MoveRequest,
+  moveActionText,
+  orderActionText,
   Turn,
   SessionSummary,
 } from "../../src/api";
+import NotebookPanel from "../../src/NotebookPanel";
+import InventoryPanel from "../../src/InventoryPanel";
+import ChapterPanel from "../../src/ChapterPanel";
+import TellPanel from "../../src/TellPanel";
+import OrderPanel from "../../src/OrderPanel";
+import MovesPanel from "../../src/MovesPanel";
 import { syncAfterActionConflict } from "../../src/action-conflict-sync";
 import { resolvePendingActionStatus } from "../../src/action-status-sync";
 import { mergeChronicleTurns, maxTurnNumber } from "../../src/chronicle-merge";
@@ -187,8 +201,22 @@ export default function PlayScreen() {
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [customAction, setCustomAction] = useState("");
   const [showLedger, setShowLedger] = useState(false);
+  const inventoryLineRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!showLedger) inventoryLineRef.current = null;
+  }, [showLedger]);
   const [showMenu, setShowMenu] = useState(false);
   const [showWhy, setShowWhy] = useState(false);
+  const [showNotebook, setShowNotebook] = useState(false);
+  const [notebookKey, setNotebookKey] = useState(0);
+  const [showChapter, setShowChapter] = useState(false);
+  const [showTell, setShowTell] = useState(false);
+  const [showOrder, setShowOrder] = useState(false);
+  const [showMoves, setShowMoves] = useState(false);
+  const [branching, setBranching] = useState(false);
+  const [pinNotice, setPinNotice] = useState<string | null>(null);
+  // One request id per branch attempt: a double tap or retry returns the same branch.
+  const branchRequestRef = useRef<string | null>(null);
   const [whyHistory, setWhyHistory] = useState<HistoryTurn[]>([]);
   const [latestOutcome, setLatestOutcome] = useState<TurnOutcome | null>(null);
   const [whyLoading, setWhyLoading] = useState(false);
@@ -489,7 +517,13 @@ export default function PlayScreen() {
     else Alert.alert(title, message);
   };
 
-  const submit = async (text: string) => {
+  const submit = async (
+    text: string,
+    extra?: { disclosure?: Disclosure; order?: { recipient: string; text: string }; move?: MoveRequest }
+  ) => {
+    const disclosure = extra?.disclosure;
+    const move = extra?.move;
+    const order = extra?.order;
     const trimmed = text.trim();
     if (!trimmed || actionBusy) return;
 
@@ -517,6 +551,10 @@ export default function PlayScreen() {
         action_text: trimmed,
         debug_mode: debugMode,
         action_request_id: requestId,
+        expected_turn_count: baselineMaxTurn,
+        ...(disclosure ? { disclosure } : {}),
+        ...(order ? { order } : {}),
+        ...(move ? { move } : {}),
       });
 
       if (generation !== submitGenerationRef.current) return;
@@ -568,6 +606,74 @@ export default function PlayScreen() {
       if (generation === submitGenerationRef.current) {
         setSubmitting(false);
       }
+    }
+  };
+
+  const handleBranch = () => {
+    setShowMenu(false);
+    if (branching || actionBusy) return;
+    const turnCount = maxTurnNumber(turns);
+    const doIt = async () => {
+      if (!branchRequestRef.current) {
+        branchRequestRef.current = `br-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+      }
+      setBranching(true);
+      try {
+        const deviceId = deviceIdRef.current || (await getDeviceId());
+        const res = await branchSession(sessionId, deviceId, branchRequestRef.current, turnCount);
+        branchRequestRef.current = null;
+        router.replace(`/play/${res.session.id}`);
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 409) {
+          // Stale or busy: a retry needs a fresh decision, not the same id.
+          branchRequestRef.current = null;
+        }
+        showError(e);
+      } finally {
+        if (mountedRef.current) setBranching(false);
+      }
+    };
+    const message =
+      "Make a copy of this story at this exact decision. You can take one choice here and the other in the new copy.";
+    if (Platform.OS === "web") {
+      if (window.confirm(`Branch story from here?\n\n${message}`)) void doIt();
+    } else {
+      Alert.alert("Branch story from here?", message, [
+        { text: "Cancel", style: "cancel" },
+        { text: "Branch", onPress: () => void doIt() },
+      ]);
+    }
+  };
+
+  const handlePin = async (turn: Turn, paragraphIndex: number) => {
+    try {
+      const deviceId = deviceIdRef.current || (await getDeviceId());
+      const res = await pinPassage(sessionId, deviceId, {
+        turn_number: turn.turn_number,
+        paragraph_index: paragraphIndex,
+      });
+      setNotebookKey((k) => k + 1);
+      setPinNotice(res.created ? "Pinned to your notebook." : "Already in your notebook.");
+      setTimeout(() => {
+        if (mountedRef.current) setPinNotice(null);
+      }, 2500);
+    } catch (e) {
+      showError(e);
+    }
+  };
+
+  const handleHandoverDone = async (res: HandoverResponse) => {
+    setShowChapter(false);
+    setSession(res.session);
+    try {
+      const deviceId = deviceIdRef.current || (await getDeviceId());
+      const fresh = await getSession(sessionId, deviceId);
+      setSession(fresh.session);
+      setTurns((prev) => mergeChronicleTurns(prev, fresh.turns));
+      pendingScrollRef.current = true;
+      void refreshCausalHistory();
+    } catch {
+      if (res.turn) appendCommittedTurn(res.turn);
     }
   };
 
@@ -679,6 +785,17 @@ export default function PlayScreen() {
             </View>
           </View>
 
+          {session.protagonist?.name || session.branch_label ? (
+            <Text style={[styles.characterTag, { paddingHorizontal: 12, marginBottom: 4 }]} numberOfLines={1} testID="hud-identity">
+              {[
+                session.protagonist?.name ? `YOU ARE ${session.protagonist.name.toUpperCase()}` : null,
+                session.branch_label ? session.branch_label.toUpperCase() : null,
+              ]
+                .filter(Boolean)
+                .join("  ·  ")}
+            </Text>
+          ) : null}
+
           {conditionLine ? (
             <View style={styles.conditionLine} testID="hud-condition-line">
               <Text style={styles.conditionLabel}>Condition</Text>
@@ -763,16 +880,47 @@ export default function PlayScreen() {
                 </View>
               ) : null}
 
-              {sanitizeParagraphs(turn.paragraphs, turn.narrative).map((p, idx) => (
-                <Animated.Text
-                  key={idx}
-                  entering={i === turns.length - 1 ? FadeInDown.duration(420).delay(idx * 90) : FadeIn}
-                  style={[styles.proseParagraph, { fontSize: Math.round(18 * fontScale), lineHeight: Math.round(28 * fontScale) }]}
-                  testID={`paragraph-${turn.turn_number}-${idx}`}
-                >
-                  {p}
-                </Animated.Text>
-              ))}
+              {turn.character?.name &&
+              (i === 0 || turns[i - 1].character?.name !== turn.character.name) ? (
+                <Text style={styles.characterTag} testID={`character-tag-${turn.turn_number}`}>
+                  · {turn.character.name.toUpperCase()}
+                  {turn.character.role ? ` · ${turn.character.role.toUpperCase()}` : ""} ·
+                </Text>
+              ) : null}
+
+              {(() => {
+                const shown = sanitizeParagraphs(turn.paragraphs, turn.narrative);
+                // A pin addresses the stored paragraph by index, so it is only offered
+                // when the screen shows exactly the stored paragraphs.
+                const pinnable = shown.length === (turn.paragraphs || []).length;
+                return shown.map((p, idx) => (
+                  <View key={idx} style={styles.paragraphRow}>
+                    <Animated.Text
+                      entering={i === turns.length - 1 ? FadeInDown.duration(420).delay(idx * 90) : FadeIn}
+                      style={[
+                        styles.proseParagraph,
+                        styles.paragraphText,
+                        { fontSize: Math.round(18 * fontScale), lineHeight: Math.round(28 * fontScale) },
+                      ]}
+                      testID={`paragraph-${turn.turn_number}-${idx}`}
+                    >
+                      {p}
+                    </Animated.Text>
+                    {pinnable ? (
+                      <TouchableOpacity
+                        onPress={() => handlePin(turn, idx)}
+                        hitSlop={8}
+                        style={styles.pinBtn}
+                        testID={`pin-btn-${turn.turn_number}-${idx}`}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Pin paragraph ${idx + 1} of turn ${turn.turn_number} to your notebook`}
+                      >
+                        <Ionicons name="bookmark-outline" size={16} color={COLORS.textMuted} />
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                ));
+              })()}
 
               {devUnlocked && debugMode && turn.debug && Object.keys(turn.debug).length > 0 ? (
                 <View style={styles.debugBlock} testID={`debug-block-${turn.turn_number}`}>
@@ -877,38 +1025,31 @@ export default function PlayScreen() {
               </TouchableOpacity>
             </View>
             <ScrollView contentContainerStyle={{ padding: 16 }} showsVerticalScrollIndicator={false}>
-              {Object.keys(ledger).length === 0 ? (
-                <Text style={styles.ledgerEmpty}>— no ledger yet —</Text>
-              ) : (
-                Object.entries(ledger).map(([k, v]) => (
-                  <View key={k} style={styles.ledgerCell} testID={`ledger-${k}`}>
-                    <Text style={styles.ledgerKey}>{k.toUpperCase()}</Text>
-                    <Text style={styles.ledgerVal}>{String(v) || "—"}</Text>
-                  </View>
-                ))
-              )}
-              {state["Inventory Summary"] && (
-                <View style={[styles.ledgerCell, styles.ledgerCellAccent]}>
-                  <Text style={styles.ledgerKey}>SUMMARY</Text>
-                  <Text style={styles.ledgerVal}>{state["Inventory Summary"]}</Text>
-                </View>
-              )}
-              {state["Notable Conditions"] && (
-                <View style={[styles.ledgerCell, styles.ledgerCellAccent]}>
-                  <Text style={styles.ledgerKey}>CONDITIONS</Text>
-                  <Text style={styles.ledgerVal}>{state["Notable Conditions"]}</Text>
-                </View>
-              )}
-              <TouchableOpacity
-                style={styles.ledgerCheckBtn}
-                onPress={() => {
+              <InventoryPanel
+                ledger={ledger}
+                summary={state["Inventory Summary"]}
+                conditions={state["Notable Conditions"]}
+                characterName={session.protagonist?.name}
+                busy={submitting}
+                onAct={(text) => {
+                  // Fill the action box, do not send. A later pick swaps the sentence this panel
+                  // added before, and anything the player typed stays.
+                  const prev = inventoryLineRef.current;
+                  let base = customAction;
+                  if (prev && base.includes(prev)) base = base.replace(prev, "").replace(/\s{2,}/g, " ");
+                  base = base.trim();
+                  inventoryLineRef.current = text;
+                  setCustomAction(base ? `${base} ${text}` : text);
+                }}
+                onClose={() => {
+                  inventoryLineRef.current = null;
+                  setShowLedger(false);
+                }}
+                onCheckInStory={() => {
                   setShowLedger(false);
                   submit("I check my inventory carefully.");
                 }}
-                testID="ledger-check-action"
-              >
-                <Text style={styles.ledgerCheckText}>[ CHECK · GEAR · IN · STORY ]</Text>
-              </TouchableOpacity>
+              />
               <View style={{ height: 30 }} />
             </ScrollView>
           </View>
@@ -921,6 +1062,88 @@ export default function PlayScreen() {
           <View style={styles.menuSheet} testID="menu-sheet">
             <Text style={styles.menuHead}>· CHRONICLE ·</Text>
             <Text style={styles.menuMeta}>{session.genre.toUpperCase()} · {session.difficulty} · turn {session.turn_count}</Text>
+            {session.branch_label ? (
+              <Text style={styles.menuMeta} testID="menu-branch-label">
+                {session.branch_label.toUpperCase()} · from turn {session.branched_from?.turn_number}
+              </Text>
+            ) : null}
+
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={handleBranch}
+              disabled={branching || actionBusy}
+              testID="branch-story-btn"
+            >
+              <Ionicons name="git-branch-outline" size={18} color={COLORS.textSecondary} />
+              <Text style={styles.menuText}>Branch story from here</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={() => {
+                setShowMenu(false);
+                setShowNotebook(true);
+              }}
+              testID="open-notebook-btn"
+            >
+              <Ionicons name="bookmarks-outline" size={18} color={COLORS.textSecondary} />
+              <Text style={styles.menuText}>Notebook</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={() => {
+                setShowMenu(false);
+                setShowTell(true);
+              }}
+              disabled={actionBusy}
+              testID="tell-someone-btn"
+            >
+              <Ionicons name="chatbubble-ellipses-outline" size={18} color={COLORS.textSecondary} />
+              <Text style={styles.menuText}>Tell someone</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={() => {
+                setShowMenu(false);
+                void refreshSessionReadOnly(); // the list inside shows results once they have been seen
+                setShowOrder(true);
+              }}
+              disabled={actionBusy}
+              testID="leave-instructions-btn"
+            >
+              <Ionicons name="clipboard-outline" size={18} color={COLORS.textSecondary} />
+              <Text style={styles.menuText}>Leave instructions</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={() => {
+                setShowMenu(false);
+                setShowMoves(true);
+              }}
+              disabled={actionBusy}
+              testID="open-moves-btn"
+            >
+              <Ionicons name="options-outline" size={18} color={COLORS.textSecondary} />
+              <Text style={styles.menuText}>More things to do</Text>
+            </TouchableOpacity>
+
+            {!session.handover_done ? (
+              <TouchableOpacity
+                style={styles.menuRow}
+                onPress={() => {
+                  setShowMenu(false);
+                  setShowChapter(true);
+                }}
+                disabled={actionBusy}
+                testID="end-chapter-btn"
+              >
+                <Ionicons name="swap-horizontal-outline" size={18} color={COLORS.textSecondary} />
+                <Text style={styles.menuText}>End this chapter</Text>
+              </TouchableOpacity>
+            ) : null}
 
             {devUnlocked && (
               <TouchableOpacity
@@ -1069,6 +1292,62 @@ export default function PlayScreen() {
         </TouchableOpacity>
       </Modal>
 
+      <NotebookPanel
+        visible={showNotebook}
+        sessionId={sessionId}
+        deviceId={deviceIdRef.current}
+        refreshKey={notebookKey}
+        onClose={() => setShowNotebook(false)}
+      />
+      <TellPanel
+        visible={showTell}
+        sessionId={sessionId}
+        deviceId={deviceIdRef.current}
+        busy={actionBusy}
+        onClose={() => setShowTell(false)}
+        onSend={(d) => {
+          setShowTell(false);
+          void submit(disclosureActionText(d), { disclosure: d });
+        }}
+      />
+      <OrderPanel
+        visible={showOrder}
+        sessionId={sessionId}
+        deviceId={deviceIdRef.current}
+        busy={actionBusy}
+        given={session.orders_given || []}
+        onClose={() => setShowOrder(false)}
+        onSend={(o) => {
+          setShowOrder(false);
+          void submit(orderActionText(o), { order: o });
+        }}
+      />
+      <MovesPanel
+        visible={showMoves}
+        sessionId={sessionId}
+        deviceId={deviceIdRef.current}
+        busy={actionBusy}
+        onClose={() => setShowMoves(false)}
+        onSend={(m) => {
+          setShowMoves(false);
+          void submit(moveActionText(m), { move: m });
+        }}
+      />
+      <ChapterPanel
+        visible={showChapter}
+        sessionId={sessionId}
+        deviceId={deviceIdRef.current}
+        turnCount={maxTurnNumber(turns)}
+        currentName={session.protagonist?.name || null}
+        onClose={() => setShowChapter(false)}
+        onDone={handleHandoverDone}
+      />
+      {pinNotice ? (
+        <View style={styles.pinToast} testID="pin-toast" pointerEvents="none">
+          <Text style={styles.pinToastText}>{pinNotice}</Text>
+        </View>
+      ) : null}
+
       {/* Why this happened — engine-recorded causal history (player-safe) */}
       <Modal visible={showWhy} animationType="slide" transparent onRequestClose={() => setShowWhy(false)}>
         <View style={styles.modalRoot}>
@@ -1119,6 +1398,27 @@ export default function PlayScreen() {
 }
 
 const styles = StyleSheet.create({
+  characterTag: {
+    fontFamily: FONTS.monoBold,
+    color: COLORS.primary,
+    fontSize: 10,
+    letterSpacing: 3,
+    marginBottom: 8,
+  },
+  paragraphRow: { flexDirection: "row", alignItems: "flex-start", gap: 6 },
+  paragraphText: { flex: 1 },
+  pinBtn: { paddingTop: 6, minWidth: 28, minHeight: 28, alignItems: "center" },
+  pinToast: {
+    position: "absolute",
+    bottom: 90,
+    alignSelf: "center",
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  pinToastText: { fontFamily: FONTS.mono, color: COLORS.primary, fontSize: 11, letterSpacing: 1 },
   safe: { flex: 1, backgroundColor: COLORS.background },
   loadingWrap: { flex: 1, alignItems: "center", justifyContent: "center" },
   loadingText: {

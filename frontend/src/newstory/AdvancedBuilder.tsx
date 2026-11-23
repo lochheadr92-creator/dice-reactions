@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   StyleSheet,
@@ -40,6 +40,8 @@ type AdvancedBuilderProps = {
   onSetMatureContent: (patch: Partial<MatureContentPreferences>) => void;
   onStart: () => void;
   onChangePath: () => void;
+  /** Called whenever the page changes, so the screen can scroll back to the top. */
+  onPageChange?: () => void;
 };
 
 export type AdvancedStartRequest = {
@@ -493,8 +495,12 @@ export function AdvancedBuilder({
   onSetMatureContent,
   onStart,
   onChangePath,
+  onPageChange,
 }: AdvancedBuilderProps) {
   const [pageIndex, setPageIndex] = useState(0);
+  useEffect(() => {
+    onPageChange?.();
+  }, [pageIndex, onPageChange]);
   // Answers the player set in this visit. Anything else still holds its preset value.
   const [touched, setTouched] = useState<ReadonlySet<string>>(new Set());
   const [matureExpanded, setMatureExpanded] = useState(false);

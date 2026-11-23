@@ -9,9 +9,9 @@ import re
 import logging
 import uuid
 from pathlib import Path
-from pydantic import BaseModel, Field, conint, confloat
+from pydantic import BaseModel, Field, conint, confloat, model_validator
 from pymongo.errors import DuplicateKeyError
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Sequence, Tuple
 from datetime import datetime, timezone
 
 ROOT_DIR = Path(__file__).parent
@@ -77,6 +77,16 @@ import causal_history  # noqa: E402  — player-safe "Why this happened" project
 import mature_content as mature_policy  # noqa: E402
 import mature_rendering  # noqa: E402
 from security import fetch_owned_session, require_admin, require_device_id  # noqa: E402
+import story_branching  # noqa: E402
+import notebook  # noqa: E402
+import chapter_handover  # noqa: E402
+import claim_engine  # noqa: E402
+import order_engine  # noqa: E402
+import npc_possessions  # noqa: E402
+import duet_api  # noqa: E402
+import play_moves  # noqa: E402
+import play_moves_api  # noqa: E402
+import play_facts  # noqa: E402
 from rate_limit import (  # noqa: E402
     ConcurrencyPoolFull,
     ConcurrencyPoolUnavailable,
@@ -658,6 +668,12 @@ class NewStoryRequest(BaseModel):
     # Also seeds deterministic Quick Start pool selection when quick_start_key is set.
     creation_request_id: Optional[str] = Field(default=None, max_length=128)
 
+STALE_CHOICES_DETAIL = (
+    "Those choices are out of date. The story moved on in another tab or after a handover. "
+    "Reload to see where you are now."
+)
+
+
 class ActionRequest(BaseModel):
     session_id: str
     action_text: str
@@ -665,6 +681,48 @@ class ActionRequest(BaseModel):
     # Client-generated idempotency key. One id ⇒ at most one committed turn for
     # this session. Optional for legacy clients (no idempotency without it).
     action_request_id: Optional[str] = Field(default=None, max_length=128)
+    # The turn count the player was looking at. A mismatch means their choices
+    # are stale (another tab, a handover) and the action is refused untouched.
+    expected_turn_count: Optional[int] = Field(default=None, ge=0)
+    # "Tell someone": one claim to one person in the scene. The action text is
+    # rebuilt from it so a retry with the same payload is the same request.
+    disclosure: Optional["DisclosureRequest"] = None
+    # "Leave instructions": a standing order for one person in the scene. The engine
+    # re-parses it; a preview the client showed is never trusted.
+    order: Optional["OrderRequest"] = None
+    # A structured move (challenge, bargain, route, ...). Checked against the real scene; the
+    # action text is composed from it so a retry with the same payload is the same request.
+    move: Optional[play_moves.MoveRequest] = None
+
+    @model_validator(mode="after")
+    def _compose_disclosure_text(self) -> "ActionRequest":
+        if sum(x is not None for x in (self.disclosure, self.order, self.move)) > 1:
+            raise ValueError("an action is one of: a telling, standing instructions, or a move")
+        if self.move is not None:
+            self.action_text = play_moves.action_text(self.move)
+        if self.order is not None:
+            self.action_text = (
+                f'You leave instructions with {self.order.recipient.strip()}: "{self.order.text.strip()}"'
+            )
+        if self.disclosure is not None:
+            who = self.disclosure.recipient.strip()
+            how = "say aloud to" if self.disclosure.aloud else "quietly tell"
+            self.action_text = f'You {how} {who}: "{self.disclosure.claim.strip()}"'
+        return self
+
+
+class DisclosureRequest(BaseModel):
+    recipient: str = Field(min_length=1, max_length=80)
+    claim: str = Field(min_length=1, max_length=claim_engine.MAX_CLAIM_TEXT)
+    aloud: bool = False
+
+
+class OrderRequest(BaseModel):
+    recipient: str = Field(min_length=1, max_length=80)
+    text: str = Field(min_length=1, max_length=order_engine.MAX_TEXT)
+
+
+ActionRequest.model_rebuild()
 
 class ParsedTurn(BaseModel):
     narrative: str
@@ -2460,9 +2518,18 @@ async def _build_messages(
     (e.g. very first turn, or an old session created before this upgrade).
     """
     session_id = session["id"]
+    # After a handover the narrator sees only the successor's side of the story.
+    handed_over = chapter_handover.is_handed_over(session)
+    replay_floor = chapter_handover.replay_floor(session)
+    if handed_over:
+        session = chapter_handover.narrator_session(session)
     messages: List[Dict[str, str]] = [
         {"role": "system", "content": STORY_ENGINE_SYSTEM_PROMPT},
     ]
+    if handed_over:
+        messages.append(
+            {"role": "system", "content": chapter_handover.controlled_character_message(session)}
+        )
     # Bounded copies of everything the player typed that this request refers to.
     # Rendered once, as JSON, inside the final user message (finding 1).
     player_data: Dict[str, Any] = {}
@@ -2535,7 +2602,11 @@ async def _build_messages(
         creation_ctx = creation_contract.build_later_turn_creation_directive(contract, player_data)
         if creation_ctx:
             messages.append({"role": "system", "content": creation_ctx})
-        hook_inf = creation_contract.build_hook_influence_directive(contract, player_data)
+        hook_inf = (
+            None
+            if handed_over
+            else creation_contract.build_hook_influence_directive(contract, player_data)
+        )
         if hook_inf:
             messages.append({"role": "system", "content": hook_inf})
         # Difficulty is consequence policy (severity multiplier), not tone.
@@ -2556,14 +2627,20 @@ async def _build_messages(
     rolling = session.get("rolling_state")
     # Restore creation surfaces from durable session before projecting prior_state
     # (compaction may have dropped dict-only world_frame/character_hooks).
-    if isinstance(rolling, dict) and session.get("custom_world_setup"):
+    if isinstance(rolling, dict) and session.get("custom_world_setup") and not handed_over:
         rolling = creation_contract.restore_creation_surfaces(rolling, session)
+    if handed_over and isinstance(rolling, dict):
+        rolling = chapter_handover.narrator_view(session, rolling)
 
     # Pull recent turns. If we have rolling_state, we only need a small number
     # for tone/voice continuity. If not, we fall back to the larger window.
     take = max(1, memory_depth) if rolling else history_window_fallback
+    turn_filter: Dict[str, Any] = {"session_id": session_id}
+    if replay_floor:
+        # Prose from before a handover belongs to the former protagonist's view.
+        turn_filter["turn_number"] = {"$gte": replay_floor}
     recent_desc = await db.turns.find(
-        {"session_id": session_id}, {"_id": 0}
+        turn_filter, {"_id": 0}
     ).sort("turn_number", -1).to_list(length=take)
     prior_turns = list(reversed(recent_desc))
 
@@ -3023,6 +3100,15 @@ _HALLUCINATION_RETRY_INSTRUCTION = (
     "<established_truth>."
 )
 
+_ECHO_RETRY_INSTRUCTION = (
+    "[REWRITE: {reason}]\n"
+    "The events, outcome and established facts are right. Keep them. Change only the wording "
+    "that repeats, and keep the same length within the active [PROSE MODE] budget. Output "
+    "ONLY the required tag blocks, with <rolling_state> FIRST and closed before prose "
+    "(<rolling_state>, <narrative>, <choices>, <state>, <ledger>{debug_clause}). "
+    "Do NOT echo <prior_state> or <established_truth>."
+)
+
 
 def _full_validate(
     parsed: ParsedTurn,
@@ -3075,12 +3161,7 @@ def _full_validate(
     # A limit from the premise that is still active may not end in passing.
     standing = _story_constraints(session)
     if standing:
-        proposed = parsed.rolling_state.get(world_constraints.LIFT_REQUEST_KEY) if isinstance(parsed.rolling_state, dict) else None
-        lifting_now = (
-            [str(item.get("id")) for item in proposed if isinstance(item, dict)]
-            if isinstance(proposed, list) and str(player_action or "").strip()
-            else []
-        )
+        lifting_now = _constraint_lifts_proposed(parsed, player_action)
         breach = world_constraints.breach_reason(
             parsed.paragraphs or [],
             standing,
@@ -3090,6 +3171,64 @@ def _full_validate(
         if breach:
             return False, breach, "coherence"
     return True, "", "ok"
+
+
+def _constraint_lifts_proposed(parsed: ParsedTurn, player_action: Optional[str]) -> List[str]:
+    """Ids of standing constraints this reply asks to lift. Only a player-action turn can lift one."""
+    proposed = (
+        parsed.rolling_state.get(world_constraints.LIFT_REQUEST_KEY)
+        if isinstance(parsed.rolling_state, dict)
+        else None
+    )
+    if isinstance(proposed, list) and str(player_action or "").strip():
+        return [str(item.get("id")) for item in proposed if isinstance(item, dict)]
+    return []
+
+
+def _echo_validate(
+    parsed: ParsedTurn,
+    session: Dict[str, Any],
+    player_action: Optional[str],
+    recent_narratives: Sequence[str] = (),
+) -> Tuple[bool, str, str]:
+    """Soft checks: the turn is true but worn. Returns ``(ok, reason, kind)`` with kind "echo" or "ok".
+
+    A standing limit retold in many sentences, or a long passage copied from a recent
+    turn. Separate from ``_full_validate`` so a soft defect can never be mistaken for a
+    truth violation, and run only after that check has passed.
+    """
+    standing = _story_constraints(session)
+    if standing:
+        is_opening = not player_action and int(session.get("turn_count") or 0) <= 0
+        retold = world_constraints.restatement_reason(
+            parsed.paragraphs or [],
+            standing,
+            world_constraints.status_rows(standing, session.get("rolling_state")),
+            _constraint_lifts_proposed(parsed, player_action),
+            is_opening=is_opening,
+        )
+        if retold:
+            return False, retold, "echo"
+    copied = repetition_guard.copied_passage_reason(recent_narratives, parsed.paragraphs or [])
+    if copied:
+        return False, copied, "echo"
+    return True, "", "ok"
+
+
+def _validate_turn(
+    parsed: ParsedTurn,
+    session: Dict[str, Any],
+    player_action: Optional[str],
+    early_game_stage: Optional[int] = None,
+    recent_narratives: Sequence[str] = (),
+) -> Tuple[bool, str, str]:
+    """Hard validation first, then the soft echo checks. A hard defect is never hidden behind an echo."""
+    ok, reason, kind = _full_validate(
+        parsed, session, player_action, early_game_stage=early_game_stage
+    )
+    if not ok:
+        return ok, reason, kind
+    return _echo_validate(parsed, session, player_action, recent_narratives)
 
 
 # Soft validation defects may still select "best-available" model prose.
@@ -3107,7 +3246,7 @@ def _validation_failure_is_hard(kind: str, reason: str) -> bool:
     r = (reason or "").strip().lower()
     if k in ("", "ok"):
         return False
-    if k == "pacing":
+    if k in ("pacing", "echo"):
         return False
     if k == "coherence":
         return not any(r.startswith(p) for p in _SOFT_COHERENCE_REASON_PREFIXES)
@@ -3571,6 +3710,30 @@ async def _generate_validated_turn(
     return parsed, raw, meta
 
 
+async def _recent_narratives(session_id: Optional[str], limit: int = 3) -> List[str]:
+    """Narratives of the last committed turns, newest first. Read only, nothing is stored.
+
+    Feeds the copied-passage check. A failed read skips that soft check, loudly in the
+    log, and never blocks the turn.
+    """
+    if not session_id:
+        return []
+    try:
+        docs = await (
+            db.turns.find(
+                {"session_id": session_id},
+                {"_id": 0, "canonical_narrative": 1, "narrative": 1},
+            )
+            .sort("turn_number", -1)
+            .to_list(length=limit)
+        )
+    except Exception as exc:  # the check is soft; the turn must still be written
+        logger.warning("Recent narratives unavailable, copied-passage check skipped: %s", exc)
+        return []
+    texts = [str(d.get("canonical_narrative") or d.get("narrative") or "") for d in docs]
+    return [t for t in texts if t.strip()]
+
+
 async def _generate_unguarded_turn(
     session: Dict[str, Any], user_text: str,
     player_action: Optional[str] = None,
@@ -3590,6 +3753,7 @@ async def _generate_unguarded_turn(
     dev_on = "[DEV_MODE: ON]" in user_text
     # The story's "Speed" setting, for every model call this request makes.
     ai_service.use_story_reasoning_effort(session.get("thinking_effort"))
+    recent_narratives = await _recent_narratives(session.get("id"))
 
     raw, meta = await _generate_turn(
         session,
@@ -3599,8 +3763,12 @@ async def _generate_unguarded_turn(
         replayability_directives=replayability_directives,
     )
     parsed = parse_turn(raw)
-    ok, reason, kind = _full_validate(
-        parsed, session, player_action, early_game_stage=early_game_stage
+    ok, reason, kind = _validate_turn(
+        parsed,
+        session,
+        player_action,
+        early_game_stage=early_game_stage,
+        recent_narratives=recent_narratives,
     )
     if not ok:
         repaired = _repair_unknown_person_choices(
@@ -3627,6 +3795,8 @@ async def _generate_unguarded_turn(
         )
     elif kind == "pacing":
         retry_note = pacing.build_pacing_retry_instruction(reason, debug_clause)
+    elif kind == "echo":
+        retry_note = _ECHO_RETRY_INSTRUCTION.format(reason=reason, debug_clause=debug_clause)
     else:
         retry_note = _build_format_retry_instruction(
             reason, debug_clause, prose_mode=meta.get("prose_mode")
@@ -3726,8 +3896,12 @@ async def _generate_unguarded_turn(
         result2["budget"] = retry_budget_diag
         raw2 = result2["content"]
         parsed2 = parse_turn(raw2)
-        ok2, reason2, kind2 = _full_validate(
-            parsed2, session, player_action, early_game_stage=early_game_stage
+        ok2, reason2, kind2 = _validate_turn(
+            parsed2,
+            session,
+            player_action,
+            early_game_stage=early_game_stage,
+            recent_narratives=recent_narratives,
         )
         repair_note2 = ""
         if not ok2:
@@ -4998,6 +5172,60 @@ async def _execute_story_action(
         expected_turn_count = session.get("turn_count", 0)
         expected_revision = int(session.get(SESSION_REVISION_FIELD) or 0)
         next_turn_number = expected_turn_count + 1
+        if req.expected_turn_count is not None and req.expected_turn_count != expected_turn_count:
+            raise HTTPException(status_code=409, detail=STALE_CHOICES_DETAIL)
+
+        # A telling is validated against the real scene before any credit is spent.
+        working_claims = copy.deepcopy(session.get("claim_state"))
+        if req.disclosure is not None:
+            speaker = chapter_handover.current_character(session).get("name") or "the player"
+            try:
+                working_claims, _told = claim_engine.record_disclosure(
+                    working_claims,
+                    session.get("rolling_state") or {},
+                    turn=next_turn_number,
+                    request_id=request_key or f"action:{session_id}:{next_turn_number}",
+                    recipient_ref=req.disclosure.recipient,
+                    text=req.disclosure.claim,
+                    speaker=speaker,
+                    aloud=req.disclosure.aloud,
+                )
+            except claim_engine.ClaimError as exc:
+                raise HTTPException(status_code=exc.status, detail=exc.detail)
+
+        working_orders = copy.deepcopy(session.get("order_state"))
+        if req.order is not None:
+            try:
+                working_orders, _given = order_engine.record_order(
+                    working_orders,
+                    session.get("rolling_state") or {},
+                    turn=next_turn_number,
+                    request_id=request_key or f"action:{session_id}:{next_turn_number}",
+                    recipient_ref=req.order.recipient,
+                    text=req.order.text,
+                )
+            except order_engine.OrderError as exc:
+                raise HTTPException(status_code=exc.status, detail=exc.detail)
+
+        working_play = copy.deepcopy(session.get("play_state"))
+        move_result: Optional[Dict[str, Any]] = None
+        play_ctx = None
+        if req.move is not None:
+            play_ctx = await play_moves_api.build_context(db, session, device_id, req.move, turn=next_turn_number)
+            try:
+                working_play, move_result = play_moves.apply_move(
+                    working_play,
+                    play_ctx,
+                    req.move,
+                    turn=next_turn_number,
+                    request_id=request_key or f"action:{session_id}:{next_turn_number}",
+                )
+            except play_facts.MoveError as exc:
+                raise HTTPException(status_code=exc.status, detail=exc.detail)
+            if move_result.get("action_text"):
+                req.action_text = move_result["action_text"]
+        elif isinstance(working_play, dict):
+            play_ctx = await play_moves_api.build_context(db, session, device_id, None, turn=next_turn_number)
 
         # Paid-work controls, all before any provider call.
         consumed_buckets = await check_action_limits(db, device_id)
@@ -5039,8 +5267,46 @@ async def _execute_story_action(
             if cast_rolling:
                 working_rolling = cast_rolling
 
+        # Engine-owned claim ledger: relays and reactions advance, then the narrator is told
+        # what people here were told and which events the player may now notice.
+        working_claims, claim_notes = claim_engine.tick(
+            working_claims, working_rolling or {}, next_turn_number
+        )
+        observation_directive, observed_ids = claim_engine.pending_observations(
+            working_claims, next_turn_number
+        )
+        working_orders, _order_notes = order_engine.tick(
+            working_orders, working_rolling or {}, next_turn_number
+        )
+        order_directive, observed_order_ids = order_engine.pending_observations(
+            working_orders, working_rolling or {}, next_turn_number
+        )
+        # What people carry: the player only knows what was handed over, asked about and answered,
+        # or already shown. A direct question is decided here, and the narrator never sees the rest.
+        working_npc_ledger = npc_possessions.ensure(
+            session.get("npc_ledger"), working_rolling or {}, turn=next_turn_number
+        )
+        working_npc_ledger, possessions_result = npc_possessions.inquire(
+            working_npc_ledger, working_rolling or {}, req.action_text, turn=next_turn_number
+        )
+        if play_ctx is not None:
+            working_play, _play_notes = play_moves.run_tick(working_play, play_ctx, next_turn_number)
+        play_directive = play_moves.narrator_context(working_play, play_ctx, move_result) if play_ctx is not None else ""
+        claim_context = "\n\n".join(
+            part
+            for part in (
+                play_directive,
+                npc_possessions.narrator_context(working_rolling or {}, possessions_result),
+                claim_engine.narrator_context(working_claims, working_rolling or {}),
+                observation_directive,
+                order_engine.narrator_context(working_orders, working_rolling or {}),
+                order_directive,
+            )
+            if part
+        )
+
         gen_session = dict(session)
-        gen_session["rolling_state"] = working_rolling
+        gen_session["rolling_state"] = npc_possessions.narrator_view(working_rolling, working_npc_ledger)
 
         try:
             async with provider_budget.active_budget(budget):
@@ -5048,7 +5314,9 @@ async def _execute_story_action(
                     gen_session,
                     user_text,
                     player_action=req.action_text,
-                    secret_reveal_directive=secret_directive,
+                    secret_reveal_directive="\n\n".join(
+                        part for part in (secret_directive, claim_context) if part
+                    ),
                     replayability_directives=frozen_rb_directives,
                 )
         except provider_budget.ProviderBudgetError as exc:
@@ -5146,6 +5414,22 @@ async def _execute_story_action(
         guard_adjustments.extend(
             gateway.preserve_active_scene_cast(prior_rolling, merged_rolling)
         )
+        # Standing orders: the engine's world (water level, ferry, handed-over items)
+        # is written back over whatever the narrator left.
+        guard_adjustments.extend(order_engine.project(working_orders, merged_rolling))
+        # What each NPC carries and their condition survive the narrator rewriting the cast.
+        working_npc_ledger, npc_ledger_notes = npc_possessions.apply(
+            working_npc_ledger,
+            merged_rolling,
+            turn=next_turn_number,
+            narrator_npcs=(parsed.rolling_state or {}).get("npcs") or [],
+        )
+        guard_adjustments.extend(npc_ledger_notes)
+        if play_ctx is not None and isinstance(working_play, dict):
+            guard_adjustments.extend(
+                play_moves.project(working_play, play_ctx, merged_rolling, working_npc_ledger, next_turn_number)
+            )
+            parsed.ledger = play_moves.project_ledger(working_play, play_ctx, parsed.ledger)
         guard_adjustments.extend(
             gateway.update_destruction_registry(
                 parsed, prior_rolling, merged_rolling, req.action_text
@@ -5253,6 +5537,16 @@ async def _execute_story_action(
             update_set["rolling_state_updated_at"] = datetime.now(timezone.utc)
         if replayability.replayability_active(session) and working_replayability:
             update_set["replayability_state"] = working_replayability
+        working_claims = claim_engine.mark_observed(working_claims, observed_ids, next_turn_number)
+        if working_claims is not None and working_claims != session.get("claim_state"):
+            update_set["claim_state"] = working_claims
+        working_orders = order_engine.mark_observed(working_orders, observed_order_ids, next_turn_number)
+        if working_orders is not None and working_orders != session.get("order_state"):
+            update_set["order_state"] = working_orders
+        if working_npc_ledger.get("rows") and working_npc_ledger != session.get("npc_ledger"):
+            update_set["npc_ledger"] = working_npc_ledger
+        if isinstance(working_play, dict) and working_play != session.get("play_state"):
+            update_set["play_state"] = working_play
 
         await _commit_story_action_turn(
             session_id,
@@ -5421,6 +5715,14 @@ async def _newest_turns(
     return rows
 
 
+def _annotate_character(player_turn: Dict[str, Any], session: Dict[str, Any]) -> Dict[str, Any]:
+    """Name whom the player controlled on this turn, only once a handover has happened."""
+    if chapter_handover.is_handed_over(session):
+        who = chapter_handover.character_for_turn(session, int(player_turn.get("turn_number") or 1))
+        player_turn["character"] = {"name": who.get("name"), "role": who.get("role")}
+    return player_turn
+
+
 @api_router.get("/story/session/{session_id}/history")
 async def session_causal_history(session_id: str, device_id: str = Depends(require_device_id)):
     """Player-safe "Why this happened" causal chain — built from engine state only.
@@ -5539,7 +5841,10 @@ async def get_session(session_id: str, device_id: str = Depends(require_device_i
         projection["debug"] = 1
     turns = await _newest_turns(session_id, projection)
     session = build_player_session(raw_session)
-    turns = [build_player_turn(t, include_debug=include_debug) for t in turns]
+    turns = [
+        _annotate_character(build_player_turn(t, include_debug=include_debug), raw_session)
+        for t in turns
+    ]
     return {"session": session, "turns": turns}
 
 
@@ -5576,6 +5881,295 @@ async def delete_session(session_id: str, device_id: str = Depends(require_devic
     return {"deleted": True}
 
 
+class BranchRequest(BaseModel):
+    request_id: str = Field(min_length=8, max_length=128)
+    expected_turn_count: Optional[int] = Field(default=None, ge=0)
+
+
+@api_router.post("/story/session/{session_id}/branch")
+async def branch_session(
+    session_id: str,
+    req: BranchRequest,
+    device_id: str = Depends(require_device_id),
+):
+    """Branch from the latest committed turn. No narrator call, no credit, no game time."""
+    _require_transaction_support()
+    await fetch_owned_session(db, session_id, device_id)
+    try:
+        result = await story_branching.create_branch(
+            db,
+            source_session_id=session_id,
+            device_id=device_id,
+            request_id=req.request_id,
+            expected_turn_count=req.expected_turn_count,
+        )
+    except ActionLeaseConflict:
+        raise HTTPException(status_code=409, detail=ACTION_CONFLICT_DETAIL)
+    except story_branching.BranchStale:
+        raise HTTPException(
+            status_code=409,
+            detail="This story moved on. Reload it, then branch from the newest decision.",
+        )
+    except story_branching.BranchNotAllowed:
+        raise HTTPException(status_code=422, detail="Play at least one turn before branching.")
+    except story_branching.BranchInconsistent:
+        logger.error("branch refused: inconsistent turns for %s", session_id)
+        raise HTTPException(status_code=409, detail="This save cannot be branched right now.")
+    except turn_commit.TransactionSupportUnavailable:
+        raise HTTPException(status_code=503, detail=_SERVICE_UNAVAILABLE_DETAIL)
+    return {
+        "session": build_player_session(result.session),
+        "replayed": result.replayed,
+        "source_turn_count": result.source_turn_count,
+    }
+
+
+class PinRequest(BaseModel):
+    turn_number: int = Field(ge=1)
+    paragraph_index: int = Field(ge=0)
+    quote: Optional[str] = Field(default=None, max_length=1000)
+    occurrence: int = Field(default=0, ge=0, le=50)
+    note: Optional[str] = Field(default=None, max_length=1000)
+
+
+class TheoryRequest(BaseModel):
+    title: str = Field(max_length=400)
+    body: str = Field(default="", max_length=10000)
+    pin_ids: List[str] = Field(default_factory=list, max_length=100)
+
+
+class TheoryPatch(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=400)
+    body: Optional[str] = Field(default=None, max_length=10000)
+    pin_ids: Optional[List[str]] = Field(default=None, max_length=100)
+
+
+def _notebook_http(exc: notebook.NotebookError) -> HTTPException:
+    return HTTPException(status_code=exc.status, detail=exc.detail)
+
+
+@api_router.get("/story/session/{session_id}/notebook")
+async def get_notebook(session_id: str, device_id: str = Depends(require_device_id)):
+    await fetch_owned_session(db, session_id, device_id)
+    return await notebook.list_notebook(db, session_id, device_id)
+
+
+@api_router.post("/story/session/{session_id}/notebook/pins")
+async def add_notebook_pin(
+    session_id: str, req: PinRequest, device_id: str = Depends(require_device_id)
+):
+    session = await fetch_owned_session(db, session_id, device_id)
+    try:
+        return await notebook.create_pin(
+            db,
+            session,
+            device_id,
+            turn_number=req.turn_number,
+            paragraph_index=req.paragraph_index,
+            quote=req.quote,
+            occurrence=req.occurrence,
+            note=req.note,
+        )
+    except notebook.NotebookError as exc:
+        raise _notebook_http(exc)
+
+
+@api_router.delete("/story/session/{session_id}/notebook/pins/{pin_id}")
+async def remove_notebook_pin(
+    session_id: str, pin_id: str, device_id: str = Depends(require_device_id)
+):
+    await fetch_owned_session(db, session_id, device_id)
+    try:
+        await notebook.delete_pin(db, session_id, device_id, pin_id)
+    except notebook.NotebookError as exc:
+        raise _notebook_http(exc)
+    return {"deleted": True}
+
+
+@api_router.post("/story/session/{session_id}/notebook/theories")
+async def add_notebook_theory(
+    session_id: str, req: TheoryRequest, device_id: str = Depends(require_device_id)
+):
+    await fetch_owned_session(db, session_id, device_id)
+    try:
+        return {
+            "theory": await notebook.create_theory(
+                db, session_id, device_id, title=req.title, body=req.body, pin_ids=req.pin_ids
+            )
+        }
+    except notebook.NotebookError as exc:
+        raise _notebook_http(exc)
+
+
+@api_router.put("/story/session/{session_id}/notebook/theories/{theory_id}")
+async def edit_notebook_theory(
+    session_id: str,
+    theory_id: str,
+    req: TheoryPatch,
+    device_id: str = Depends(require_device_id),
+):
+    await fetch_owned_session(db, session_id, device_id)
+    try:
+        return {
+            "theory": await notebook.update_theory(
+                db,
+                session_id,
+                device_id,
+                theory_id,
+                title=req.title,
+                body=req.body,
+                pin_ids=req.pin_ids,
+            )
+        }
+    except notebook.NotebookError as exc:
+        raise _notebook_http(exc)
+
+
+@api_router.delete("/story/session/{session_id}/notebook/theories/{theory_id}")
+async def remove_notebook_theory(
+    session_id: str, theory_id: str, device_id: str = Depends(require_device_id)
+):
+    await fetch_owned_session(db, session_id, device_id)
+    try:
+        await notebook.delete_theory(db, session_id, device_id, theory_id)
+    except notebook.NotebookError as exc:
+        raise _notebook_http(exc)
+    return {"deleted": True}
+
+
+@api_router.get("/story/session/{session_id}/turn/{turn_number}")
+async def get_turn_by_number(
+    session_id: str, turn_number: int, device_id: str = Depends(require_device_id)
+):
+    """One published turn by number, so a pin can open a passage older than the history window."""
+    raw_session = await fetch_owned_session(db, session_id, device_id)
+    turn = await db.turns.find_one(
+        {"session_id": session_id, "turn_number": turn_number}, _PLAYER_TURN_PROJECTION
+    )
+    if not turn:
+        raise HTTPException(status_code=404, detail="Turn not found")
+    return {"turn": _annotate_character(build_player_turn(turn), raw_session)}
+
+
+class HandoverRequest(BaseModel):
+    request_id: str = Field(min_length=8, max_length=128)
+    successor_id: str = Field(min_length=1, max_length=64)
+    expected_turn_count: int = Field(ge=0)
+
+
+async def _published_turn_rows(session_id: str) -> List[Dict[str, Any]]:
+    return await db.turns.find(
+        {"session_id": session_id}, {"_id": 0, "turn_number": 1, "paragraphs": 1}
+    ).sort("turn_number", 1).to_list(length=None)
+
+
+@api_router.get("/story/session/{session_id}/tell-targets")
+async def tell_targets(session_id: str, device_id: str = Depends(require_device_id)):
+    """People the player can speak to right now: here, alive, and already seen in published text."""
+    session = await fetch_owned_session(db, session_id, device_id)
+    rolling = session.get("rolling_state") or {}
+    turns = await _published_turn_rows(session_id)
+    people = [
+        {"name": claim_engine.npc_name(row)}
+        for row in claim_engine.present_npcs(rolling)
+        if chapter_handover.appearances(claim_engine.npc_name(row), turns) >= 1
+    ]
+    return {"turn_count": int(session.get("turn_count") or 0), "people": people}
+
+
+@api_router.post("/story/session/{session_id}/orders/preview")
+async def preview_standing_order(
+    session_id: str,
+    req: OrderRequest,
+    device_id: str = Depends(require_device_id),
+):
+    """What the person would understand from these instructions. Reads only: no turn, no cost."""
+    session = await fetch_owned_session(db, session_id, device_id)
+    try:
+        return order_engine.preview(
+            session.get("order_state"), session.get("rolling_state") or {}, req.recipient, req.text
+        )
+    except order_engine.OrderError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail)
+
+
+@api_router.get("/story/session/{session_id}/handover")
+async def handover_candidates(session_id: str, device_id: str = Depends(require_device_id)):
+    """Who can take over, from text the player has been shown. Reads only."""
+    session = await fetch_owned_session(db, session_id, device_id)
+    listing = chapter_handover.candidates(session, await _published_turn_rows(session_id))
+    return {"turn_count": int(session.get("turn_count") or 0), **listing}
+
+
+@api_router.post("/story/session/{session_id}/handover")
+async def handover_chapter(
+    session_id: str,
+    req: HandoverRequest,
+    device_id: str = Depends(require_device_id),
+):
+    """End the chapter and continue the same save as another character. No narrator call."""
+    _require_transaction_support()
+    owned = await fetch_owned_session(db, session_id, device_id)
+
+    async def _done_payload(current: Dict[str, Any], replayed: bool) -> Dict[str, Any]:
+        boundary = int((current.get("handover") or {}).get("boundary_turn") or 0)
+        turn = await db.turns.find_one(
+            {"session_id": session_id, "turn_number": boundary}, _PLAYER_TURN_PROJECTION
+        )
+        return {
+            "session": build_player_session(current),
+            "turn": _annotate_character(build_player_turn(turn or {}), current) if turn else None,
+            "replayed": replayed,
+        }
+
+    if chapter_handover.is_handed_over(owned):
+        if (owned.get("handover") or {}).get("request_id") == req.request_id:
+            return await _done_payload(owned, True)
+        raise HTTPException(status_code=409, detail="This story already changed hands once.")
+
+    lease_token: Optional[str] = None
+    try:
+        session, lease_token = await acquire_action_lease(
+            db, session_id, device_id, purpose="handover"
+        )
+        if chapter_handover.is_handed_over(session):
+            if (session.get("handover") or {}).get("request_id") == req.request_id:
+                return await _done_payload(session, True)
+            raise HTTPException(status_code=409, detail="This story already changed hands once.")
+        if int(session.get("turn_count") or 0) != req.expected_turn_count:
+            raise HTTPException(status_code=409, detail=STALE_CHOICES_DETAIL)
+        try:
+            plan = chapter_handover.plan_handover(
+                session,
+                await _published_turn_rows(session_id),
+                successor_id=req.successor_id,
+                request_id=req.request_id,
+            )
+        except chapter_handover.HandoverError as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.detail)
+        fields = dict(plan.turn_fields)
+        turn_kind = fields.pop("turn_kind")
+        turn_doc = TurnRecord(**fields).model_dump()
+        turn_doc["turn_kind"] = turn_kind
+        await _commit_story_action_turn(
+            session_id,
+            turn_doc,
+            plan.update_set,
+            {},
+            lease_token=lease_token,
+            expected_turn_count=int(session.get("turn_count") or 0),
+            expected_revision=int(session.get(SESSION_REVISION_FIELD) or 0),
+        )
+    except ActionLeaseConflict:
+        raise HTTPException(status_code=409, detail=ACTION_CONFLICT_DETAIL)
+    except turn_commit.CommitPreconditionFailed:
+        raise HTTPException(status_code=409, detail=ACTION_CONFLICT_DETAIL)
+    finally:
+        if lease_token:
+            await release_action_lease_quietly(db, session_id, lease_token)
+    return await _done_payload(await fetch_owned_session(db, session_id, device_id), False)
+
+
 @api_router.get("/admin/consistency")
 async def admin_consistency(
     sample_limit: int = 20,
@@ -5588,6 +6182,51 @@ async def admin_consistency(
     report["transaction_support_error"] = _TRANSACTION_SUPPORT_ERROR
     return report
 
+
+async def _duet_narrate(messages: List[Dict[str, str]], *, device_id: str, duet_id: str, request_key: str) -> str:
+    """One narrator call for one seat of a two-player story, under the same cost controls as solo play."""
+    consumed_buckets = await check_action_limits(db, device_id)
+    provider_slot: Optional[str] = None
+    try:
+        provider_slot = await _acquire_provider_concurrency(f"duet:{duet_id}:{request_key}")
+        settings = await get_ai_settings()
+        requested_model = _resolve_requested_model({}, settings)
+        fallback_chain = build_automatic_fallback_chain(requested_model, cost_mode=DEFAULT_COST_MODE)
+        budget = provider_budget.for_request(
+            db,
+            request_key=f"duet:{duet_id}:{request_key}",
+            kind=provider_budget.KIND_ACTION,
+            device_id=device_id,
+            session_id=duet_id,
+        )
+        async with provider_budget.active_budget(budget):
+            result = await gateway.invoke_llm(
+                messages=messages,
+                primary_model=requested_model,
+                fallback_chain=fallback_chain,
+                temperature=settings.get("temperature"),
+                max_tokens=min(int(settings.get("max_tokens", DEFAULT_MAX_TOKENS)), 1500),
+                max_retries_per_model=MAX_RETRIES,
+            )
+        return str(result.get("content") or "")
+    except provider_budget.ProviderBudgetError as exc:
+        await _rollback_bucket_reservations(db, consumed_buckets)
+        raise _budget_error_to_http(exc)
+    except AIServiceError:
+        await _rollback_bucket_reservations(db, consumed_buckets)
+        logger.exception("AI service failed during duet action")
+        raise HTTPException(status_code=502, detail=_STORY_ENGINE_UNAVAILABLE)
+    except BaseException:
+        await _rollback_bucket_reservations(db, consumed_buckets)
+        raise
+    finally:
+        await _release_provider_concurrency(provider_slot)
+
+
+play_moves_api.register(
+    api_router, get_db=lambda: db, fetch_owned_session=fetch_owned_session, require_device_id=require_device_id
+)
+duet_api.register(api_router, get_db=lambda: db, narrate=_duet_narrate, require_tx=_require_transaction_support)
 
 app.include_router(api_router)
 
@@ -5627,6 +6266,7 @@ async def startup_rate_limit_indexes():
     await ensure_story_creation_idempotency_indexes(db)
     await action_requests.ensure_action_request_indexes(db)
     await provider_budget.ensure_provider_usage_indexes(db)
+    await duet_api.ensure_indexes(db)
     if clear_leases_on_startup_enabled():
         # Single-process deployments (the Windows launcher, uvicorn --reload):
         # whatever lease exists now belongs to a process that has exited.

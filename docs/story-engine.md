@@ -71,7 +71,14 @@ Player messages include `[DIFFICULTY: <level>]` markers. Levels: `soft`, `standa
 1. `_validate_parsed()` — non-empty narrative, choice bounds, required labels A–D, mechanic leak patterns (`_LEAK_LABEL_RE`), direct inspection violations. Over-long prose is trimmed locally to the mode's character budget. Paragraph count is not a reason to reject or retry a turn
 2. `gateway.detect_prose_contradictions()` — prose vs immutable truth (destroyed objects, deceased NPCs, etc.)
 
-On failure, `_generate_validated_turn()` retries once with a format or hallucination correction hint. Persistent failure raises HTTP error.
+When `_full_validate()` passes, `_echo_validate()` runs two **soft** checks (`_validate_turn()` runs both, hard first). They report kind `echo`:
+
+- A standing communication limit retold in more than one sentence (two in the opening, which has to establish it). `world_constraints.restatement_reason`.
+- A run of 16 or more words in a row shared with the last three committed turns. `repetition_guard.copied_passage_reason`. The turns are read from `db.turns` for the check only (`_recent_narratives`); nothing is stored.
+
+Both thresholds are starting values from a small sample (30 recorded turns for the first, 47 Grok turns for the second), not proven limits.
+
+On failure, `_generate_validated_turn()` retries once with a format, hallucination, pacing or echo correction hint. After the retry, a hard failure is replaced by the fallback turn (below). A soft failure, including `echo`, keeps the model's own turn and never produces a fallback.
 
 ## Anti-Hallucination Gateway (post-parse, `gateway.py`)
 
@@ -266,10 +273,11 @@ Everything the player types (world type, role, tone, premise, custom answers, a 
 `world_constraints.py`. A premise sentence that states a limit ("cannot", "can no longer", "unable to", "no way to") is a standing constraint. A sentence addressed to the narrator is not. The list is read from the stored premise each turn, so older saves get it without being rewritten.
 
 - Status is engine state in `rolling_state.world_constraints`. The model's copy is discarded each turn. Anything not recorded as lifted is active.
-- Every request restates each constraint and its status in a system message. The wording of the constraint travels in the player story data block.
+- Every request restates each constraint and its status in a system message. The wording of the constraint travels in the player story data block. For a communication constraint the message says no meaning passes, then tells the model to mention the limit in at most one sentence a turn and not to list what fails to arrive. It carries no phrase list: the earlier wording ("no recognised sign, no words made out, no answer, no agreement") was repeated back in the prose, turn after turn.
 - A constraint is lifted only when the model proposes it (`"constraint_lifted":[{"id","how"}]` in `rolling_state`) on a turn that answers a player action. A proposal in the opening or on a fallback turn is refused. The turn number, how, and the player's action are stored, and later requests say so.
 - For a communication constraint (the limit is on signalling, speaking, calling, hearing, sending word and similar), `_full_validate` rejects a turn in which a sign both sides already know, or an exchange stated as received, crosses to the far side or the named parties while the constraint is active. The turn is retried once, then replaced by the fallback. Seeing a light with no meaning is allowed.
-- Limits: whether a player action is a plausible way to lift a constraint is the model's judgement. The breach check is a narrow English pattern check for the communication class only. Other kinds of constraint are carried forward and restated but not checked.
+- Retelling: a communication constraint that is retold in more than one sentence of a turn (a denial and a word for meaning in one sentence, such as "no word came") is an `echo` defect. It costs one retry at most and never a fallback turn.
+- Limits: whether a player action is a plausible way to lift a constraint is the model's judgement. The breach check and the retelling check are narrow English pattern checks for the communication class only. Other kinds of constraint are carried forward and restated but not checked. Whether Grok follows the "one sentence" wording is not proven by the tests, which replay recorded turns.
 
 ## Fallback turn
 
@@ -337,3 +345,45 @@ At that point, Living Cast added `npc_agendas.py`, `npc_world_moves.py`, `arc_di
 Bounded `npc_move_receipts` and `transition_receipts` are **LOCAL SUBSTITUTE** — they provide idempotency and causal pointers but do not provide canonical reconstruction or durable complete event history.
 
 **Historical blockers before merge (superseded):** pressure authority unresolved; relationship provenance unresolved (vectors mutated from player intent + generated prose); golden-path blockers remained at that snapshot.
+
+## Branching, notebook and chapter handover
+
+Three player features share the existing save, lease and commit machinery. None of them calls the narrator or spends credit.
+
+- **Branch** (`story_branching.py`): copies one committed state under the source action lease in one transaction. Scene, choices, visible history, world state, cast, protagonist, equipment, settings and persisted seed or random state carry over. The branch gets a deterministic id, a `branch_label` and `branched_from`. Pending requests, locks and retry records stay behind. The notebook starts empty.
+- **Notebook** (`notebook.py`, collection `notebook_items`): pins and theories are private to the player and the save. Pins are validated against `build_player_paragraphs` output, so only text the player was shown can be pinned. The narrator path and the default export never read the collection. Reset and delete remove its rows inside their transactions. A handover within a save keeps the notebook.
+- **Chapter handover** (`chapter_handover.py`): an engine written turn (`turn_kind: "handover"`) that moves control to a living NPC with at least two published appearances. One handover per save in this version. The former protagonist becomes an engine controlled NPC row (`former_protagonist: true`), the successor leaves the NPC list and keeps their own items, condition and knowledge. Items in the knowledge lists (clues, unresolved, promises, relationship_threads, known_rooms, route_continuity) are fingerprinted at the boundary and hidden from the narrator unless the item names the successor or is public. Stored state keeps them. `_build_messages` swaps in the successor view, floors replay at the boundary turn and adds a `[CONTROLLED_CHARACTER]` system message. Relationship vectors are stashed in `handover.former.vectors`. Older saves without a protagonist name fall back to the role, and unknown facts stay unknown.
+
+Known limits: the narrator schema does not record NPC inventory, condition or knowledge, so a successor's possessions read as unknown unless the NPC row carries `inventory`, `condition` or `knows`. The UI pins whole paragraphs. Mature-content re-render and replayability secret directives were not audited for handover leaks.
+
+
+## Claims, standing orders and two-player stories
+
+The engine owns what happened and who could observe it. The narrator describes the result.
+
+- `claim_engine.py`: a directed ledger of who was told what, and who overheard. Narrator context goes through the secret reveal directive. State lives in the session as `claim_state`, so branching copies it.
+- `order_engine.py`: `order_state` holds orders, a small world (gauges and the ferry) and `last_tick_turn`. It ticks before the narrator on the pre-narrator rolling state, and its effects are re-projected after the merge every turn because the narrator's `npcs` replaces the list wholesale. Vocabulary is small: water mark or person arrives, cut ferry or deliver parcel. A person refuses when trust is below 25.
+- `duet.py` and `duet_api.py`: one built-in setting with two seats. The engine understands signal flashes and launching the one boat; other actions are narrated to the actor only. Observers are decided by line of sight. Concurrency uses an action lease, a revision check, a unique `(duet_id, turn_number)` index and a partial unique `(duet_id, request_id)` index. The identity of a seat is the device id.
+
+Known limits: claims need known places and `within_earshot` for witnesses; the duet comparison shows each seat's actions and narration, never notebooks or engine records.
+
+### NPC possessions
+
+`npc_possessions.py` keeps what each NPC carries (`inventory`), their `condition` and `contacts` on the save as `npc_ledger`. The narrator replaces `rolling_state["npcs"]` every turn, so after the merge and the order projection the engine restores any of those fields the narrator left out. A row that carries a field updates the ledger. A field nobody recorded stays absent, so unknown possessions stay unknown. The ledger is bounded (64 rows, 12 items of 80 characters), copied by branching, and never shown raw in player responses.
+
+**Who knows what an NPC carries.** The player is not told what someone else has unless it was handed over, or they asked and the person chose to answer. The ledger keeps a `known` list per NPC. The narrator is sent `inventory_known` instead of `inventory`, plus a standing `[NPC_POSSESSIONS_V1]` rule. A direct question ("ask Mara what she is carrying", "ask Mara if she has a knife") or a request ("ask Mara to give me the knife") is decided by the engine before the narrator runs. The person answers or hands over only when trust is at least 40 (`DISCLOSE_MIN_TRUST`), they are not hostile, and they are present. With no trust data, only an ally or friendly stance answers. Otherwise the narrator is told to show a refusal in character and name nothing. The narrator can add items (they become known) and drop items the player already knows about, but cannot erase hidden ones. Limits: questions are matched by phrasing and by the last word of an item name, searching or stealing is not covered, and the opening turn is written before the ledger exists.
+
+## Player moves
+
+Code: `backend/play_moves.py` (registry and shared plumbing), `play_moves_api.py` (reads and preview), `play_facts.py` (what a scene contains: people present, shown passages, held items, trust), and one engine per move: `challenge_engine`, `bargain_engine`, `route_engine`, `regard_engine`, `build_engine`, `signal_engine`, `teach_engine`.
+
+Rules every engine follows:
+
+- Availability comes from the save, never from genre or scenario. A new or custom story gets people, places and items from the narrator's `rolling_state` and the published prose, so a move becomes possible once the story has supplied what it needs. If something is missing the move says what, takes no turn, and writes nothing.
+- The engine decides ownership, knowledge, access, success and consequences. The narrator only receives directives for the turn and cannot decide them. Items an engine takes or hands over are enforced on the ledger after the narrator replies (`project_ledger`).
+- Each engine keeps its own state under `play_state[kind]` and exposes `apply`, `options`, `narrator_context`, and optionally `tick` and `project`.
+- Idempotency: ids are derived from `(kind, request_id)` and kept in the record, so a retry cannot spend or award twice or leave half a transaction.
+- Knowledge: a route, building, signal or skill is known only to the characters who learned it. After a chapter handover the new character has only what they know.
+- Private notes (for example on something built) are shown only to the builder.
+
+Known limits: teaching is judged by a shown passage whose words match the skill, so the engine cannot check meaning; two-player signals can only be settled before the first lamp is lit; narrator behaviour is verified against offline fixtures only.

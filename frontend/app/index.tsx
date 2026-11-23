@@ -134,6 +134,15 @@ export default function HomeScreen() {
           <Text style={styles.primaryBtnText}>[ ENTER · WORLD ]</Text>
         </TouchableOpacity>
 
+        <TouchableOpacity
+          style={[styles.primaryBtn, { marginTop: 12 }]}
+          onPress={() => router.push("/duets")}
+          testID="two-players-btn"
+          activeOpacity={0.75}
+        >
+          <Text style={styles.primaryBtnText}>[ TWO · PLAYERS ]</Text>
+        </TouchableOpacity>
+
         <View style={styles.sectionHead}>
           <Text style={styles.sectionLabel} testID="continue-header">CONTINUE · CHRONICLES</Text>
           <Text style={styles.sectionCount}>{sessions.length.toString().padStart(2, "0")}</Text>
@@ -163,6 +172,18 @@ export default function HomeScreen() {
                 <Text style={styles.saveSlotTurn}>T·{String(s.turn_count).padStart(3, "0")}</Text>
               </View>
               <Text style={styles.saveSlotTitle} numberOfLines={1}>{s.title}</Text>
+              {s.branch_label || s.protagonist?.name ? (
+                <Text style={styles.saveSlotTags} numberOfLines={1} testID={`save-slot-tags-${s.id}`}>
+                  {[
+                    s.branch_label
+                      ? `${s.branch_label.toUpperCase()} · FROM TURN ${s.branched_from?.turn_number ?? "?"}`
+                      : null,
+                    s.protagonist?.name ? `PLAYING ${s.protagonist.name.toUpperCase()}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join("  ·  ")}
+                </Text>
+              ) : null}
               <Text style={styles.saveSlotSnippet} numberOfLines={2}>
                 {s.last_narrative_snippet || "— not yet opened —"}
               </Text>
@@ -335,6 +356,13 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.headingBold,
     color: COLORS.textPrimary,
     fontSize: 22,
+    marginBottom: 6,
+  },
+  saveSlotTags: {
+    fontFamily: FONTS.mono,
+    color: COLORS.primary,
+    fontSize: 10,
+    letterSpacing: 1.5,
     marginBottom: 6,
   },
   saveSlotSnippet: {

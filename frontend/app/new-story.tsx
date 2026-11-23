@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -100,6 +100,10 @@ const SELECTION_CARDS: {
 export default function NewStoryScreen() {
   const router = useRouter();
   const submitLockRef = useRef(false);
+  const scrollRef = useRef<ScrollView>(null);
+  const scrollToTop = useCallback(() => {
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+  }, []);
   const creationRequestRef = useRef<{ fingerprint: string; id: string } | null>(null);
   /** Sticky Quick Start attempt: same card retry keeps seed → same scenario_id. */
   const quickAttemptRef = useRef<{
@@ -338,6 +342,7 @@ export default function NewStoryScreen() {
         </View>
 
         <ScrollView
+          ref={scrollRef}
           contentContainerStyle={styles.container}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
@@ -407,6 +412,7 @@ export default function NewStoryScreen() {
               onChange={setGuidedSelection}
               onStart={handleGuidedStart}
               onChangePath={returnToSelection}
+              onPageChange={scrollToTop}
             />
           ) : null}
 
@@ -428,6 +434,7 @@ export default function NewStoryScreen() {
               }}
               onStart={handleAdvancedStart}
               onChangePath={returnToSelection}
+              onPageChange={scrollToTop}
             />
           ) : null}
 

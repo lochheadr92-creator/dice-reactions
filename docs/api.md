@@ -286,6 +286,18 @@ The app's "Reset chronicle" menu no longer calls this endpoint: it deletes the c
 
 Client should start fresh via `POST /story/action` or create a new story.
 
+### `POST /story/session/{session_id}/branch`
+
+Body `{request_id, expected_turn_count?}`. Copies the save at its latest committed decision into a new save with its own id (deterministic from source, device and `request_id`, so a double tap returns the same branch with `replayed: true`). One transaction under the source action lease. No narrator call, no credit, no game time. Pending requests, locks and retry records are not copied. The notebook is not copied. `409` when `expected_turn_count` is stale or a turn is in flight.
+
+### Notebook (private to the player, scoped to one save)
+
+`GET /story/session/{id}/notebook`, `POST .../notebook/pins` (`{turn_number, paragraph_index, start?, end?}`), `DELETE .../notebook/pins/{pin_id}`, `POST .../notebook/theories` (`{title, body, pin_ids}`), `PUT` and `DELETE .../notebook/theories/{theory_id}`, `GET /story/session/{id}/turn/{turn_number}`. Pins are validated against the text published to the player, so hidden engine text cannot be pinned. Notebook rows live in `notebook_items`, are never read by the narrator path or the export, take no turn and change no world state. Deleted with the save and on reset.
+
+### Chapter handover
+
+`GET /story/session/{id}/handover` returns `{can_end_chapter, reason, candidates[{id, name, relation, last_seen}]}`. `POST` takes `{request_id, successor_id, expected_turn_count}` and returns `{session, turn, replayed}`. One handover per save. The turn is engine written (`turn_kind: "handover"`), with no narrator call. `409` for a stale choice list or an in-flight turn, `422` for an ineligible successor. `ActionRequest.expected_turn_count` is also accepted by `POST /story/action` and returns `409` when the choices on screen are stale.
+
 ## Paid-provider controls
 
 Every paid model call — story creation and player actions, including validation retries and automatic model fallbacks — passes through `ai_service.chat_completion_with_meta`, which **refuses to run without an active `provider_budget`**. The route installs the budget; no other module can reach the provider. Routing intent (primary model, fallback chain, retries per model, cost mode) is unchanged; the budget only caps how much of it may run per request.
@@ -412,3 +424,51 @@ This increment provides **device-scoped session isolation**, not full user accou
 | `/admin/session/{id}/diagnostics` | `X-Admin-Api-Key` | Never |
 
 **Not authentication:** `developer_mode`, client UI unlock, or CORS — these do not grant admin, raw-export, or unsanitised player-route access.
+
+## Planted secrets, standing instructions and two-player stories
+
+All routes need the `X-Device-ID` header.
+
+### Planted secrets (solo)
+`ActionRequest.disclosure` carries a told secret: who it was told to, the claim, and whether it was true. The engine records it in the session's `claim_state` ledger (who knows what, and who could overhear). `GET /story/session/{id}/tell-targets` lists the people the player can tell. The player session view adds `claims_told`. Hidden ledger entries never appear in player responses.
+
+### Standing instructions (solo)
+`ActionRequest.order` leaves an instruction with a person. `POST /story/session/{id}/orders/preview` returns what the engine understood (trigger, action, whether the person would refuse). The engine ticks `order_state` each turn before the narrator runs and tells the narrator the result. The player session view adds `orders_given`.
+
+### Two-player stories ("Two Lights")
+Separate collections `duets` and `duet_turns`. Solo sessions are untouched.
+
+| Route | Purpose |
+| --- | --- |
+| `POST /duets` | Host picks a seat (`ferryman` or `keeper`). Returns the view and a one-time `invite_code`. |
+| `POST /duets/join` | Friend joins with the code. 404 for a bad code, 409 if used or if it is the host's own invite. |
+| `POST /duets/{id}/invite` | Host re-issues the code while the friend has not joined. |
+| `GET /duets`, `GET /duets/{id}` | List and resume. Anyone who is not one of the two seat devices gets 404. |
+| `POST /duets/{id}/action` | Body `action_text`, `action_request_id`, optional `expected_turn_count`. 409 when it is not your turn, the story moved on, or another action is resolving. A repeated request id replays the stored result. |
+| `POST /duets/{id}/end-chapter` | Either player ends the chapter. |
+| `GET` / `POST /duets/{id}/comparison` | Each player opts in with `{share: bool}`. Both accounts are returned only when both opted in. |
+| `GET /duets/{id}/export` | The caller's own account only. |
+
+Every response is built per seat from a whitelist. Narrator requests are built only from that seat's data plus engine-written observation sentences.
+
+## Player moves (challenge, bargain, route, regard, build, signal, teach)
+
+Seven structured moves ride on the normal action. None is switched on by a genre, scenario name or example word; each is offered because the saved story supports it (who is here, what is carried, what was shown, trust, known places).
+
+### `POST /story/session/{session_id}/action` with `move`
+
+`move` is `{ "kind": "challenge|bargain|route|regard|build|signal|teach", "op": "<optional>", "args": { ... } }`. At most one of `disclosure`, `order` or `move` per request. The server checks the move against the save, decides the outcome, replaces `action_text` with its own wording, and takes one normal turn. A refused move (4xx) takes no turn and changes nothing. The same `action_request_id` replays the committed result and never applies a move twice.
+
+State lives in `session.play_state[kind]`, is copied into a branch, and is absent in saves made before this feature (treated as empty).
+
+### `GET /story/session/{session_id}/moves`
+
+Returns `{ "turn_count": n, "moves": { "<kind>": { "available": bool, "reason": str|null, ... } } }`. The options are built only from what the player was shown or holds. A character after a handover sees only what that character knows.
+
+### `POST /story/session/{session_id}/moves/preview`
+
+Body is the same `move`. Returns `{ kind, can_commit, issues[], terms?, notes? }`. Reads only; nothing is kept and no turn is taken.
+
+### Two-player signals
+
+`POST /duets/{id}/signals` with `{ request_id, count, meaning }` offers a signal before the first lamp is lit. `POST /duets/{id}/signals/{signal_id}/respond` with `{ accept }` is answered by the other seat. `POST /duets/{id}/action` accepts `clarity: "clear"|"faint"`. The duet view carries `signals` and `signal_window_open`.

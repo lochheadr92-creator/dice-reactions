@@ -37,6 +37,7 @@ from action_concurrency import (
 logger = logging.getLogger(__name__)
 
 ACTION_REQUESTS_COLLECTION = "action_requests"
+NOTEBOOK_COLLECTION = "notebook_items"  # see notebook.py; cleared with its save
 TURN_REQUEST_KEY_FIELD = "action_request_key"
 
 # MongoDB error codes that mean "transactions are not available on this topology".
@@ -356,6 +357,8 @@ async def commit_session_reset(db, *, session_id: str, lease_token: str) -> None
         await db[ACTION_REQUESTS_COLLECTION].delete_many(
             {"session_id": session_id}, session=mongo_session
         )
+        # Pins point at turns that no longer exist; the private notebook goes with them.
+        await db[NOTEBOOK_COLLECTION].delete_many({"session_id": session_id}, session=mongo_session)
         return True
 
     await _run_transaction(db, callback)
@@ -374,6 +377,7 @@ async def commit_session_delete(db, *, session_id: str, lease_token: str) -> Non
         await db[ACTION_REQUESTS_COLLECTION].delete_many(
             {"session_id": session_id}, session=mongo_session
         )
+        await db[NOTEBOOK_COLLECTION].delete_many({"session_id": session_id}, session=mongo_session)
         return True
 
     await _run_transaction(db, callback)

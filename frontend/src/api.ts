@@ -25,6 +25,8 @@ export type Turn = {
   state: Record<string, string>;
   ledger: Record<string, string>;
   debug?: Record<string, string>;
+  /** Whom the player controlled on this turn. Present once a handover has happened. */
+  character?: { name: string | null; role: string | null };
   created_at: string;
 };
 
@@ -44,6 +46,15 @@ export type SessionSummary = {
   mature_content?: MatureContentPreferences;
   distribution_capabilities?: DistributionCapabilities;
   rendering_policy?: RenderingPolicy;
+  /** Set on a branch: "Branch 1", "Branch 1.2". */
+  branch_label?: string;
+  branch_root_title?: string;
+  branched_from?: { session_id: string; title: string; turn_number: number };
+  /** Who the player controls now, after a chapter handover. */
+  protagonist?: { name: string | null; role: string | null };
+  handover_done?: boolean;
+  /** Standing instructions the player left: their words, what she understood, a result once seen. */
+  orders_given?: OrderGiven[];
   created_at: string;
   updated_at: string;
 };
@@ -311,6 +322,51 @@ export type SendActionResponse = {
   replayed?: boolean;
 };
 
+export type Disclosure = { recipient: string; claim: string; aloud: boolean };
+
+export type TellTargets = { turn_count: number; people: { name: string }[] };
+
+export async function getTellTargets(sessionId: string, deviceId: string): Promise<TellTargets> {
+  const res = await fetch(`${API}/story/session/${sessionId}/tell-targets`, {
+    headers: deviceHeaders(deviceId),
+  });
+  return handle(res);
+}
+
+export type OrderPreview = {
+  recipient: string;
+  understood: { condition: string; action: string; even_if_away: boolean } | null;
+  issues: string[];
+  notes: string[];
+  can_commit: boolean;
+};
+
+export type OrderGiven = { id: string; turn: number; to: string; text: string; understood: string; result?: string };
+
+export async function previewOrder(
+  sessionId: string,
+  deviceId: string,
+  body: { recipient: string; text: string }
+): Promise<OrderPreview> {
+  const res = await fetch(`${API}/story/session/${sessionId}/orders/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...deviceHeaders(deviceId) },
+    body: JSON.stringify(body),
+  });
+  return handle(res);
+}
+
+export function orderActionText(o: { recipient: string; text: string }): string {
+  return `You leave instructions with ${o.recipient.trim()}: "${o.text.trim()}"`;
+}
+
+export function disclosureActionText(d: Disclosure): string {
+  const claim = d.claim.trim();
+  return d.aloud
+    ? `You say aloud to ${d.recipient}: "${claim}"`
+    : `You quietly tell ${d.recipient}: "${claim}"`;
+}
+
 export async function sendAction(payload: {
   session_id: string;
   device_id: string;
@@ -318,6 +374,14 @@ export async function sendAction(payload: {
   debug_mode: boolean;
   /** Client idempotency key: one id ⇒ at most one committed turn. */
   action_request_id?: string;
+  /** Turn count on screen. A mismatch means the choices are stale; the server refuses (409). */
+  expected_turn_count?: number;
+  /** Structured "tell someone": the engine records exactly this wording, speaker and witnesses. */
+  disclosure?: Disclosure;
+  /** Standing instructions for one person here. The server re-parses; a preview is never trusted. */
+  order?: { recipient: string; text: string };
+  /** One of the seven player moves. The server checks it against the saved story and decides the outcome. */
+  move?: MoveRequest;
 }): Promise<SendActionResponse> {
   const { device_id, ...body } = payload;
   const res = await fetch(`${API}/story/action`, {
@@ -326,6 +390,58 @@ export async function sendAction(payload: {
     body: JSON.stringify(body),
   });
   return handle(res);
+}
+
+
+// ---- Player moves (challenge, bargain, route, regard, build, signal, teach) ----
+
+export type MoveKind = "challenge" | "bargain" | "route" | "regard" | "build" | "signal" | "teach";
+export type MoveRequest = { kind: MoveKind; op?: string; args: Record<string, unknown> };
+export type PassageRef = { turn: number; paragraph: number; quote: string; speaker?: string };
+export type MoveOptions = { kind: MoveKind; available: boolean; reason: string | null } & Record<string, any>;
+export type MovesResponse = { turn_count: number; moves: Record<MoveKind, MoveOptions> };
+export type MovePreview = { kind: MoveKind; can_commit: boolean; issues: string[]; terms?: string; notes?: string[]; shown?: unknown };
+
+export const MOVE_LABELS: Record<MoveKind, { title: string; blurb: string }> = {
+  challenge: { title: "Challenge a claim", blurb: "Put what someone said against what you have seen or hold." },
+  bargain: { title: "Strike a bargain", blurb: "Offer something real for something real." },
+  route: { title: "Routes", blurb: "Mark a way through you have seen, and choose who learns it." },
+  regard: { title: "Between two others", blurb: "Introduce, vouch for, mediate or expose." },
+  build: { title: "Leave something behind", blurb: "Set up a shelter, hideout or cache others can use." },
+  signal: { title: "Agree a signal", blurb: "Settle a sign with someone you trust, or give one." },
+  teach: { title: "Teach a skill", blurb: "Show someone how, then let them use it." },
+};
+
+export async function getMoves(sessionId: string, deviceId: string): Promise<MovesResponse> {
+  const res = await fetch(`${API}/story/session/${sessionId}/moves`, { headers: deviceHeaders(deviceId) });
+  return handle(res);
+}
+
+export async function previewMove(sessionId: string, deviceId: string, move: MoveRequest): Promise<MovePreview> {
+  const res = await fetch(`${API}/story/session/${sessionId}/moves/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...deviceHeaders(deviceId) },
+    body: JSON.stringify(move),
+  });
+  return handle(res);
+}
+
+export function moveActionText(m: MoveRequest): string {
+  const who = String(m.args.audience ?? m.args.with ?? m.args.learner ?? m.args.a ?? "someone here");
+  const base: Record<MoveKind, string> = {
+    challenge: `You challenge ${who} with what you have`,
+    bargain: `You make ${who} an offer`,
+    route: "You deal with a way through",
+    regard: `You work on how ${who} sees someone`,
+    build: "You set something up for others",
+    signal: `You settle a signal with ${who}`,
+    teach: `You teach ${who}`,
+  };
+  // A short fingerprint of the exact move, so a retry of the same move reuses its request id and a different move never does.
+  const raw = JSON.stringify([m.kind, m.op ?? null, m.args]);
+  let h = 0;
+  for (let i = 0; i < raw.length; i++) h = (h * 31 + raw.charCodeAt(i)) | 0;
+  return `${base[m.kind]}${m.op ? ` (${m.op})` : ""} #${(h >>> 0).toString(36)}`;
 }
 
 export type ActionRequestStatus = {
@@ -435,3 +551,239 @@ export async function updateAdminSettings(
   });
   return handle(res);
 }
+
+
+// ---------------------------------------------------------------------------
+// Branching, private notebook, chapter handover
+// ---------------------------------------------------------------------------
+export type BranchResponse = {
+  session: SessionSummary;
+  replayed: boolean;
+  source_turn_count: number;
+};
+
+export async function branchSession(
+  sessionId: string,
+  deviceId: string,
+  requestId: string,
+  expectedTurnCount: number
+): Promise<BranchResponse> {
+  const res = await fetch(`${API}/story/session/${sessionId}/branch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...deviceHeaders(deviceId) },
+    body: JSON.stringify({ request_id: requestId, expected_turn_count: expectedTurnCount }),
+  });
+  return handle(res);
+}
+
+export type NotebookPin = {
+  id: string;
+  kind: "pin";
+  turn_number: number;
+  turn_id?: string;
+  paragraph_index: number;
+  start: number;
+  end: number;
+  text: string;
+  note: string;
+  created_at: string;
+};
+
+export type NotebookTheory = {
+  id: string;
+  kind: "theory";
+  title: string;
+  body: string;
+  pin_ids: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type Notebook = { pins: NotebookPin[]; theories: NotebookTheory[] };
+
+export async function getNotebook(sessionId: string, deviceId: string): Promise<Notebook> {
+  const res = await fetch(`${API}/story/session/${sessionId}/notebook`, {
+    headers: deviceHeaders(deviceId),
+  });
+  return handle(res);
+}
+
+export async function pinPassage(
+  sessionId: string,
+  deviceId: string,
+  body: { turn_number: number; paragraph_index: number; quote?: string; note?: string }
+): Promise<{ pin: NotebookPin; created: boolean }> {
+  const res = await fetch(`${API}/story/session/${sessionId}/notebook/pins`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...deviceHeaders(deviceId) },
+    body: JSON.stringify(body),
+  });
+  return handle(res);
+}
+
+export async function removePin(sessionId: string, deviceId: string, pinId: string): Promise<void> {
+  const res = await fetch(`${API}/story/session/${sessionId}/notebook/pins/${pinId}`, {
+    method: "DELETE",
+    headers: deviceHeaders(deviceId),
+  });
+  if (!res.ok) throw await ApiError.fromResponse(res);
+}
+
+export async function createTheory(
+  sessionId: string,
+  deviceId: string,
+  body: { title: string; body: string; pin_ids: string[] }
+): Promise<{ theory: NotebookTheory }> {
+  const res = await fetch(`${API}/story/session/${sessionId}/notebook/theories`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...deviceHeaders(deviceId) },
+    body: JSON.stringify(body),
+  });
+  return handle(res);
+}
+
+export async function updateTheory(
+  sessionId: string,
+  deviceId: string,
+  theoryId: string,
+  body: { title?: string; body?: string; pin_ids?: string[] }
+): Promise<{ theory: NotebookTheory }> {
+  const res = await fetch(`${API}/story/session/${sessionId}/notebook/theories/${theoryId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...deviceHeaders(deviceId) },
+    body: JSON.stringify(body),
+  });
+  return handle(res);
+}
+
+export async function deleteTheory(sessionId: string, deviceId: string, theoryId: string): Promise<void> {
+  const res = await fetch(`${API}/story/session/${sessionId}/notebook/theories/${theoryId}`, {
+    method: "DELETE",
+    headers: deviceHeaders(deviceId),
+  });
+  if (!res.ok) throw await ApiError.fromResponse(res);
+}
+
+export async function getTurnByNumber(
+  sessionId: string,
+  deviceId: string,
+  turnNumber: number
+): Promise<{ turn: Turn }> {
+  const res = await fetch(`${API}/story/session/${sessionId}/turn/${turnNumber}`, {
+    headers: deviceHeaders(deviceId),
+  });
+  return handle(res);
+}
+
+export type HandoverCandidate = {
+  id: string;
+  name: string;
+  relation: string;
+  last_seen: string;
+  appearances: number;
+};
+
+export type HandoverCandidates = {
+  turn_count: number;
+  can_end_chapter: boolean;
+  reason: string | null;
+  candidates: HandoverCandidate[];
+};
+
+export async function getHandoverCandidates(
+  sessionId: string,
+  deviceId: string
+): Promise<HandoverCandidates> {
+  const res = await fetch(`${API}/story/session/${sessionId}/handover`, {
+    headers: deviceHeaders(deviceId),
+  });
+  return handle(res);
+}
+
+export type HandoverResponse = {
+  session: SessionSummary;
+  turn: Turn | null;
+  replayed: boolean;
+};
+
+export async function confirmHandover(
+  sessionId: string,
+  deviceId: string,
+  body: { request_id: string; successor_id: string; expected_turn_count: number }
+): Promise<HandoverResponse> {
+  const res = await fetch(`${API}/story/session/${sessionId}/handover`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...deviceHeaders(deviceId) },
+    body: JSON.stringify(body),
+  });
+  return handle(res);
+}
+
+
+// ---- Two friends, opposite sides (duets) ----
+
+export type DuetEntry = { turn: number; kind: "opening" | "you" | "observed"; text: string; action?: string };
+
+export type DuetView = {
+  id: string;
+  title: string;
+  status: "waiting_for_friend" | "active" | "chapter_ended";
+  you: { seat: string; label: string; character: { name: string; role: string; inventory: string[]; [k: string]: any } };
+  other: { seat: string; name: string; role: string; joined: boolean };
+  turn_count: number;
+  your_turn: boolean;
+  waiting_for: string | null;
+  history: DuetEntry[];
+  choices: TurnChoice[];
+  known: { boat: string };
+  /** Signals the two lamp keepers have offered or agreed. Meanings are shown to both seats once agreed. */
+  signals: { id: string; count: number; meaning: string; status: "proposed" | "agreed"; mine: boolean }[];
+  /** Signals can only be settled before the first lamp is lit. */
+  signal_window_open: boolean;
+  chapter_ended: boolean;
+};
+
+export type DuetListItem = {
+  id: string;
+  title: string;
+  status: DuetView["status"];
+  seat: string;
+  label: string;
+  other_name: string;
+  turn_count: number;
+  your_turn: boolean;
+};
+
+export type DuetComparison = {
+  ended: boolean;
+  you_shared: boolean | null;
+  both_shared: boolean;
+  accounts: { seat: string; mine: boolean; character: { name: string; role: string }; entries: DuetEntry[] }[];
+};
+
+async function duetCall<T>(deviceId: string, method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${API}${path}`, {
+    method,
+    headers: { "Content-Type": "application/json", ...deviceHeaders(deviceId) },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  return handle<T>(res);
+}
+
+export const listDuets = (d: string) => duetCall<{ duets: DuetListItem[] }>(d, "GET", "/duets");
+export const createDuet = (d: string, seat: string) =>
+  duetCall<{ duet: DuetView; invite_code: string }>(d, "POST", "/duets", { seat });
+export const joinDuet = (d: string, code: string) => duetCall<{ duet: DuetView }>(d, "POST", "/duets/join", { code });
+export const reissueDuetInvite = (d: string, id: string) =>
+  duetCall<{ invite_code: string }>(d, "POST", `/duets/${id}/invite`);
+export const getDuet = (d: string, id: string) => duetCall<{ duet: DuetView }>(d, "GET", `/duets/${id}`);
+export const duetAction = (d: string, id: string, body: { action_text: string; action_request_id: string; expected_turn_count?: number; clarity?: "clear" | "faint" }) =>
+  duetCall<{ duet: DuetView; replayed: boolean }>(d, "POST", `/duets/${id}/action`, body);
+export const proposeDuetSignal = (d: string, id: string, body: { request_id: string; count: number; meaning: string }) =>
+  duetCall<{ duet: DuetView }>(d, "POST", `/duets/${id}/signals`, body);
+export const respondDuetSignal = (d: string, id: string, signalId: string, accept: boolean) =>
+  duetCall<{ duet: DuetView }>(d, "POST", `/duets/${id}/signals/${signalId}/respond`, { accept });
+export const endDuetChapter = (d: string, id: string) => duetCall<{ duet: DuetView }>(d, "POST", `/duets/${id}/end-chapter`);
+export const getDuetComparison = (d: string, id: string) => duetCall<DuetComparison>(d, "GET", `/duets/${id}/comparison`);
+export const shareDuetComparison = (d: string, id: string, share: boolean) =>
+  duetCall<DuetComparison>(d, "POST", `/duets/${id}/comparison`, { share });

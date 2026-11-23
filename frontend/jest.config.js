@@ -1,3 +1,6 @@
+// A production NODE_ENV inherited from the shell removes React.act and breaks every render test.
+process.env.NODE_ENV = "test";
+
 module.exports = {
   preset: "jest-expo",
   testMatch: ["**/?(*.)+(test).[jt]s?(x)"],

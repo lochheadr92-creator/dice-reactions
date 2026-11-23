@@ -65,6 +65,17 @@ _ACROSS_RE = re.compile(
     r"\b(across|the far \w+|other (bank|side|shore|end)|opposite (bank|side|shore))\b",
     re.IGNORECASE,
 )
+# A sentence that retells a communication limit: a denial and a word for meaning together.
+RESTATEMENT_LIMIT = 1
+OPENING_RESTATEMENT_LIMIT = 2
+_DENIAL = r"(none|nothing|nobody|no|not|cannot|can't|couldn't|could not|never|without|neither)"
+_MEANING = (
+    r"(word|words|sign|signal|answer|agreement|meaning|message|understood|understand|"
+    r"recogni[sz]ed|recogni[sz]e|trust|made out|make out)"
+)
+_RESTATES_RE = re.compile(
+    rf"\b{_DENIAL}\b[^.!?]*\b{_MEANING}\b|\b{_MEANING}\b[^.!?]*\b{_DENIAL}\b", re.IGNORECASE
+)
 # Wishes, attempts, conditions and denials are not an exchange that happened.
 _NOT_FACT_RE = re.compile(
     r"\b(no|not|never|nothing|nobody|none|cannot|can't|won't|without|may|might|could|would|should|if|unless|until|"
@@ -222,8 +233,10 @@ def build_directive(
         line = f"{cid} ({ref}): ACTIVE. It is still true this turn."
         if constraint.get("kind") == "communication":
             line += (
-                " Those it separates may see or hear that the other side is there. No meaning passes: "
-                "no recognised sign, no words made out, no answer, no agreement."
+                " Those it separates may see or hear that the other side is there. No meaning passes between them. "
+                "This limits what you write and is not a subject for the story: do not list what fails to arrive. "
+                "Mention the limit in at most one sentence a turn, and only where the scene reaches toward the other side. "
+                "Otherwise show the other side only by what people there are seen doing."
             )
         else:
             line += " Nothing in this turn shows it undone or worked around."
@@ -268,6 +281,54 @@ def find_breach(paragraphs: Sequence[str], constraint: Mapping[str, str]) -> Opt
             if _RECEIVED_RE.search(sentence) and not _NOT_FACT_RE.search(sentence):
                 return sentence
     return None
+
+
+def restating_sentences(paragraphs: Sequence[str], constraint: Mapping[str, str]) -> List[str]:
+    """Sentences that retell what a communication limit stops from crossing.
+
+    A denial and a word for meaning in one sentence ("no word came", "nothing they
+    could understand"). Class vocabulary, as in find_breach, not story vocabulary.
+    """
+    if constraint.get("kind") != "communication":
+        return []
+    found: List[str] = []
+    for paragraph in paragraphs or []:
+        for sentence in _SENTENCE_SPLIT_RE.split(str(paragraph or "")):
+            sentence = sentence.strip()
+            if sentence and _RESTATES_RE.search(sentence):
+                found.append(sentence)
+    return found
+
+
+def restatement_reason(
+    paragraphs: Sequence[str],
+    constraints: Sequence[Mapping[str, str]],
+    rows: Sequence[Mapping[str, Any]],
+    lifting_now: Iterable[str] = (),
+    *,
+    is_opening: bool = False,
+) -> str:
+    """Validation reason when an active communication limit is retold too often, or ''.
+
+    Soft: the turn is true, only worn. The opening must establish the limit, so it
+    may retell it once more than later turns. Thresholds come from 30 recorded
+    turns (2026-11-23): the turns that retold it in 3 to 5 sentences were the
+    cryptic ones, and 10 turns from stories without the limit had none.
+    """
+    status = {str(row.get("id")): row.get("status") for row in rows}
+    skip = set(lifting_now or ())
+    allowed = OPENING_RESTATEMENT_LIMIT if is_opening else RESTATEMENT_LIMIT
+    for constraint in constraints:
+        if status.get(constraint["id"]) == "lifted" or constraint["id"] in skip:
+            continue
+        count = len(restating_sentences(paragraphs, constraint))
+        if count > allowed:
+            return (
+                f"the narrative restates a standing limit in {count} sentences. "
+                f"Mention it in at most {'one sentence' if allowed == 1 else 'two sentences'} "
+                "and show the rest through what people do."
+            )
+    return ""
 
 
 def breach_reason(

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -41,6 +41,8 @@ type GuidedStartProps = {
   onChange: (patch: Partial<GuidedStartSelections>) => void;
   onStart: () => void;
   onChangePath: () => void;
+  /** Called whenever the step changes, so the screen can scroll back to the top. */
+  onPageChange?: () => void;
 };
 
 type GuidedStepKey =
@@ -330,8 +332,12 @@ export function GuidedStart({
   onChange,
   onStart,
   onChangePath,
+  onPageChange,
 }: GuidedStartProps) {
   const [stepIndex, setStepIndex] = useState(0);
+  useEffect(() => {
+    onPageChange?.();
+  }, [stepIndex, onPageChange]);
   const safeFontScale = fontScale > 0 ? fontScale : 1;
   const reviewVisible = stepIndex >= STEPS.length;
   const bounded = Math.min(stepIndex, STEPS.length - 1);
