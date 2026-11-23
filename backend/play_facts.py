@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import chapter_handover as ch
 import claim_engine as ce
+import relationships as rel
 from player_api import build_player_paragraphs
 
 class MoveError(Exception):
@@ -238,33 +239,14 @@ class Context:
         return ledger_items(self.ledger)
 
 
-_HOSTILE = {"hostile", "enemy", "antagonist", "adversary"}
-_FRIENDLY = {"ally", "friendly", "friend", "loyal", "devoted"}
-
-
 def hostile(row: Mapping[str, Any]) -> bool:
-    return bool(row.get("refuses_orders")) or norm(row.get("stance")) in _HOSTILE
+    """Someone who will not deal with the player. The rule is the relationship system's."""
+    return rel.refuses_player(row)
 
 
 def trust_of(rolling: Mapping[str, Any], row: Mapping[str, Any]) -> int:
-    """How far this person trusts the player, 0 to 100 in practice.
-
-    The engine's own relationship vector wins. A row that carries a number uses it. With no
-    number, the narrator's stance decides: an ally is trusting, a hostile person is not, anyone
-    else is wary but not closed.
-    """
-    name = norm(ce.npc_name(dict(row)))
-    for vec in rolling.get("relationship_vectors") or []:
-        if isinstance(vec, dict) and norm(vec.get("name")) == name and isinstance(vec.get("trust"), (int, float)):
-            return int(vec["trust"])
-    if isinstance(row.get("trust"), (int, float)):
-        return int(row["trust"])
-    stance = norm(row.get("stance"))
-    if stance in _FRIENDLY:
-        return 60
-    if stance in _HOSTILE:
-        return 0
-    return 30
+    """How far this person trusts the player. The rule is the relationship system's."""
+    return rel.trust_in_player(rolling, row)
 
 
 def ref(person: Mapping[str, Any]) -> Dict[str, str]:

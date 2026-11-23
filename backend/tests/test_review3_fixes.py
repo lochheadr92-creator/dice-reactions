@@ -140,9 +140,9 @@ def test_losing_an_item_leaves_items_that_only_share_a_word():
 def test_the_engine_relationship_vector_outranks_a_number_on_the_cast_row():
     rolling = {"relationship_vectors": [{"name": "Mara", "trust": 5}]}
     row = {"name": "Mara", "trust": 95}
-    assert play_facts.trust_of(rolling, row) == 5 and order_engine._trust(rolling, row) == 5
+    assert play_facts.trust_of(rolling, row) == 5 and order_engine._willing(rolling, row) is False
     # With no vector the row's number is still used, as before.
-    assert play_facts.trust_of({}, row) == 95 and order_engine._trust({}, row) == 95
+    assert play_facts.trust_of({}, row) == 95 and order_engine._willing({}, row) is True
 
 
 def test_the_narrator_is_reminded_of_engine_results_and_never_of_stored_narration():

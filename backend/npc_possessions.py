@@ -24,7 +24,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import claim_engine as ce
-import order_engine as oe
+import relationships as rel
 
 LEDGER_VERSION = 1
 PERSISTED_FIELDS = ("inventory", "condition", "contacts")
@@ -33,7 +33,6 @@ MAX_ITEMS = 12
 MAX_TEXT = 80
 DISCLOSE_MIN_TRUST = 40
 DIRECTIVE_MARKER = "[NPC_POSSESSIONS_V1]"
-_FRIENDLY = {"ally", "friendly", "loyal", "devoted"}
 
 
 def _name(row: Any) -> str:
@@ -273,11 +272,11 @@ def _mentioned(items: List[str], text: str) -> List[str]:
 
 
 def _discloses(rolling: Dict[str, Any], row: Dict[str, Any]) -> bool:
-    if row.get("refuses_orders") or oe._n(row.get("stance")) in oe._HOSTILE:
+    if rel.refuses_player(row):
         return False
-    trust = oe._trust(rolling, row)
+    trust = rel.recorded_trust(rolling, row)
     if trust is None:
-        return oe._n(row.get("stance")) in _FRIENDLY
+        return rel.is_friendly(row)
     return trust >= DISCLOSE_MIN_TRUST
 
 

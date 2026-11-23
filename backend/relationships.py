@@ -519,3 +519,58 @@ def regard_after(op: str, before: int, pull: int) -> Optional[int]:
 def errand_agreed(regard_for_asker: int) -> bool:
     """Whether someone does what another person asks of them, from how they regard the asker."""
     return int(regard_for_asker) >= REGARD_WILL_HELP
+
+# ---------------------------------------------------------------------------
+# How far someone trusts the player: the one reader every engine uses.
+#
+# Bargains, orders, lessons, challenges and what a person will say about what
+# they carry all turn on this. They ask here, so no two of them can disagree
+# about the same person. The engine's own vector wins. A number on the cast
+# row is used only when no vector exists. With neither, the stance decides.
+# ---------------------------------------------------------------------------
+HOSTILE_STANCES = frozenset({"hostile", "enemy", "antagonist", "adversary"})
+FRIENDLY_STANCES = frozenset({"ally", "friendly", "friend", "loyal", "devoted"})
+TRUST_IF_FRIENDLY = 60
+TRUST_IF_HOSTILE = 0
+TRUST_IF_UNKNOWN = 30      # wary, not closed
+
+
+def _plain(text: Any) -> str:
+    return _re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float))
+
+
+def recorded_trust(rolling: Optional[Mapping[str, Any]], row: Mapping[str, Any]) -> Optional[int]:
+    """The trust number on record for this person, or None when there is none."""
+    name = _plain(row.get("name"))
+    for vec in (rolling or {}).get("relationship_vectors") or []:
+        if isinstance(vec, Mapping) and name and _plain(vec.get("name")) == name and _is_number(vec.get("trust")):
+            return int(vec["trust"])
+    if _is_number(row.get("trust")):
+        return int(row["trust"])
+    return None
+
+
+def is_friendly(row: Mapping[str, Any]) -> bool:
+    return _plain(row.get("stance")) in FRIENDLY_STANCES
+
+
+def refuses_player(row: Mapping[str, Any]) -> bool:
+    """Someone who will not deal with the player at all, whatever the numbers say."""
+    return bool(row.get("refuses_orders")) or _plain(row.get("stance")) in HOSTILE_STANCES
+
+
+def trust_in_player(rolling: Optional[Mapping[str, Any]], row: Mapping[str, Any]) -> int:
+    """How far this person trusts the player. Always a number: the stance fills in when none is recorded."""
+    recorded = recorded_trust(rolling, row)
+    if recorded is not None:
+        return recorded
+    stance = _plain(row.get("stance"))
+    if stance in FRIENDLY_STANCES:
+        return TRUST_IF_FRIENDLY
+    if stance in HOSTILE_STANCES:
+        return TRUST_IF_HOSTILE
+    return TRUST_IF_UNKNOWN

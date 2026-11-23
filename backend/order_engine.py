@@ -35,6 +35,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 import claim_engine as ce
+import relationships as rel
 
 ORDER_VERSION = 1
 MAX_ORDERS = 12
@@ -46,7 +47,6 @@ _NS = uuid.UUID("0c1d52a8-7b0e-4b7e-8a53-6e1f0d2b9c77")
 
 OrderError = ce.ClaimError
 
-_HOSTILE = {"hostile", "enemy", "antagonist", "adversary"}
 _CUT_TOOL = re.compile(r"\b(knife|axe|hatchet|cleaver|machete|saw|blade|cutlass|shears|cutters|dagger)\b", re.I)
 _PARCEL = re.compile(r"\b(parcel|package)\b", re.I)
 _LEAD = r"(?:if|when|once|as soon as|the moment)"
@@ -79,20 +79,10 @@ def _find_item(row: Dict[str, Any], pattern: "re.Pattern[str]") -> Optional[str]
     return None
 
 
-def _trust(rolling: Dict[str, Any], row: Dict[str, Any]) -> Optional[int]:
-    # The engine's own relationship vector wins over a number on the narrator's cast row.
-    for vec in rolling.get("relationship_vectors") or []:
-        if isinstance(vec, dict) and _n(vec.get("name")) == _n(ce.npc_name(row)) and isinstance(vec.get("trust"), (int, float)):
-            return int(vec["trust"])
-    if isinstance(row.get("trust"), (int, float)):
-        return int(row["trust"])
-    return None
-
-
 def _willing(rolling: Dict[str, Any], row: Dict[str, Any]) -> bool:
-    if row.get("refuses_orders") or _n(row.get("stance")) in _HOSTILE:
+    if rel.refuses_player(row):
         return False
-    trust = _trust(rolling, row)
+    trust = rel.recorded_trust(rolling, row)
     return trust is None or trust >= REFUSE_TRUST_BELOW
 
 
