@@ -94,7 +94,7 @@ def _present(ctx: Context, name: Any) -> Dict[str, Any]:
 
 
 def _respond(ctx: Context, person: Dict[str, Any], terms: Dict[str, Any]) -> Tuple[str, str, Optional[Dict[str, Any]]]:
-    """(status, reason, counter terms). Decided from regard and from what is on the table."""
+    """(status, reason, counter terms). Decided from how far they trust the player and from what is on the table."""
     row = person["row"]
     trust = pf.trust_of(ctx.rolling, row)
     if pf.hostile(row) or trust < REFUSE_BELOW:

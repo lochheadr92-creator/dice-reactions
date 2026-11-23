@@ -431,3 +431,91 @@ def apply_living_cast_relationship_effects(
 
     _sync_stance(merged_rolling, vectors)
     return adjustments, threshold_receipts
+
+# ---------------------------------------------------------------------------
+# Regard: how one NPC sees another NPC.
+#
+# The vectors above are NPC toward player and are rebuilt from events every
+# turn. Regard is NPC toward NPC, one number per direction, moved only when
+# the player introduces, vouches, mediates or exposes. This module owns every
+# rule and threshold for it. The edges themselves are kept on the save by the
+# caller (the narrator never writes there); these functions read and change
+# the list they are handed and store nothing of their own.
+# ---------------------------------------------------------------------------
+REGARD_MIN, REGARD_MAX = 0, 100
+REGARD_DEFAULT = 30        # two people with no recorded edge
+REGARD_MET = 40            # after an introduction
+REGARD_WILL_HELP = 50      # from here an errand asked by the other is agreed
+REGARD_WARY_FROM = 20
+REGARD_LISTENS_FROM = 20   # trust in the player below this: the player cannot move them
+REGARD_PULL_FLOOR = 5
+REGARD_EXPOSE_BASE = 10
+
+
+def _clamp_regard(value: Any) -> int:
+    return max(REGARD_MIN, min(REGARD_MAX, int(value)))
+
+
+def regard_value(edges: Optional[List[Dict[str, Any]]], holder_id: str, toward_id: str) -> int:
+    """What ``holder`` thinks of ``toward``. Directional: the reverse edge is a separate number."""
+    for e in edges or []:
+        if e.get("holder") == holder_id and e.get("toward") == toward_id:
+            return int(e["value"])
+    return REGARD_DEFAULT
+
+
+def has_regard(edges: Optional[List[Dict[str, Any]]], holder_id: str, toward_id: str) -> bool:
+    return any(e.get("holder") == holder_id and e.get("toward") == toward_id for e in edges or [])
+
+
+def set_regard(edges: List[Dict[str, Any]], holder: Mapping[str, str], toward: Mapping[str, str], value: int) -> int:
+    """Record ``holder``'s regard for ``toward`` in the caller's edge list. Returns the stored value."""
+    value = _clamp_regard(value)
+    for e in edges:
+        if e.get("holder") == holder["id"] and e.get("toward") == toward["id"]:
+            e["value"] = value
+            return value
+    edges.append({"holder": holder["id"], "holder_name": holder["name"],
+                  "toward": toward["id"], "toward_name": toward["name"], "value": value})
+    return value
+
+
+def regard_word(value: int) -> str:
+    if value >= REGARD_WILL_HELP:
+        return "warm toward"
+    if value >= REGARD_MET:
+        return "civil but unsure of"
+    if value >= REGARD_WARY_FROM:
+        return "wary of"
+    return "cold toward"
+
+
+def regard_pull(trust_in_player: int, hostile: bool) -> int:
+    """How far a person lets the player move their view of someone else.
+
+    Nothing when they are hostile or trust the player too little; more with trust.
+    """
+    if hostile or trust_in_player < REGARD_LISTENS_FROM:
+        return 0
+    return max(REGARD_PULL_FLOOR, (int(trust_in_player) - REGARD_LISTENS_FROM) // 2)
+
+
+def regard_after(op: str, before: int, pull: int) -> Optional[int]:
+    """The new regard after the player acts, or None when the listener is not moved at all.
+
+    ``vouch`` raises it by the pull. ``mediate`` raises it by half the pull. ``expose`` lowers it
+    by a fixed amount plus the pull. The result is already inside the legal range.
+    """
+    if op == "vouch":
+        return _clamp_regard(before + pull) if pull else None
+    if op == "mediate":
+        half = pull // 2
+        return _clamp_regard(before + half) if half else None
+    if op == "expose":
+        return _clamp_regard(before - (REGARD_EXPOSE_BASE + pull)) if pull else None
+    raise ValueError(f"unknown regard act: {op!r}")
+
+
+def errand_agreed(regard_for_asker: int) -> bool:
+    """Whether someone does what another person asks of them, from how they regard the asker."""
+    return int(regard_for_asker) >= REGARD_WILL_HELP

@@ -7,6 +7,11 @@ one asks of the other is decided from that regard, with or without the player in
 
 State (``play_state["regard"]``): ``edges`` (holder, toward, value), ``acts`` (what the player did),
 ``errands`` (a request between two people and how it was decided).
+
+This module is the player's action only: who is here, what was shown, what is recorded and what the
+narrator is told. Every rule and threshold for regard itself (the default, what an introduction
+sets, how far trust lets the player move someone, when an errand is agreed) belongs to
+``relationships``. The edges stay on the save, where the narrator never writes.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import claim_engine as ce
 import play_facts as pf
+import relationships as rel
 from play_facts import Context, MoveError
 
 KIND = "regard"
@@ -25,10 +31,6 @@ STANDING_MARKER = "[REGARD_STANDING_V1]"
 ERRAND_MARKER = "[BETWEEN_THEM_V1]"
 _NS = uuid.UUID("8b3e5d17-6a42-4f90-bd21-0e7c9a4f1d58")
 
-DEFAULT = 30
-WILL_HELP = 50
-MET = 40
-LISTENS_FROM = 20
 MAX_ACTS = 40
 
 
@@ -43,32 +45,6 @@ def _part(state: Dict[str, Any]) -> Dict[str, Any]:
     return part
 
 
-def regard(part: Dict[str, Any], holder: str, toward: str) -> int:
-    for e in part.get("edges") or []:
-        if e["holder"] == holder and e["toward"] == toward:
-            return int(e["value"])
-    return DEFAULT
-
-
-def _set(part: Dict[str, Any], holder: Dict[str, str], toward: Dict[str, str], value: int) -> None:
-    value = max(0, min(100, int(value)))
-    for e in part["edges"]:
-        if e["holder"] == holder["id"] and e["toward"] == toward["id"]:
-            e["value"] = value
-            return
-    part["edges"].append({"holder": holder["id"], "holder_name": holder["name"], "toward": toward["id"], "toward_name": toward["name"], "value": value})
-
-
-def word(value: int) -> str:
-    if value >= WILL_HELP:
-        return "warm toward"
-    if value >= MET:
-        return "civil but unsure of"
-    if value >= 20:
-        return "wary of"
-    return "cold toward"
-
-
 def _person(ctx: Context, name: Any) -> Dict[str, Any]:
     p = pf.find_person(ctx.rolling, str(name or ""), ctx.scene_text())
     if p is None or not p["present"]:
@@ -77,11 +53,8 @@ def _person(ctx: Context, name: Any) -> Dict[str, Any]:
 
 
 def _pull(ctx: Context, p: Dict[str, Any]) -> int:
-    """How far this person lets the player move them: nothing below a floor, more with trust."""
-    trust = pf.trust_of(ctx.rolling, p["row"])
-    if pf.hostile(p["row"]) or trust < LISTENS_FROM:
-        return 0
-    return max(5, (trust - LISTENS_FROM) // 2)
+    """How far this person lets the player move them. The rule is the relationship system's."""
+    return rel.regard_pull(pf.trust_of(ctx.rolling, p["row"]), pf.hostile(p["row"]))
 
 
 def _evidence(ctx: Context, ev: Any, about: Dict[str, Any]) -> str:
@@ -132,40 +105,38 @@ def apply(state: Dict[str, Any], ctx: Context, args: Dict[str, Any], *, turn: in
     detail = ""
     if op == "introduce":
         for h, t, hp in ((rx, ry, x), (ry, rx, y)):
-            if any(e["holder"] == h["id"] and e["toward"] == t["id"] for e in part["edges"]):
+            if rel.has_regard(part["edges"], h["id"], t["id"]):
                 continue
-            _set(part, h, t, MET)
-            changes.append({"holder": h["name"], "toward": t["name"], "to": MET})
+            met = rel.set_regard(part["edges"], h, t, rel.REGARD_MET)
+            changes.append({"holder": h["name"], "toward": t["name"], "to": met})
         if not changes:
             raise MoveError(409, "They already know each other.")
     elif op == "vouch":
         # a is vouched for to b: b's regard for a moves, a's regard for b does not.
-        pull = _pull(ctx, y)
-        before = regard(part, y["key"], x["key"])
-        after = before + pull
-        if pull == 0:
+        before = rel.regard_value(part["edges"], y["key"], x["key"])
+        after = rel.regard_after("vouch", before, _pull(ctx, y))
+        if after is None:
             detail = f"{y['name']} does not take the player's word for it."
         else:
-            _set(part, ry, rx, after)
+            rel.set_regard(part["edges"], ry, rx, after)
             changes.append({"holder": y["name"], "toward": x["name"], "from": before, "to": after})
     elif op == "mediate":
         for h, t, hp in ((rx, ry, x), (ry, rx, y)):
-            pull = _pull(ctx, hp) // 2
-            before = regard(part, h["id"], t["id"])
-            if pull:
-                _set(part, h, t, before + pull)
-                changes.append({"holder": h["name"], "toward": t["name"], "from": before, "to": before + pull})
+            before = rel.regard_value(part["edges"], h["id"], t["id"])
+            after = rel.regard_after("mediate", before, _pull(ctx, hp))
+            if after is not None:
+                rel.set_regard(part["edges"], h, t, after)
+                changes.append({"holder": h["name"], "toward": t["name"], "from": before, "to": after})
         if not changes:
             detail = "Neither of them will hear the player out."
     else:  # expose: tell b what a did
         shown = _evidence(ctx, args.get("evidence"), x)
-        pull = _pull(ctx, y)
-        before = regard(part, y["key"], x["key"])
-        if pull == 0:
+        before = rel.regard_value(part["edges"], y["key"], x["key"])
+        after = rel.regard_after("expose", before, _pull(ctx, y))
+        if after is None:
             detail = f"{y['name']} does not believe the player."
         else:
-            after = before - (10 + pull)
-            _set(part, ry, rx, after)
+            rel.set_regard(part["edges"], ry, rx, after)
             changes.append({"holder": y["name"], "toward": x["name"], "from": before, "to": after})
         detail = detail or f"The player showed {y['name']}: {shown}. It is what the player showed, not what is proven."
     errand = args.get("errand")
@@ -196,7 +167,7 @@ def _result(act: Dict[str, Any], *, replay: bool) -> Dict[str, Any]:
     if act["detail"]:
         lines.append(act["detail"])
     for c in act["changes"]:
-        w = word(c["to"])
+        w = rel.regard_word(c["to"])
         lines.append(f"{c['holder']} is now {w} {c['toward']}." + (" (Not the other way round.)" if act["op"] in ("vouch", "expose") else ""))
     if act["errand"]:
         lines.append("Something has been asked between them for later. Do not decide it now.")
@@ -232,8 +203,8 @@ def tick(state: Dict[str, Any], ctx: Context, turn: int) -> Tuple[Dict[str, Any]
             continue
         if not _place(a) or _place(a) != _place(g):
             continue
-        value = regard(part, e["giver"]["id"], e["asker"]["id"])
-        e.update(status="agreed" if value >= WILL_HELP else "refused", decided_turn=turn, seen=False, regard=value)
+        value = rel.regard_value(part["edges"], e["giver"]["id"], e["asker"]["id"])
+        e.update(status="agreed" if rel.errand_agreed(value) else "refused", decided_turn=turn, seen=False, regard=value)
         notes.append(f"errand:{e['status']}")
     return state, notes
 
@@ -247,7 +218,7 @@ def narrator_context(state: Dict[str, Any], ctx: Context, result: Optional[Dict[
     lines: List[str] = []
     for e in part.get("edges") or []:
         if e["holder"] in here and e["toward"] in here:
-            lines.append(f"{e['holder_name']} is {word(e['value'])} {e['toward_name']}. Let it show in how they treat each other.")
+            lines.append(f"{e['holder_name']} is {rel.regard_word(e['value'])} {e['toward_name']}. Let it show in how they treat each other.")
     done: List[str] = []
     for er in part.get("errands") or []:
         if er["status"] in ("agreed", "refused") and not er.get("seen") and (er["asker"]["id"] in here or er["giver"]["id"] in here):
@@ -273,7 +244,7 @@ def player_view(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for a in part.get("acts") or []:
         out.append({"id": a["id"], "turn": a["turn"], "op": a["op"], "a": a["a"]["name"], "b": a["b"]["name"],
-                    "effects": [f"{c['holder']} is now {word(c['to'])} {c['toward']}" for c in a["changes"]] or ([a["detail"]] if a["detail"] else [])})
+                    "effects": [f"{c['holder']} is now {rel.regard_word(c['to'])} {c['toward']}" for c in a["changes"]] or ([a["detail"]] if a["detail"] else [])})
     for er in part.get("errands") or []:
         if er["status"] in ("agreed", "refused") and er.get("seen"):
             out.append({"id": er["id"], "turn": er["decided_turn"], "op": "errand", "a": er["asker"]["name"], "b": er["giver"]["name"],
