@@ -64,6 +64,41 @@ def _gather_names(
     return names, prior_vectors
 
 
+def engine_event(
+    kind: str,
+    target_name: str,
+    *,
+    source_kind: str,
+    source_id: str,
+    turn: int,
+    reason: str = "",
+) -> Dict[str, Any]:
+    """A structured event raised by an engine decision (a bargain settled, ...).
+
+    The caller names what happened and to whom. What it is worth comes from the
+    canonical ``EVENT_DELTAS`` table, never from the caller, so every source of a
+    kept promise moves a relationship by the same amount in every story. The id is
+    built from the source record, so one decision is one event however often it is
+    replayed.
+    """
+    if kind not in _rc.EVENT_DELTAS:
+        raise ValueError(f"unknown relationship event kind: {kind!r}")
+    target = str(target_name or "").strip()
+    if not target:
+        raise ValueError("a relationship event needs a target")
+    raw = f"{source_kind}|{source_id}|{kind}|{target.lower()}"
+    return {
+        "event_id": "relev-" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16],
+        "kind": kind,
+        "target_name": target,
+        "source_kind": str(source_kind),
+        "cause": "player",
+        "deltas": dict(_rc.EVENT_DELTAS[kind]),
+        "reason": reason or f"{source_kind}: {kind} toward {target}",
+        "turn": int(turn),
+    }
+
+
 def resolve_player_action_events(
     player_action: Optional[str],
     names: List[str],
@@ -275,16 +310,33 @@ def update_from_player_action(
     current_turn: int,
     *,
     provenance_sink: Optional[List[Dict[str, Any]]] = None,
+    engine_events: Optional[List[Mapping[str, Any]]] = None,
 ) -> List[str]:
     """Resolve the player's action into structured events and apply them.
 
     Generated prose is never consulted. This is the delegate used by
     ``relationships.update_relationship_calculus``.
+
+    ``engine_events`` are events an engine already decided this turn (built with
+    ``engine_event``). They go through the same single application as the events
+    read from the action sentence. Where both name the same kind toward the same
+    person, the engine's decision stands and the guess from the sentence is
+    dropped, so nothing is counted twice.
     """
     if not isinstance(merged_rolling, dict):
         return []
     names, _prior = _gather_names(prior_rolling, merged_rolling)
     events = resolve_player_action_events(player_action, names, current_turn)
+    decided = [dict(e) for e in (engine_events or []) if isinstance(e, Mapping)]
+    if decided:
+        taken = {
+            (str(e.get("target_name") or "").strip().lower(), str(e.get("kind") or ""))
+            for e in decided
+        }
+        events = [
+            e for e in events
+            if (str(e["target_name"]).strip().lower(), e["kind"]) not in taken
+        ] + decided
     return apply_relationship_events(
         prior_rolling,
         merged_rolling,

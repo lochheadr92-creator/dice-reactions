@@ -145,3 +145,30 @@ def test_only_the_character_who_struck_the_deal_can_settle_it(client, env, narra
     narrator.carried = "linen"
     s = move(client, sid, dev, 2, "bargain", {"bargain_id": state["bargain"]["records"][0]["id"]}, op="settle")
     assert s.status_code == 422
+
+
+def _trust(env, sid, name):
+    vectors = doc(env, sid)["rolling_state"]["relationship_vectors"]
+    return next(v["trust"] for v in vectors if v["name"] == name)
+
+
+def test_settling_a_bargain_is_a_promise_kept_in_the_relationship_system(client, env, narrator):
+    dev = device()
+    narrator.carried = "signet ring; waterskin"
+    sid = seed(env.sync_db, dev, hut(), HUT_TURN, carried="signet ring; waterskin", npc_ledger=HUT_LEDGER)
+    terms = {"with": "Maren", "service": "tend my wound", "pledge": ["signet ring"], "settle": ["healing moss"]}
+    assert move(client, sid, dev, 1, "bargain", terms, rid="deal-0001").status_code == 200
+    after_deal = _trust(env, sid, "Maren")
+    assert after_deal <= 50                                   # striking a deal is not a promise kept
+    narrator.carried = "waterskin; healing moss"
+    client.post("/api/story/action", headers=headers(dev), json={"session_id": sid, "action_text": "Gather moss", "action_request_id": "n-2", "expected_turn_count": 2})
+    before = _trust(env, sid, "Maren")
+    bid = doc(env, sid)["play_state"]["bargain"]["records"][0]["id"]
+    settled = move(client, sid, dev, 3, "bargain", {"bargain_id": bid}, op="settle", rid="settle-0001")
+    assert settled.status_code == 200, settled.text
+    # The relationship system applied its own keep_promise value, once.
+    assert _trust(env, sid, "Maren") == before + 10
+    # The same request again is the stored turn: nothing is applied a second time.
+    again = move(client, sid, dev, 3, "bargain", {"bargain_id": bid}, op="settle", rid="settle-0001")
+    assert again.status_code == 200 and _trust(env, sid, "Maren") == before + 10
+    assert doc(env, sid)["turn_count"] == 4

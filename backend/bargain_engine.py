@@ -224,7 +224,14 @@ def apply(state: Dict[str, Any], ctx: Context, args: Dict[str, Any], *, turn: in
     else:
         raise MoveError(422, "That is not something you can do with a bargain.")
     rec["request_ids"].append(rid)
-    return st, _result(rec, replay=False)
+    result = _result(rec, replay=False)
+    if op == "settle":
+        # Meeting the terms is a promise kept. This engine only says so: what a kept promise is
+        # worth belongs to the relationship system, which applies it once for this bargain.
+        result["relationship_events"] = [
+            {"kind": "keep_promise", "target_name": person["name"], "source_kind": "bargain", "source_id": rec["id"]}
+        ]
+    return st, result
 
 
 def _result(rec: Dict[str, Any], *, replay: bool) -> Dict[str, Any]:

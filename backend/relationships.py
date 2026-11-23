@@ -215,6 +215,7 @@ def update_relationship_calculus(
     merged_rolling: Optional[Dict[str, Any]],
     player_action: Optional[str] = None,
     current_turn: int = 0,
+    engine_events: Optional[List[Dict[str, Any]]] = None,
 ) -> List[str]:
     """Recompute every NPC→player relationship vector for this turn.
 
@@ -239,6 +240,7 @@ def update_relationship_calculus(
         merged_rolling,
         player_action,
         current_turn,
+        engine_events=engine_events,
     )
 
 

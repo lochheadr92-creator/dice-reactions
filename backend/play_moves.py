@@ -181,6 +181,22 @@ def narrator_context(state: Optional[Dict[str, Any]], ctx: Context, result: Opti
     return "\n\n".join(p for p in parts if p)
 
 
+def relationship_events(result: Optional[Dict[str, Any]], turn: int) -> List[Dict[str, Any]]:
+    """Relationship events this turn's move raised, in the relationship system's own shape.
+
+    An engine names what happened ("a promise was kept toward Maren"). The relationship system
+    owns what that is worth and is the only writer of the vectors. A replayed move raises nothing.
+    """
+    import relationship_provenance as rp
+
+    if not result or result.get("replayed"):
+        return []
+    return [
+        rp.engine_event(ev["kind"], ev["target_name"], source_kind=ev["source_kind"], source_id=ev["source_id"], turn=turn)
+        for ev in result.get("relationship_events") or []
+    ]
+
+
 def project(state: Optional[Dict[str, Any]], ctx: Context, merged_rolling: Dict[str, Any], npc_ledger: Dict[str, Any], turn: int) -> List[str]:
     """Write what the engines own back over the narrator's cast and the NPC ledger."""
     notes: List[str] = []

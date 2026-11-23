@@ -5437,7 +5437,8 @@ async def _execute_story_action(
         )
         guard_adjustments.extend(
             relationships.update_relationship_calculus(
-                parsed, prior_rolling, merged_rolling, req.action_text, next_turn_number
+                parsed, prior_rolling, merged_rolling, req.action_text, next_turn_number,
+                engine_events=play_moves.relationship_events(move_result, next_turn_number),
             )
         )
         merged_after_calculus = copy.deepcopy(merged_rolling)
